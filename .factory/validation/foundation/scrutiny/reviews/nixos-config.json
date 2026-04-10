@@ -1,0 +1,39 @@
+{
+  "featureId": "nixos-config",
+  "reviewedAt": "2026-04-10T20:01:19Z",
+  "commitId": "a5a0f36",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The NixOS module structure matches most of the requested shape, but the flake is not actually deployable as written: the Go package source filter drops the service directories, and the frontend derivation depends on running a networked `pnpm install` inside a normal Nix build.",
+    "issues": [
+      {
+        "file": "flake.nix",
+        "line": 21,
+        "severity": "blocking",
+        "description": "The `cleanSourceWith` filter only keeps `.go`, `go.mod`, and `go.sum` paths and never keeps directories. That strips `cmd/` and `internal/` from the source tree before `buildGoModule` runs, so `nix build .#auth` and the other Go package builds will not have the package directories they need."
+      },
+      {
+        "file": "flake.nix",
+        "line": 44,
+        "severity": "blocking",
+        "description": "The frontend derivation runs `pnpm install --frozen-lockfile` during the build. Nix builds are sandboxed and do not have network access, so this package will fail when the deployment actually tries to build the frontend on Node B or in CI. This needs a Nix-native dependency fetch path such as `buildNpmPackage` or a pre-fetched pnpm store."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The infra-worker skill says workers should read `.factory/library/environment.md`, but this session's transcript never did so even though `skillFeedback.followedProcedure` was recorded as true.",
+      "evidence": ".factory/skills/infra-worker/SKILL.md:27 requires reading `.factory/library/environment.md`; `/Users/wiz/.factory/missions/3e8a6c24-23d0-4061-8dd3-92d26bab1fa5/worker-transcripts.jsonl` has no `environment.md` match for session `a8de6804-99b5-45da-8f20-011f8a2a912d`; handoff file line 67 marks `followedProcedure: true`."
+    },
+    {
+      "area": "conventions",
+      "observation": "The handoff `commitId` points at the later documentation-only commit instead of the implementation commit, which makes the documented review procedure inspect the wrong diff first.",
+      "evidence": "/Users/wiz/.factory/missions/3e8a6c24-23d0-4061-8dd3-92d26bab1fa5/handoffs/2026-04-10T19-57-27-702Z__nixos-config__a8de6804-99b5-45da-8f20-011f8a2a912d.json:6 records `a5a0f36`; `git show --stat a5a0f36` only changes `.factory/library/nixos-config.md`, while `git show --stat b3d8fb6` contains the actual `flake.nix` and `nix/*.nix` implementation."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Review failed. The feature's NixOS files largely match the requested topology, but the flake is not buildable for deployment because the Go source filter drops required directories and the frontend derivation depends on a sandbox-blocked `pnpm install`."
+}
