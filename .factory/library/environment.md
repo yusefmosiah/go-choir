@@ -47,6 +47,7 @@ These should stay constant for this mission:
 
 - Keep signing keys and any cookie/session secrets out of git and out of the Nix store
 - Node B runtime secrets should live in a writable runtime location (for example `/var/lib/go-choir/...`) or systemd credentials
+- **Note on Ed25519 signing keys generated at runtime**: Keys generated via `ssh-keygen` (like in systemd `ExecStartPre`) produce OpenSSH formatted keys rather than raw PKCS8/PEM. Go's `crypto/ed25519` expects PKCS8/PEM, so the auth service must handle parsing this OpenSSH format.
 - Milestone 1 auth persistence is SQLite-backed; the DB must live in a writable persistent path, not inside the repo checkout or the Nix store
 - Local worker setup may use temporary files under `/tmp/go-choir-m2`, and the local service defaults may resolve there when explicit path env vars are omitted
 - Deployed validation must still target `https://draft.choir-ip.com`
