@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Go Vet + Test + Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go test
+        run: go test ./... -count=1
+
+      - name: Go build
+        run: go build ./cmd/...
+
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: cd frontend && pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: cd frontend && pnpm build
+
+  deploy-staging:
+    name: Deploy to Staging (Node B)
+    runs-on: ubuntu-latest
+    needs: [check, build-frontend]
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 45
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.OVH_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.OVH_NODE_B_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to staging
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6 root@${{ secrets.OVH_NODE_B_HOST }} '
+            set -euo pipefail
+
+            # Clone repo if workspace doesn't exist yet
+            if [ ! -d /opt/go-choir/.git ]; then
+              echo "==> Cloning go-choir repository"
+              git clone https://github.com/yusefmosiah/go-choir.git /opt/go-choir
+            fi
+
+            cd /opt/go-choir
+            LOG=/tmp/deploy-$(date +%s).log
+
+            echo "==> Pulling latest code"
+            git fetch origin
+            git reset --hard origin/main
+
+            echo "==> Resetting stale systemd units"
+            systemctl reset-failed nixos-rebuild-switch-to-configuration.service 2>/dev/null || true
+
+            echo "==> Pre-building NixOS closure (catches OOM before switch)"
+            nix build .#nixosConfigurations.go-choir-b.config.system.build.toplevel --print-build-logs >>"$LOG" 2>&1
+            echo "    Pre-build complete ($(wc -l < "$LOG") log lines)"
+
+            echo "==> Activating NixOS config"
+            nixos-rebuild switch --flake .#go-choir-b --print-build-logs >>"$LOG" 2>&1
+            echo "    Switch complete"
+
+            echo "==> Waiting for services to start"
+            sleep 5
+
+            echo "==> Smoke test: health endpoints"
+            for port in 8081 8082 8083 8084; do
+              curl -fsS --retry 5 --retry-delay 2 --retry-all-errors http://127.0.0.1:$port/health
+              echo "    Port $port: OK"
+            done
+
+            echo "==> Staging deploy complete"
+          '
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
