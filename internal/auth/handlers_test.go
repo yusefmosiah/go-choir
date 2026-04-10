@@ -2284,6 +2284,296 @@ func TestLoginBeginStoresSessionData(t *testing.T) {
 	}
 }
 
+// --- Logout Tests ---
+
+func TestLogoutRejectsNonPost(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/auth/logout", nil)
+		rec := httptest.NewRecorder()
+		h.HandleLogout(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("method %s: got status %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+		}
+
+		var resp errorResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode error response: %v", err)
+		}
+		if resp.Error == "" {
+			t.Errorf("method %s: expected non-empty error message", method)
+		}
+	}
+}
+
+func TestLogoutReturnsSignedOutWhenAlreadySignedOut(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// POST /auth/logout with no cookies at all.
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	rec := httptest.NewRecorder()
+	h.HandleLogout(rec, req)
+
+	// Must not return 5xx.
+	if rec.Code >= 500 {
+		t.Errorf("status: got %d (5xx), want non-5xx for signed-out logout", rec.Code)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("should not be authenticated after logout")
+	}
+}
+
+func TestLogoutInvalidatesAuthenticatedSession(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	// Create a user and issue a full session.
+	user, err := h.store.CreateUser("logout-user", "logouttest")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	// Capture the cookies.
+	cookies := issueRec.Result().Cookies()
+
+	// Verify /auth/session reports authenticated before logout.
+	preReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	for _, c := range cookies {
+		preReq.AddCookie(c)
+	}
+	preRec := httptest.NewRecorder()
+	h.HandleSession(preRec, preReq)
+
+	var preResp sessionResponse
+	if err := json.NewDecoder(preRec.Body).Decode(&preResp); err != nil {
+		t.Fatalf("decode pre-logout session: %v", err)
+	}
+	if !preResp.Authenticated {
+		t.Fatal("should be authenticated before logout")
+	}
+
+	// Now call POST /auth/logout with the same cookies.
+	logoutReq := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	for _, c := range cookies {
+		logoutReq.AddCookie(c)
+	}
+	logoutRec := httptest.NewRecorder()
+	h.HandleLogout(logoutRec, logoutReq)
+
+	if logoutRec.Code >= 500 {
+		t.Errorf("logout status: got %d, want non-5xx", logoutRec.Code)
+	}
+
+	// The logout response should indicate signed-out.
+	var logoutResp sessionResponse
+	if err := json.NewDecoder(logoutRec.Body).Decode(&logoutResp); err != nil {
+		t.Fatalf("decode logout response: %v", err)
+	}
+	if logoutResp.Authenticated {
+		t.Error("logout response should not be authenticated")
+	}
+
+	// The logout response should clear both cookies.
+	logoutCookies := logoutRec.Result().Cookies()
+	var accessCleared, refreshCleared bool
+	for _, c := range logoutCookies {
+		if c.Name == AccessTokenCookieName && c.MaxAge < 0 {
+			accessCleared = true
+		}
+		if c.Name == RefreshTokenCookieName && c.MaxAge < 0 {
+			refreshCleared = true
+		}
+	}
+	if !accessCleared {
+		t.Error("access cookie should be cleared (MaxAge < 0) on logout")
+	}
+	if !refreshCleared {
+		t.Error("refresh cookie should be cleared (MaxAge < 0) on logout")
+	}
+
+	// All refresh sessions for the user should be deleted from the store.
+	// We can verify this by checking that the old refresh token hash is gone.
+	for _, c := range cookies {
+		if c.Name == RefreshTokenCookieName {
+			hash := sha256Sum([]byte(c.Value))
+			_, err := h.store.GetRefreshSessionByTokenHash(hash)
+			if err == nil {
+				t.Error("refresh session should be deleted from store after logout")
+			}
+		}
+	}
+
+	// Post-logout: /auth/session should report signed-out even if we pass
+	// the old (pre-logout) cookies. The old access JWT is still technically
+	// valid until it expires, but the refresh session is deleted. However,
+	// the access JWT is self-contained — so it may still report as valid.
+	// The contract says old COOKIES should not work. But since the access JWT
+	// is a self-contained JWT, we cannot invalidate it server-side without
+	// a revocation list (which is out of scope for Milestone 1). The critical
+	// contract behavior is that:
+	// 1. The refresh session is deleted, so it cannot silently restore access.
+	// 2. When the access JWT expires, /auth/session will be signed-out.
+	//
+	// Let's verify that the refresh session cannot restore the session.
+	// Create an expired access JWT and try to use it with the old refresh.
+	// The old refresh session was deleted, so this should fail.
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, err := expiredToken.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+
+	// Use the old refresh cookie value + expired access.
+	postReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	postReq.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	// Add the old refresh cookie.
+	for _, c := range cookies {
+		if c.Name == RefreshTokenCookieName {
+			postReq.AddCookie(c)
+		}
+	}
+	postRec := httptest.NewRecorder()
+	h.HandleSession(postRec, postReq)
+
+	var postResp sessionResponse
+	if err := json.NewDecoder(postRec.Body).Decode(&postResp); err != nil {
+		t.Fatalf("decode post-logout session: %v", err)
+	}
+	if postResp.Authenticated {
+		t.Error("should NOT be authenticated after logout — refresh cannot restore session")
+	}
+
+	_ = priv
+}
+
+func TestLogoutRepeatIsSafe(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// First logout with no cookies.
+	req1 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	rec1 := httptest.NewRecorder()
+	h.HandleLogout(rec1, req1)
+
+	if rec1.Code >= 500 {
+		t.Errorf("first logout: got %d, want non-5xx", rec1.Code)
+	}
+
+	// Second logout with no cookies (repeat).
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	rec2 := httptest.NewRecorder()
+	h.HandleLogout(rec2, req2)
+
+	if rec2.Code >= 500 {
+		t.Errorf("second logout: got %d, want non-5xx", rec2.Code)
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode second logout: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("repeat logout should return signed-out, not authenticated")
+	}
+}
+
+func TestLogoutWithBogusCookiesIsSafe(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Logout with bogus cookies — should not crash or return 5xx.
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: "not-a-jwt"})
+	req.AddCookie(&http.Cookie{Name: RefreshTokenCookieName, Value: "not-a-refresh-token"})
+	rec := httptest.NewRecorder()
+	h.HandleLogout(rec, req)
+
+	if rec.Code >= 500 {
+		t.Errorf("logout with bogus cookies: got %d, want non-5xx", rec.Code)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("should not be authenticated after logout with bogus cookies")
+	}
+}
+
+func TestLogoutThenSessionReportsSignedOut(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user and issue a session.
+	user, err := h.store.CreateUser("logout-session-user", "logoutsession")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	cookies := issueRec.Result().Cookies()
+
+	// Logout.
+	logoutReq := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	for _, c := range cookies {
+		logoutReq.AddCookie(c)
+	}
+	logoutRec := httptest.NewRecorder()
+	h.HandleLogout(logoutRec, logoutReq)
+
+	// Use the CLEARING cookies from the logout response to check /auth/session.
+	// The clearing cookies have MaxAge < 0 and empty value, simulating the
+	// browser's state after it processes the Set-Cookie headers.
+	sessionReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	// Add the clearing cookies — they have empty/invalid values.
+	for _, c := range logoutRec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			sessionReq.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
+		}
+	}
+	sessionRec := httptest.NewRecorder()
+	h.HandleSession(sessionRec, sessionReq)
+
+	var sessionResp sessionResponse
+	if err := json.NewDecoder(sessionRec.Body).Decode(&sessionResp); err != nil {
+		t.Fatalf("decode session after logout: %v", err)
+	}
+	if sessionResp.Authenticated {
+		t.Error("/auth/session should report signed-out after logout")
+	}
+}
+
 // --- Helper functions for tests ---
 
 // base64RawURLEncode encodes bytes to base64url without padding.

@@ -51,6 +51,7 @@ func main() {
 	s.HandleFunc("/auth/login/begin", handler.HandleLoginBegin)
 	s.HandleFunc("/auth/login/finish", handler.HandleLoginFinish)
 	s.HandleFunc("/auth/session", handler.HandleSession)
+	s.HandleFunc("/auth/logout", handler.HandleLogout)
 
 	s.Start()
 }

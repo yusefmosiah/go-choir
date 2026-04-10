@@ -870,6 +870,87 @@ func (h *Handler) tryRefreshRotation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleLogout handles POST /auth/logout.
+// It invalidates the current authenticated state: deletes the refresh session
+// from the store, clears both auth cookies, and returns a signed-out response.
+// If the user is already signed out (no valid cookies), it returns a
+// non-500 signed-out result so repeat logout is safe.
+func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	// Best-effort: try to find the user ID from either the access JWT or the
+	// refresh cookie so we can delete their refresh sessions from the store.
+	userID := h.extractUserIDFromAuthCookies(r)
+
+	// Delete all refresh sessions for the user (prevents silent restoration).
+	if userID != "" {
+		if err := h.store.DeleteRefreshSessionsByUserID(userID); err != nil {
+			log.Printf("auth logout: delete refresh sessions for user %q: %v", userID, err)
+			// Continue anyway — we still clear the cookies.
+		}
+	}
+
+	// Clear both auth cookies by setting MaxAge=-1 with empty values.
+	http.SetCookie(w, &http.Cookie{
+		Name:     AccessTokenCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   h.config.CookieSecure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     RefreshTokenCookieName,
+		Value:    "",
+		Path:     "/auth",
+		MaxAge:   -1,
+		Secure:   h.config.CookieSecure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	writeJSON(w, http.StatusOK, sessionResponse{Authenticated: false})
+}
+
+// extractUserIDFromAuthCookies attempts to extract a user ID from the access
+// JWT or the refresh cookie. It returns an empty string if neither cookie
+// provides a valid user ID. This is used by logout to identify which user's
+// refresh sessions to delete.
+func (h *Handler) extractUserIDFromAuthCookies(r *http.Request) string {
+	// Try the access JWT first.
+	if cookie, err := r.Cookie(AccessTokenCookieName); err == nil && cookie.Value != "" {
+		token, err := jwt.Parse(cookie.Value, func(t *jwt.Token) (interface{}, error) {
+			if t.Method != jwt.SigningMethodEdDSA {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return h.signer.Public(), nil
+		})
+		if err == nil {
+			if claims, ok := token.Claims.(jwt.MapClaims); ok {
+				if sub, ok := claims["sub"].(string); ok && sub != "" {
+					return sub
+				}
+			}
+		}
+	}
+
+	// Fall back to the refresh cookie.
+	if cookie, err := r.Cookie(RefreshTokenCookieName); err == nil && cookie.Value != "" {
+		hash := sha256.Sum256([]byte(cookie.Value))
+		hashHex := fmt.Sprintf("%x", hash)
+		rs, err := h.store.GetRefreshSessionByTokenHash(hashHex)
+		if err == nil {
+			return rs.UserID
+		}
+	}
+
+	return ""
+}
+
 // transportListToJSON converts a list of protocol.AuthenticatorTransport to
 // a JSON-encoded string for storage in the credentials table.
 func transportListToJSON(transports []protocol.AuthenticatorTransport) string {
