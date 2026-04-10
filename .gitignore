@@ -21,6 +21,6 @@
 # Dolt databases (per-user, not committed)
 *.dolt/
 
-# Frontend build output
-/web/dist/
+# Frontend
 node_modules/
+frontend/dist/
