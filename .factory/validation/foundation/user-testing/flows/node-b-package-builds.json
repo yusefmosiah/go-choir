@@ -1,0 +1,62 @@
+{
+  "groupId": "node-b-package-builds",
+  "milestone": "foundation",
+  "testedAt": "2026-04-10T20:39:40Z",
+  "isolation": {
+    "remoteHost": "node-b",
+    "repoCopy": "/tmp/go-choir-build-check",
+    "boundary": "Used a temporary checkout copy on Node B only for x86_64-linux Nix package builds."
+  },
+  "toolsUsed": [
+    "ssh",
+    "nix",
+    "shell"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-NIX-002",
+      "status": "pass",
+      "reason": "Node B built the `auth`, `proxy`, `vmctl`, `gateway`, and `sandbox` Nix packages successfully from a temporary copy of the current checkout, and each output contained an executable in `bin/`.",
+      "evidence": [
+        {
+          "file": "foundation/local-builds/VAL-NIX-002-003-node-b.txt",
+          "commands": [
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#auth",
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#proxy",
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#vmctl",
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#gateway",
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#sandbox"
+          ],
+          "observed": "The recorded output shows store paths for all five packages and `binary_present=0` for each executable existence check."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-003",
+      "status": "pass",
+      "reason": "Node B built the `frontend` Nix package successfully from the same temporary checkout, and the resulting output contained `index.html`.",
+      "evidence": [
+        {
+          "file": "foundation/local-builds/VAL-NIX-002-003-node-b.txt",
+          "commands": [
+            "nix build --no-link --print-out-paths path:/tmp/go-choir-build-check#frontend"
+          ],
+          "observed": "The recorded output shows a frontend store path and `index_html_present=0`, confirming that `index.html` exists in the build output."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    {
+      "description": "The local aarch64-darwin machine could not build the x86_64-linux-only package outputs directly.",
+      "resolved": true,
+      "resolution": "Validated the package builds on the allowed x86_64-linux Node B host instead.",
+      "affectedAssertions": [
+        "VAL-NIX-002",
+        "VAL-NIX-003"
+      ]
+    }
+  ],
+  "blockers": [],
+  "summary": "Validated 2 supplemental assertions on Node B: 2 passed, 0 failed, 0 blocked."
+}

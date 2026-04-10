@@ -1,0 +1,182 @@
+{
+  "groupId": "local-builds",
+  "milestone": "foundation",
+  "testedAt": "2026-04-10T20:25:07.524173+00:00",
+  "isolation": {
+    "repoRoot": "/Users/wiz/go-choir",
+    "missionDir": "/Users/wiz/.factory/missions/3e8a6c24-23d0-4061-8dd3-92d26bab1fa5",
+    "hostOS": "darwin 25.2.0",
+    "constraints": [
+      "Used shared local repo checkout in read-mostly mode",
+      "Did not edit tracked source files",
+      "Did not start services on ports 8081-8085"
+    ]
+  },
+  "toolsUsed": [
+    "shell"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-SVC-008",
+      "status": "pass",
+      "reason": "`go test ./...` exited 0; `internal/server` passed and command packages reported no test files.",
+      "evidence": [
+        {
+          "command": "go test ./...",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 0,
+          "observed": "ok github.com/yusefmosiah/go-choir/internal/server 1.442s; cmd/auth, cmd/gateway, cmd/proxy, cmd/sandbox, and cmd/vmctl reported [no test files].",
+          "path": "foundation/local-builds/VAL-SVC-008-go-test.log"
+        }
+      ]
+    },
+    {
+      "id": "VAL-FE-001",
+      "status": "pass",
+      "reason": "`pnpm build` exited 0 and produced `frontend/dist/index.html` plus built CSS/JS assets.",
+      "evidence": [
+        {
+          "command": "pnpm build",
+          "cwd": "/Users/wiz/go-choir/frontend",
+          "exitCode": 0,
+          "observed": "Vite production build completed in 140ms and wrote dist/index.html, dist/assets/index-Boqa1hiR.css, and dist/assets/index-DU-_ztZq.js.",
+          "path": "foundation/local-builds/VAL-FE-001-pnpm-build.log"
+        },
+        {
+          "command": "artifact existence check",
+          "cwd": "/Users/wiz/go-choir/frontend",
+          "exitCode": 0,
+          "observed": "frontend/dist/index.html exists after build.",
+          "path": "foundation/local-builds/VAL-FE-001-dist-index-snippet.html"
+        }
+      ]
+    },
+    {
+      "id": "VAL-FE-002",
+      "status": "pass",
+      "reason": "Built `dist/index.html` is HTML and contains the text `go-choir` in the `<title>`.",
+      "evidence": [
+        {
+          "command": "python3 -c \"from pathlib import Path; text=Path('dist/index.html').read_text(encoding='utf-8'); print('contains_go_choir=' + str('go-choir' in text.lower())); print('looks_like_html=' + str('<!doctype html' in text.lower() and '<html' in text.lower()))\"",
+          "cwd": "/Users/wiz/go-choir/frontend",
+          "exitCode": 0,
+          "observed": "contains_go_choir=True and looks_like_html=True.",
+          "path": "foundation/local-builds/VAL-FE-002-index-check.log"
+        },
+        {
+          "command": "inspect built dist/index.html",
+          "cwd": "/Users/wiz/go-choir/frontend",
+          "exitCode": 0,
+          "observed": "The built HTML starts with <!DOCTYPE html> and includes <title>go-choir</title>.",
+          "path": "foundation/local-builds/VAL-FE-002-dist-index-check.txt"
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-001",
+      "status": "pass",
+      "reason": "`nix flake show --all-systems` exited 0 and evaluated the flake successfully.",
+      "evidence": [
+        {
+          "command": "nix flake show --all-systems /Users/wiz/go-choir",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 0,
+          "observed": "Flake evaluation listed nixosConfigurations.go-choir-b and x86_64-linux packages auth, proxy, vmctl, gateway, sandbox, frontend, and default.",
+          "path": "foundation/local-builds/VAL-NIX-001-nix-flake-show.log"
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-002",
+      "status": "blocked",
+      "reason": "This host cannot build the x86_64-linux package outputs required by the flake: the contract-style `.#auth`/`.#proxy`/... commands resolve against aarch64-darwin attrs and fail lookup, and explicit `#packages.x86_64-linux.<pkg>` retries fail because no x86_64-linux builder is available from this isolation context.",
+      "evidence": [
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#auth",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Flake does not provide `packages.aarch64-darwin.auth`, `legacyPackages.aarch64-darwin.auth`, or top-level `auth` on this host.",
+          "path": "foundation/local-builds/VAL-NIX-002-auth-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.auth",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Build reaches the x86_64-linux derivation but fails with `required system or feature not available`; available builder list does not include x86_64-linux.",
+          "path": "foundation/local-builds/RETRY-auth-x86_64-linux-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.proxy",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Same x86_64-linux builder availability failure as auth.",
+          "path": "foundation/local-builds/RETRY-proxy-x86_64-linux-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.vmctl",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Same x86_64-linux builder availability failure as auth.",
+          "path": "foundation/local-builds/RETRY-vmctl-x86_64-linux-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.gateway",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Same x86_64-linux builder availability failure as auth.",
+          "path": "foundation/local-builds/RETRY-gateway-x86_64-linux-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.sandbox",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Same x86_64-linux builder availability failure as auth.",
+          "path": "foundation/local-builds/RETRY-sandbox-x86_64-linux-build.log"
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-003",
+      "status": "blocked",
+      "reason": "The frontend Nix package is also x86_64-linux-only in this flake, and this darwin host has no x86_64-linux builder available to produce the output path.",
+      "evidence": [
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#frontend",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Flake does not provide `packages.aarch64-darwin.frontend`, `legacyPackages.aarch64-darwin.frontend`, or top-level `frontend` on this host.",
+          "path": "foundation/local-builds/VAL-NIX-003-frontend-build.log"
+        },
+        {
+          "command": "nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.frontend",
+          "cwd": "/Users/wiz/go-choir",
+          "exitCode": 1,
+          "observed": "Explicit x86_64-linux retry fails with `required system or feature not available`; no x86_64-linux builder is configured here.",
+          "path": "foundation/local-builds/RETRY-frontend-x86_64-linux-build.log"
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    {
+      "description": "On this aarch64-darwin host, the contract-style `nix build .#auth` and `nix build .#frontend` commands fail attribute lookup because the flake only exports packages under `packages.x86_64-linux`.",
+      "resolved": true,
+      "resolution": "Retried with explicit `#packages.x86_64-linux.<name>` attributes to confirm the real blocker.",
+      "affectedAssertions": [
+        "VAL-NIX-002",
+        "VAL-NIX-003"
+      ]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "No x86_64-linux build machine is available from this isolation context. Nix reports only an `aarch64-linux` remote builder and rejects all explicit x86_64-linux builds with `required system or feature not available`.",
+      "affectedAssertions": [
+        "VAL-NIX-002",
+        "VAL-NIX-003"
+      ],
+      "quickFixAttempted": "Retried `nix build --no-link --print-out-paths /Users/wiz/go-choir#packages.x86_64-linux.{auth,proxy,vmctl,gateway,sandbox,frontend}`; all exited 1 with the same builder-availability error."
+    }
+  ],
+  "summary": "Tested 6 assigned assertions: 4 passed (VAL-SVC-008, VAL-FE-001, VAL-FE-002, VAL-NIX-001) and 2 were blocked by missing x86_64-linux build capacity in the local darwin environment (VAL-NIX-002, VAL-NIX-003)."
+}

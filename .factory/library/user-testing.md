@@ -27,9 +27,25 @@
 Max concurrent validators: **5**
 Rationale: curl-based validation is trivially cheap. Each validator runs a few curl commands. No significant resource usage.
 
+## Flow Validator Guidance: shell
+
+- Treat the local repository checkout as shared read-mostly state.
+- Do not run multiple validators that start services on ports `8081`-`8085` at the same time.
+- Validators that send signals to local service processes must own the full service lifecycle for their assigned ports and clean up before exiting.
+- Local build/test validators may run concurrently with remote Node B validators, but avoid mutating tracked files outside assigned report/evidence paths.
+
+## Flow Validator Guidance: curl
+
+- External HTTP checks against `https://draft.choir-ip.com` are safe to run concurrently.
+- Node B SSH-based validation touches shared remote system state; keep all remote deploy/systemd/firewall checks within a single validator.
+- Do not access Node A or any host other than `node-b`.
+- Keep evidence under the assigned milestone/group directory only.
+
 ## Notes
 
 - vmctl is NOT exposed through Caddy — test only via SSH
 - Sandbox is not deployed as a host service — test binary directly (local build)
 - TLS certificates are auto-provisioned by Caddy/Let's Encrypt
 - Deploy happens via GitHub Actions, not manually
+- For local signal-handling checks, prefer temporary built binaries (for example under `/tmp`) over `go run`; the `go run` wrapper can leave a child process running and make exit-code assertions unreliable.
+- This repo's flake exports buildable packages only for `x86_64-linux`, so package-build assertions should be validated on Node B or another compatible Linux builder when running from macOS.

@@ -1,0 +1,54 @@
+{
+  "milestone": "foundation",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 20,
+    "passed": 17,
+    "failed": 2,
+    "blocked": 1
+  },
+  "passedAssertions": [
+    "VAL-SVC-001",
+    "VAL-SVC-002",
+    "VAL-SVC-003",
+    "VAL-SVC-004",
+    "VAL-SVC-005",
+    "VAL-SVC-006",
+    "VAL-SVC-007",
+    "VAL-SVC-008",
+    "VAL-FE-001",
+    "VAL-FE-002",
+    "VAL-NIX-001",
+    "VAL-NIX-002",
+    "VAL-NIX-003",
+    "VAL-NIX-004",
+    "VAL-NIX-007",
+    "VAL-NIX-009",
+    "VAL-NIX-010"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-NIX-005",
+      "reason": "Node B is not running the go-choir NixOS deployment, so the expected go-choir-auth/proxy/vmctl/gateway systemd unit files are absent."
+    },
+    {
+      "id": "VAL-NIX-006",
+      "reason": "draft.choir-ip.com returned HTTP 502 for the expected routes because active Caddy configuration still proxies traffic to 127.0.0.1:9090 instead of the go-choir backends."
+    }
+  ],
+  "blockedAssertions": [
+    {
+      "id": "VAL-NIX-008",
+      "blockedBy": "No live go-choir services are installed on Node B, so restart-on-failure behavior could not be exercised safely."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added flow-validator isolation guidance for shell/curl validation plus notes about using temporary built binaries for signal tests and validating x86_64-linux Nix packages on Node B from macOS.",
+      "source": "setup"
+    }
+  ],
+  "previousRound": null
+}

@@ -1,0 +1,145 @@
+{
+  "groupId": "node-b",
+  "milestone": "foundation",
+  "testedAt": "2026-04-10T20:31:00.827017+00:00",
+  "isolation": {
+    "remoteHost": "node-b",
+    "publicHost": "draft.choir-ip.com",
+    "missionDir": "/Users/wiz/.factory/missions/3e8a6c24-23d0-4061-8dd3-92d26bab1fa5",
+    "repoRoot": "/Users/wiz/go-choir",
+    "boundary": "Only Node B and draft.choir-ip.com were accessed."
+  },
+  "toolsUsed": [
+    "shell",
+    "ssh",
+    "curl",
+    "openssl",
+    "nc",
+    "nix"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-NIX-004",
+      "status": "pass",
+      "reason": "Node B successfully built `nixosConfigurations.go-choir-b.config.system.build.toplevel` from a temporary copy of the current local checkout; however `/opt/go-choir` is absent and a direct GitHub flake fetch on Node B failed because the fetched repo snapshot lacked `flake.nix`.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-004.txt",
+          "commands": [
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"ls -ld /opt /opt/go-choir 2>&1 || true\"",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"nix build 'github:yusefmosiah/go-choir?ref=main#nixosConfigurations.go-choir-b.config.system.build.toplevel' --no-link\"",
+            "tar -C \"/Users/wiz/go-choir\" -cf - README.md flake.nix go.mod cmd internal nix frontend | ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"rm -rf /tmp/go-choir-node-b-check && mkdir -p /tmp/go-choir-node-b-check && tar -C /tmp/go-choir-node-b-check -xf - && nix build 'path:/tmp/go-choir-node-b-check#nixosConfigurations.go-choir-b.config.system.build.toplevel' --no-link\""
+          ],
+          "observed": "`/opt/go-choir` was missing, `nix build github:yusefmosiah/go-choir?ref=main#...` failed with `flake.nix` missing, and the temp-copy build on Node B exited 0."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-005",
+      "status": "fail",
+      "reason": "The live Node B system has no `go-choir-*` unit files. `systemctl list-unit-files` only showed existing Caddy/choiros-related units, while the staged go-choir flake defines `go-choir-auth`, `go-choir-proxy`, `go-choir-vmctl`, and `go-choir-gateway`.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-005.txt",
+          "commands": [
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"hostname; echo '--- active runtime units'; systemctl list-unit-files --no-pager | grep -E 'go-choir-(auth|proxy|vmctl|gateway)|caddy|choiros' || true; echo '--- staged go-choir units from temp build'; nix eval --apply 'x: builtins.attrNames x' --json 'path:/tmp/go-choir-node-b-check#nixosConfigurations.go-choir-b.config.systemd.services' | jq -r '.[]' | grep '^go-choir-' || true\""
+          ],
+          "observed": "Runtime unit listing contained no `go-choir-*` entries; staged config evaluation listed all four expected units."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-006",
+      "status": "fail",
+      "reason": "`https://draft.choir-ip.com/auth/health`, `/api/health`, `/provider/health`, and `/` all returned HTTP 502. The active `/etc/caddy/caddy_config` routes all traffic to `127.0.0.1:9090`, and nothing is listening on 9090.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-006.txt",
+          "commands": [
+            "curl -sS -D - -o - https://draft.choir-ip.com/auth/health; echo '\n---'; curl -sS -D - -o - https://draft.choir-ip.com/api/health; echo '\n---'; curl -sS -D - -o - https://draft.choir-ip.com/provider/health; echo '\n---'; curl -sS -D - -o - https://draft.choir-ip.com/",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"echo '## active caddy config'; sed -n '1,120p' /etc/caddy/caddy_config; echo '## listeners'; ss -ltn '( sport = :9090 or sport = :8081 or sport = :8082 or sport = :8084 )' || true; echo '## 9090 probe'; curl -sS -D - -o - http://127.0.0.1:9090/health 2>&1 || true\""
+          ],
+          "observed": "Every external route returned 502; active Caddy config had a single `reverse_proxy 127.0.0.1:9090`; localhost:9090 probe failed to connect."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-007",
+      "status": "pass",
+      "reason": "Caddy serves a valid Let's Encrypt certificate for `draft.choir-ip.com`, and HTTPS requests complete without certificate errors.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-007.txt",
+          "commands": [
+            "curl -sSI https://draft.choir-ip.com/; echo '---'; openssl s_client -servername draft.choir-ip.com -connect draft.choir-ip.com:443 </dev/null 2>/tmp/nodeb-cert.err | openssl x509 -noout -subject -issuer -dates; echo '---'; sed -n '1,12p' /tmp/nodeb-cert.err"
+          ],
+          "observed": "Certificate subject was `CN = draft.choir-ip.com`, issuer was `Let's Encrypt E7`, validity window was 2026-03-07 to 2026-06-05, and OpenSSL verification returned success."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-008",
+      "status": "blocked",
+      "reason": "The go-choir systemd services are not installed on the live host, so there was no safe `go-choir-*` process to kill and observe for automatic restart.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-008.txt",
+          "commands": [
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"systemctl list-unit-files --no-pager | grep '^go-choir-' || true; echo '---'; systemctl is-active go-choir-auth go-choir-proxy go-choir-vmctl go-choir-gateway 2>&1 || true\""
+          ],
+          "observed": "`systemctl list-unit-files` returned no `go-choir-*` units and `systemctl is-active` reported them absent/inactive."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-009",
+      "status": "pass",
+      "reason": "From the external validator host, TCP ports 22, 80, and 443 were reachable, while ports 8081-8084 timed out and were not externally reachable.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-009.txt",
+          "commands": [
+            "for port in 22 80 443 8081 8082 8083 8084; do echo \"## port $port\"; nc -vz -G 5 draft.choir-ip.com \"$port\" 2>&1 || true; done; echo '---'; curl -sSI http://draft.choir-ip.com/; echo '---'; curl -sSI https://draft.choir-ip.com/"
+          ],
+          "observed": "`nc` succeeded on 22/80/443 and timed out on 8081/8082/8083/8084; HTTP on port 80 redirected to HTTPS and HTTPS responded from Caddy."
+        }
+      ]
+    },
+    {
+      "id": "VAL-NIX-010",
+      "status": "pass",
+      "reason": "SSH key-based login to Node B works, password-only authentication is rejected, and the server reports `permitrootlogin prohibit-password` with `passwordauthentication no`.",
+      "evidence": [
+        {
+          "file": "foundation/node-b/VAL-NIX-010.txt",
+          "commands": [
+            "echo '## key auth'; ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"echo ok\"; echo '## password auth disabled probe'; ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=0 -o BatchMode=yes -o ConnectTimeout=10 node-b \"echo unexpected-success\" 2>&1 || true; echo '## server settings'; ssh -o BatchMode=yes -o ConnectTimeout=10 node-b \"sshd -T | grep -E 'permitrootlogin|passwordauthentication|kbdinteractiveauthentication'\""
+          ],
+          "observed": "BatchMode key login returned `ok`, a password-only probe failed with `Permission denied (publickey)`, and `sshd -T` showed password authentication disabled."
+        }
+      ]
+    }
+  ],
+  "frictions": [
+    {
+      "description": "A direct Node B build from `github:yusefmosiah/go-choir?ref=main` failed because the fetched snapshot did not contain `flake.nix`, so validation used a temporary copy of the local checkout on Node B instead.",
+      "resolved": true,
+      "resolution": "Copied the current local checkout into `/tmp/go-choir-node-b-check` on Node B and built the flake from that path.",
+      "affectedAssertions": [
+        "VAL-NIX-004"
+      ]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Node B is still running the older choiros-era runtime configuration instead of the go-choir NixOS deployment: `/opt/go-choir` is missing, no `go-choir-*` unit files are installed, and active Caddy config still proxies all traffic to `127.0.0.1:9090`.",
+      "affectedAssertions": [
+        "VAL-NIX-005",
+        "VAL-NIX-006",
+        "VAL-NIX-008"
+      ],
+      "quickFixAttempted": "Verified runtime state via `systemctl`, `/etc/caddy/caddy_config`, and localhost port probes; did not switch the live system because the task scope was validation only."
+    }
+  ],
+  "summary": "Validated 7 Node B assertions: 4 passed (VAL-NIX-004, VAL-NIX-007, VAL-NIX-009, VAL-NIX-010), 2 failed (VAL-NIX-005, VAL-NIX-006), and 1 was blocked (VAL-NIX-008) because go-choir is not deployed on the live host."
+}
