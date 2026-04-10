@@ -1,0 +1,26 @@
+# Binaries
+/bin/
+*.exe
+
+# Build
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Dolt databases (per-user, not committed)
+*.dolt/
+
+# Frontend build output
+/web/dist/
+node_modules/
