@@ -1,0 +1,66 @@
+{
+  "milestone": "foundation",
+  "round": 2,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "go test ./... -count=1",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "go build ./cmd/... && cd frontend && pnpm install --frozen-lockfile && pnpm build",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "go vet ./...",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failedFeatures": [
+      "nixos-config"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "nixos-config",
+      "file": "flake.nix",
+      "line": 21,
+      "severity": "blocking",
+      "description": "Prior blocking issue remains. `commonGoArgs.src` uses `pkgs.lib.cleanSourceWith`, but the filter at lines 21-26 only keeps `.go`, `go.mod`, and `go.sum` paths and never keeps directories such as `cmd/` or `internal/`. That means the source tree handed to `buildGoModule` does not preserve the service package directories required by `subPackages = [ subPackage ]`, so the Go package builds are not actually deployable."
+    },
+    {
+      "featureId": "nixos-config",
+      "file": "flake.nix",
+      "line": 44,
+      "severity": "blocking",
+      "description": "Prior blocking issue remains. The frontend derivation still runs `pnpm install --frozen-lockfile` in `postPatch`. Normal Nix builds are sandboxed and do not allow the network access that install step requires, so the frontend package is not reproducibly buildable for deployment. This still needs a Nix-native dependency fetch path such as `buildNpmPackage` or a pre-fetched pnpm store."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skills",
+      "suggestion": "Split the `go-worker` skill or make its procedure conditional so frontend-only scaffold features are not instructed to follow Go-service-specific steps like tests-first service work and starting binaries for manual health checks.",
+      "evidence": "The `svelte-scaffold` review found `.factory/skills/go-worker/SKILL.md` still directs workers to 'Write tests first (TDD)' and to start service binaries even for a static frontend scaffold task, while the implementation worker only performed frontend build verification.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "The infra-worker session did not read `.factory/library/environment.md` even though the skill requires it, but still reported `followedProcedure: true`.",
+      "reason": "worker-specific compliance issue rather than a shared-state update candidate"
+    },
+    {
+      "observation": "The nixos-config handoff `commitId` points at a later documentation-only commit instead of the implementation commit.",
+      "reason": "specific handoff error; no clear AGENTS.md or skill change identified from a single occurrence"
+    }
+  ],
+  "previousRound": ".factory/validation/foundation/scrutiny/synthesis.round1.json"
+}
