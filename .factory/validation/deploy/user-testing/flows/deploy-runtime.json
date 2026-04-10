@@ -1,0 +1,74 @@
+{
+  "surface": "curl",
+  "groupId": "deploy-runtime",
+  "testedAt": "2026-04-10T21:25:02.833565Z",
+  "assertions": [
+    {
+      "id": "VAL-NIX-005",
+      "status": "pass",
+      "reason": "`systemctl list-unit-files --type=service` on Node B showed `go-choir-auth.service`, `go-choir-proxy.service`, `go-choir-vmctl.service`, and `go-choir-gateway.service` enabled; explicit sandbox check reported `sandbox_unit_present=no`.",
+      "evidence": [
+        "deploy/deploy-runtime/systemd-unit-check.txt"
+      ]
+    },
+    {
+      "id": "VAL-NIX-006",
+      "status": "pass",
+      "reason": "`/etc/caddy/caddy_config` maps `/auth/* -> 127.0.0.1:8081`, `/api/* -> 127.0.0.1:8082`, `/provider/* -> 127.0.0.1:8084`, and root `/` to the frontend file server; external curls returned `200` with auth/proxy/gateway JSON on those routes and `200` HTML at `/`.",
+      "evidence": [
+        "deploy/deploy-runtime/caddy-and-local-health.txt",
+        "deploy/deploy-runtime/external-curl.txt"
+      ]
+    },
+    {
+      "id": "VAL-NIX-008",
+      "status": "pass",
+      "reason": "`systemctl show` reported `Restart=on-failure` and `RestartUSec=3s` for `go-choir-auth.service`; after `kill -9` on PID `649569`, systemd moved through `activating/auto-restart` and brought the service back with PID `652132` in `4s`, after which `http://127.0.0.1:8081/health` returned `200` with auth JSON.",
+      "evidence": [
+        "deploy/deploy-runtime/restart-auth.txt",
+        "deploy/deploy-runtime/caddy-and-local-health.txt"
+      ]
+    },
+    {
+      "id": "VAL-NIX-011",
+      "status": "pass",
+      "reason": "Node B has `/opt/go-choir` (`drwxr-xr-x 1 root root ... /opt/go-choir`), and `git -C /opt/go-choir remote -v` showed `origin https://github.com/yusefmosiah/go-choir.git` for fetch and push.",
+      "evidence": [
+        "deploy/deploy-runtime/workspace-and-units.txt"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "status": "pass",
+      "reason": "External curls to `https://draft.choir-ip.com/auth/health`, `/api/health`, and `/provider/health` all returned `HTTP/2 200`; bodies were `{\"status\":\"ok\",\"service\":\"auth\"}`, `{\"status\":\"ok\",\"service\":\"proxy\"}`, and `{\"status\":\"ok\",\"service\":\"gateway\"}`.",
+      "evidence": [
+        "deploy/deploy-runtime/external-curl.txt"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "status": "pass",
+      "reason": "`curl https://draft.choir-ip.com/` returned `HTTP/2 200` with HTML containing `<title>go-choir</title>` and `<h1>go-choir</h1>`.",
+      "evidence": [
+        "deploy/deploy-runtime/external-curl.txt"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-003",
+      "status": "pass",
+      "reason": "Internal vmctl health on Node B succeeded with `curl http://127.0.0.1:8083/health -> HTTP/1.1 200 {\"status\":\"ok\",\"service\":\"vmctl\"}`; generated Caddy config contains no vmctl route, and external `curl https://draft.choir-ip.com/vmctl/health` returned `HTTP/2 404`.",
+      "evidence": [
+        "deploy/deploy-runtime/caddy-and-local-health.txt",
+        "deploy/deploy-runtime/external-curl.txt"
+      ]
+    }
+  ],
+  "toolsUsed": [
+    "curl",
+    "ssh",
+    "shell"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 7 deploy-runtime assertions against Node B and draft.choir-ip.com; all 7 passed, including workspace/git checks, systemd/Caddy validation, external health/frontend checks, vmctl internal-only verification, and an auth-service restart-on-failure kill/recovery test."
+}

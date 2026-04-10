@@ -1,0 +1,30 @@
+{
+  "milestone": "deploy",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 13,
+    "passed": 13,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-CI-001",
+    "VAL-CI-002",
+    "VAL-CI-003",
+    "VAL-CI-004",
+    "VAL-CI-005",
+    "VAL-CI-006",
+    "VAL-NIX-005",
+    "VAL-NIX-006",
+    "VAL-NIX-008",
+    "VAL-NIX-011",
+    "VAL-CROSS-001",
+    "VAL-CROSS-002",
+    "VAL-CROSS-003"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}

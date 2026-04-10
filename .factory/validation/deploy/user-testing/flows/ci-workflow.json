@@ -1,0 +1,71 @@
+{
+  "surface": "shell",
+  "groupId": "ci-workflow",
+  "assertions": [
+    {
+      "id": "VAL-CI-001",
+      "status": "pass",
+      "reason": "Run 24264431548 is the CI workflow on branch main with event push; workflow file also declares on.push.branches [main] (ci.yml lines 3-5).",
+      "evidence": [
+        "deploy/ci-workflow/run-metadata.json",
+        "deploy/ci-workflow/workflow-excerpt.txt"
+      ]
+    },
+    {
+      "id": "VAL-CI-002",
+      "status": "pass",
+      "reason": "Job \"Go Vet + Test + Build\" completed successfully; step metadata marks both \"Go vet\" and \"Go test\" as success, and logs show `go vet ./...` and `go test ./... -count=1` ran in that job.",
+      "evidence": [
+        "deploy/ci-workflow/run-metadata.json",
+        "deploy/ci-workflow/go-check-excerpt.txt"
+      ]
+    },
+    {
+      "id": "VAL-CI-003",
+      "status": "pass",
+      "reason": "The same job ran on an Ubuntu runner with GOOS=linux and GOHOSTARCH=amd64, executed `go build ./cmd/...`, and the repository has five command directories (`auth`, `gateway`, `proxy`, `sandbox`, `vmctl`) covered by that pattern; the step concluded success.",
+      "evidence": [
+        "deploy/ci-workflow/workflow-excerpt.txt",
+        "deploy/ci-workflow/go-check-excerpt.txt",
+        "deploy/ci-workflow/run-metadata.json"
+      ]
+    },
+    {
+      "id": "VAL-CI-004",
+      "status": "pass",
+      "reason": "Job \"Build Frontend\" step \"Build frontend\" succeeded; logs show `cd frontend && pnpm build`, Vite production build output, and emitted `dist/index.html`.",
+      "evidence": [
+        "deploy/ci-workflow/workflow-excerpt.txt",
+        "deploy/ci-workflow/frontend-build-excerpt.txt",
+        "deploy/ci-workflow/run-metadata.json"
+      ]
+    },
+    {
+      "id": "VAL-CI-005",
+      "status": "pass",
+      "reason": "Job \"Deploy to Staging (Node B)\" succeeded; deploy logs show SSH to Node B, `git fetch origin`, `git reset --hard origin/main`, a Nix pre-build, and `/run/current-system/sw/bin/nixos-rebuild switch --flake .#go-choir-b` completing with \"Switch complete\".",
+      "evidence": [
+        "deploy/ci-workflow/workflow-excerpt.txt",
+        "deploy/ci-workflow/deploy-and-smoke-excerpt.txt",
+        "deploy/ci-workflow/run-metadata.json"
+      ]
+    },
+    {
+      "id": "VAL-CI-006",
+      "status": "pass",
+      "reason": "The deploy job includes a smoke-test loop over ports 8081-8084; logs show each `/health` curl returned service JSON and `Port <port>: OK`, so the post-deploy health checks passed.",
+      "evidence": [
+        "deploy/ci-workflow/workflow-excerpt.txt",
+        "deploy/ci-workflow/deploy-and-smoke-excerpt.txt",
+        "deploy/ci-workflow/run-metadata.json"
+      ]
+    }
+  ],
+  "toolsUsed": [
+    "gh",
+    "shell"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Validated GitHub Actions run 24264431548 for deploy milestone CI assertions. All 6 assigned assertions passed based on workflow metadata plus job log evidence from the successful push-to-main run."
+}
