@@ -96,11 +96,11 @@ jobs:
             systemctl reset-failed nixos-rebuild-switch-to-configuration.service 2>/dev/null || true
 
             echo "==> Pre-building NixOS closure (catches OOM before switch)"
-            nix build .#nixosConfigurations.go-choir-b.config.system.build.toplevel --print-build-logs >>"$LOG" 2>&1
-            echo "    Pre-build complete ($(wc -l < "$LOG") log lines)"
+            nix build .#nixosConfigurations.go-choir-b.config.system.build.toplevel --print-build-logs
+            echo "    Pre-build complete"
 
             echo "==> Activating NixOS config"
-            nixos-rebuild switch --flake .#go-choir-b --print-build-logs >>"$LOG" 2>&1
+            nixos-rebuild switch --flake .#go-choir-b --print-build-logs
             echo "    Switch complete"
 
             echo "==> Waiting for services to start"
