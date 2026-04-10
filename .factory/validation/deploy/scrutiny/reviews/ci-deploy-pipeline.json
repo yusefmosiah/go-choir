@@ -1,0 +1,33 @@
+{
+  "featureId": "ci-deploy-pipeline",
+  "reviewedAt": "2026-04-10T21:18:40Z",
+  "commitId": "fafd779",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature added the requested three-job CI/CD workflow and Node B workspace setup, but the original deploy script was not executable on Node B because it invoked `nix` and `nixos-rebuild` in a non-interactive SSH session without making those binaries available on PATH.",
+    "issues": [
+      {
+        "file": ".github/workflows/ci.yml",
+        "line": 98,
+        "severity": "blocking",
+        "description": "Inside the remote `ssh ... '...'` script, the workflow runs bare `nix build` and `nixos-rebuild switch` commands without exporting the NixOS system PATH or using absolute binary paths. On Node B, non-interactive SSH sessions did not expose those commands, so automated deployment could not complete until follow-up fixes in commits `7f7e872`, `de706ce`, and `c4240ff` added `/run/current-system/sw/bin` and absolute command paths."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The infra-worker skill describes the deploy pattern at a high level, but it does not capture the NixOS-specific requirement that non-interactive SSH deploy steps must export `/run/current-system/sw/bin` (and sometimes `/run/wrappers/bin`) or use absolute paths for `nix` and `nixos-rebuild`. The worker followed the documented pattern and produced a broken workflow that needed multiple follow-up fixes.",
+      "evidence": "`/Users/wiz/go-choir/.factory/skills/infra-worker/SKILL.md` says to use `SSH → git pull → nix build → nixos-rebuild switch → health check`; original feature commit `3460224` uses bare `nix` and `nixos-rebuild` at `.github/workflows/ci.yml:98` and `:102`; follow-up commits `7f7e872`, `de706ce`, and `c4240ff` patch that exact problem."
+    },
+    {
+      "area": "conventions",
+      "observation": "The handoff `commitId` points at a documentation-only follow-up commit instead of the implementation commit that introduced the workflow, which makes the documented review procedure start from the wrong diff.",
+      "evidence": "`/Users/wiz/.factory/missions/3e8a6c24-23d0-4061-8dd3-92d26bab1fa5/handoffs/2026-04-10T20-48-44-282Z__ci-deploy-pipeline__6289175a-e38f-4b2a-8629-e5ac2abfe735.json` records `fafd779`; `git show --stat fafd779` only changes `.factory/library/ci-deploy-pipeline.md`, while `git show --stat 3460224` contains the actual `.github/workflows/ci.yml` implementation."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Review failed. The feature produced the intended CI/CD workflow shape, but the shipped deploy job could not run on Node B because the remote SSH session did not make `nix` and `nixos-rebuild` available."
+}

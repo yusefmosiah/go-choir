@@ -1,0 +1,54 @@
+{
+  "milestone": "deploy",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "go test \"/Users/wiz/go-choir/...\" -count=1",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "go build \"/Users/wiz/go-choir/cmd/...\" && pnpm --dir \"/Users/wiz/go-choir/frontend\" install --frozen-lockfile && pnpm --dir \"/Users/wiz/go-choir/frontend\" build",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "go vet \"/Users/wiz/go-choir/...\"",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failedFeatures": [
+      "ci-deploy-pipeline"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "ci-deploy-pipeline",
+      "severity": "blocking",
+      "description": "The original deploy workflow invoked bare `nix` and `nixos-rebuild` inside a non-interactive SSH session on Node B without exporting the NixOS system PATH or using absolute binary paths, so the automated deployment could not run until later follow-up commits fixed the remote environment handling."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": ".factory/skills/infra-worker/SKILL.md",
+      "suggestion": "Document that NixOS deploy steps executed through non-interactive SSH must export `/run/current-system/sw/bin` and `/run/wrappers/bin`, or use absolute paths for `nix` and `nixos-rebuild`.",
+      "evidence": "The original `ci-deploy-pipeline` workflow followed the high-level deploy pattern but shipped bare `nix` and `nixos-rebuild` commands in `.github/workflows/ci.yml`, which failed on Node B until follow-up commits `7f7e872`, `de706ce`, and `c4240ff` corrected the PATH handling.",
+      "isSystemic": true
+    },
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Clarify that worker handoff `commitId` values must point to the implementation commit that introduced the reviewed changes, not a later docs-only or follow-up commit.",
+      "evidence": "The `ci-deploy-pipeline` handoff records commit `fafd779`, which only adds `.factory/library/ci-deploy-pipeline.md`, while commit `3460224` contains the actual workflow implementation reviewed by scrutiny.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}
