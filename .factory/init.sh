@@ -13,12 +13,12 @@ fi
 
 mkdir -p /tmp/go-choir-m2/auth
 
-if [ ! -f /tmp/go-choir-m2/auth-jwt-ed25519 ]; then
-  ssh-keygen -q -t ed25519 -N "" -f /tmp/go-choir-m2/auth-jwt-ed25519 >/dev/null
+if [ ! -f /tmp/go-choir-m2/auth-signing-key ]; then
+  ssh-keygen -q -t ed25519 -N "" -f /tmp/go-choir-m2/auth-signing-key >/dev/null
 fi
 
-if [ ! -f /tmp/go-choir-m2/auth-jwt-ed25519.pub ]; then
-  ssh-keygen -y -f /tmp/go-choir-m2/auth-jwt-ed25519 > /tmp/go-choir-m2/auth-jwt-ed25519.pub
+if [ ! -f /tmp/go-choir-m2/auth-signing-key.pub ]; then
+  ssh-keygen -y -f /tmp/go-choir-m2/auth-signing-key > /tmp/go-choir-m2/auth-signing-key.pub
 fi
 
 echo "init.sh complete"
