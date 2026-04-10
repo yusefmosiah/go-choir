@@ -1,0 +1,119 @@
+{
+  "groupId": "auth-curl",
+  "testedAt": "2026-04-10T23:46:11Z",
+  "isolation": {
+    "appUrl": "http://127.0.0.1:8081",
+    "rpId": "draft.choir-ip.com"
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-AUTH-001",
+      "title": "Milestone 1 auth routes are available under /auth/*",
+      "status": "pass",
+      "steps": [
+        { "action": "curl all 6 auth endpoints", "expected": "JSON/API responses, no HTML fallbacks", "observed": "Endpoints return JSON responses (mostly 400s due to empty payloads or 200 for session)" }
+      ],
+      "evidence": {
+        "network": "Recorded curl transcripts for register/begin, register/finish, login/begin, login/finish, session, and logout"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-002",
+      "title": "Session inspection reports signed-out state for missing, bogus, or expired session artifacts",
+      "status": "pass",
+      "steps": [
+        { "action": "curl /auth/session with no cookie", "expected": "signed-out state", "observed": "{\"authenticated\":false}" },
+        { "action": "curl /auth/session with bogus cookie", "expected": "signed-out state", "observed": "{\"authenticated\":false}" }
+      ],
+      "evidence": {
+        "network": "Recorded missing-cookie and bogus-cookie transcripts"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-003",
+      "title": "Auth begin endpoints reject malformed input cleanly",
+      "status": "pass",
+      "steps": [
+        { "action": "curl register/begin with missing username", "expected": "4xx JSON response", "observed": "400 Bad Request with {\"error\":\"username is required\"}" },
+        { "action": "curl login/begin with missing username", "expected": "4xx JSON response", "observed": "400 Bad Request with {\"error\":\"username is required\"}" }
+      ],
+      "evidence": {
+        "network": "Recorded invalid request transcripts for register/begin and login/begin"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-004",
+      "title": "Registration begin returns WebAuthn options bound to draft.choir-ip.com",
+      "status": "pass",
+      "steps": [
+        { "action": "curl register/begin with valid username", "expected": "WebAuthn creation options with rp.id=draft.choir-ip.com", "observed": "Returned JSON with challenge and rp.id=draft.choir-ip.com" }
+      ],
+      "evidence": {
+        "network": "Recorded valid register-begin transcript"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-005",
+      "title": "Login begin returns assertion options for the implemented registered-passkey flow on draft.choir-ip.com",
+      "status": "blocked",
+      "steps": [
+        { "action": "curl login/begin with test user", "expected": "assertion options", "observed": "404 user has no registered passkeys" }
+      ],
+      "evidence": {
+        "network": "Recorded login-begin transcript returning 404"
+      },
+      "issues": "Blocked because we cannot create a registered passkey user via pure curl without a browser passkey ceremony."
+    },
+    {
+      "id": "VAL-AUTH-006",
+      "title": "Invalid, stale, or replayed finish payloads fail closed and do not mint a session",
+      "status": "blocked",
+      "steps": [
+        { "action": "curl register/finish with tampered payload", "expected": "4xx response and no session minted", "observed": "400 Bad Request and subsequent /auth/session returns {\"authenticated\":false}" },
+        { "action": "curl register/finish replay valid payload", "expected": "fail closed", "observed": "Skipped due to inability to create valid payload via curl" }
+      ],
+      "evidence": {
+        "network": "Recorded tampered-finish failure and subsequent session proof transcripts"
+      },
+      "issues": "Tampered payload failure verified, but full assertion blocked because replay testing requires a valid passkey ceremony which cannot be completed via curl."
+    },
+    {
+      "id": "VAL-AUTH-007",
+      "title": "Authenticated session inspection returns current user identity without secrets",
+      "status": "blocked",
+      "steps": [
+        { "action": "curl /auth/session with valid session", "expected": "current user info without secrets", "observed": "Skipped" }
+      ],
+      "evidence": {
+        "network": "None"
+      },
+      "issues": "Blocked: Cannot obtain an authenticated session via pure curl."
+    },
+    {
+      "id": "VAL-AUTH-008",
+      "title": "Logout invalidates access and refresh state and is safe to repeat",
+      "status": "blocked",
+      "steps": [
+        { "action": "curl /auth/logout with valid session", "expected": "invalidates state", "observed": "Skipped" }
+      ],
+      "evidence": {
+        "network": "None"
+      },
+      "issues": "Blocked: Cannot obtain an authenticated session via pure curl to test valid logout invalidation."
+    }
+  ],
+  "frictions": [],
+  "blockers": [
+    {
+      "description": "Cannot complete real WebAuthn passkey ceremonies via pure curl. This blocks generating valid sessions or registering users for testing login, replay, authenticated session inspection, and logout behavior.",
+      "affectedAssertions": ["VAL-AUTH-005", "VAL-AUTH-006", "VAL-AUTH-007", "VAL-AUTH-008"],
+      "quickFixAttempted": "Attempted to hit login/begin with a testusername, but it correctly returned 404 because no passkey is registered. Verified failure behavior for 006, but cannot verify replay."
+    }
+  ],
+  "summary": "Tested 8 assertions: 4 passed, 4 blocked due to inability to perform passkey ceremonies via curl."
+}
