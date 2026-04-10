@@ -1,0 +1,42 @@
+commands:
+  build: go build ./cmd/...
+  test: go test ./... -count=1
+  vet: go vet ./...
+  frontend-install: cd frontend && pnpm install
+  frontend-build: cd frontend && pnpm build
+
+services:
+  auth:
+    start: AUTH_PORT=8081 go run ./cmd/auth
+    stop: lsof -ti :8081 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8081/health
+    port: 8081
+    depends_on: []
+
+  proxy:
+    start: PROXY_PORT=8082 go run ./cmd/proxy
+    stop: lsof -ti :8082 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8082/health
+    port: 8082
+    depends_on: []
+
+  vmctl:
+    start: VMCTL_PORT=8083 go run ./cmd/vmctl
+    stop: lsof -ti :8083 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8083/health
+    port: 8083
+    depends_on: []
+
+  gateway:
+    start: GATEWAY_PORT=8084 go run ./cmd/gateway
+    stop: lsof -ti :8084 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8084/health
+    port: 8084
+    depends_on: []
+
+  sandbox:
+    start: SANDBOX_PORT=8085 go run ./cmd/sandbox
+    stop: lsof -ti :8085 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8085/health
+    port: 8085
+    depends_on: []
