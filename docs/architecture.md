@@ -380,7 +380,7 @@ AppAgent (domain authority)                 ← §4.2
 ```go
 // Scheduler is the central cross-app work registry within the sandbox.
 type Scheduler struct {
-    store    *Store
+    store    *DoltStore
     eventBus *EventBus
 }
 
@@ -587,6 +587,96 @@ The architecture supports a future publishing path for e-texts:
 - This is a natural fit because Dolt is literally Git-for-data — push/pull between instances is a first-class operation
 - Architecture implication: the per-sandbox Dolt schema must be designed so that publishable content can be cleanly extracted (the current table design with `documents` + `content` + `citations` supports this)
 - Not specced in detail — this is a future mission
+
+### 3.5a Store API: SQLite → Dolt Migration
+
+**The Dolt embedded driver implements Go's `database/sql` interface.** This means the cogent store patterns carry over almost 1:1.
+
+#### Opening the database
+
+SQLite (cogent current):
+```go
+db, err := sql.Open("sqlite", dsn)
+db.SetMaxOpenConns(1)
+```
+
+Dolt (go-choir):
+```go
+import embedded "github.com/dolthub/driver"
+
+cfg, _ := embedded.ParseDSN("file:///path/to/db?commitname=System&commitemail=system@go-choir.local&database=sandbox")
+connector, _ := embedded.NewConnector(cfg)
+db := sql.OpenDB(connector)
+```
+
+#### CRUD operations — identical interface
+
+```go
+// Insert (same db.ExecContext pattern)
+_, err := db.ExecContext(ctx,
+    `INSERT INTO work_items (work_id, title, objective, execution_state, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    workID, title, objective, "queued", now)
+
+// Query (same db.QueryContext pattern)
+rows, err := db.QueryContext(ctx,
+    `SELECT work_id, title, execution_state FROM work_items WHERE execution_state = ?`,
+    "queued")
+
+// Transaction (same db.BeginTx pattern)
+tx, err := db.BeginTx(ctx, nil)
+defer tx.Rollback()
+tx.ExecContext(ctx, `UPDATE work_items SET execution_state = ? WHERE work_id = ?`, "running", workID)
+tx.Commit()
+```
+
+#### Three SQL dialect changes from SQLite
+
+| SQLite | Dolt (MySQL-compatible) | Sites affected |
+|--------|----------------------|----------------|
+| `INSERT ... ON CONFLICT(col) DO UPDATE SET ...` | `INSERT ... ON DUPLICATE KEY UPDATE ...` | ~3 upsert sites |
+| `TEXT PRIMARY KEY` | `VARCHAR(36) PRIMARY KEY` | All DDL (use UUIDs) |
+| `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=...` | Remove (not applicable) | Store bootstrap |
+
+#### Version control (additive — new capabilities)
+
+```go
+// Commit after meaningful state changes
+db.ExecContext(ctx, `CALL dolt_add('.')`)
+db.ExecContext(ctx, `CALL dolt_commit('-m', ?, '--author', ?)`,
+    "Work item claimed: "+workID,
+    "Scheduler <scheduler@go-choir.local>")
+
+// Query history
+rows, _ := db.QueryContext(ctx, `SELECT * FROM dolt_log ORDER BY date DESC LIMIT 20`)
+
+// Query state at a point in time
+rows, _ := db.QueryContext(ctx,
+    `SELECT * FROM work_items AS OF ? WHERE work_id = ?`, commitHash, workID)
+
+// Diff between versions
+rows, _ := db.QueryContext(ctx,
+    `SELECT * FROM dolt_diff_work_items WHERE from_commit = ? AND to_commit = ?`,
+    fromHash, toHash)
+
+// Blame
+rows, _ := db.QueryContext(ctx, `SELECT * FROM dolt_blame_work_items`)
+```
+
+#### Commit strategy
+
+- **User edits** (e-text): commit immediately with user as author
+- **AppAgent edits**: commit immediately with agent as author
+- **Work state transitions** (claimed, completed, failed): commit on transition
+- **Operational state** (sessions, events, locks): commit periodically (every 5 minutes) or on graceful shutdown
+- **Batch operations**: commit once at end of batch
+
+#### What this means
+
+The work graph that was in cogent's SQLite (`work_items`, `work_edges`, `attestation_records`, etc.) moves to Dolt with:
+- Identical CRUD patterns (same `database/sql` interface)
+- 3 mechanical SQL syntax changes
+- Free versioning, provenance, and audit trail on top
 
 ### 3.6 Authority & Lease Model (distributed)
 
@@ -1801,6 +1891,31 @@ Each service can be built and tested incrementally. The real distributed archite
 | Cargo workspace, Cargo.lock | Go modules replace Cargo |
 | systemd template layer | vmctl manages VMs directly via firecracker-go-sdk |
 | vfkit-runtime-ctl scripts | vmctl manages VMs directly via firecracker-go-sdk |
+
+### 8.5 Deployment Target: OVH Node B (draft.choir-ip.com)
+
+go-choir deploys to **OVH node B** (draft.choir-ip.com) while choiros-rs stays on node A (choir-ip.com). After both systems are validated, go-choir promotes to node A.
+
+OVH deployment credentials and SSH details are stored in the choiros-rs cogent private notes database at `/Users/wiz/choiros-rs/.cogent/cogent-private.db`. Access via: `cogent work private-note` CLI in the choiros-rs repo, or directly query the `private_notes` table. Deploy mission workers will need to extract: SSH endpoints, deploy procedures, node B NixOS configuration, Caddy setup.
+
+#### Deployment Architecture on Node B
+
+```
+draft.choir-ip.com (OVH Node B, NixOS)
+├── Caddy (TLS, static assets, reverse proxy)
+├── auth service (Go binary, systemd unit)
+├── proxy service (Go binary, systemd unit)
+├── vmctl service (Go binary, systemd unit)
+├── gateway service (Go binary, systemd unit)
+├── Firecracker microVMs
+│   └── sandbox instances (Go binary inside VM)
+└── NixOS configuration (flake-based)
+```
+
+- GitHub Actions builds all 5 Go binaries + Svelte frontend
+- Deploy pushes to node B via SSH (or NixOS deploy tooling)
+- Each service runs as a systemd unit
+- Caddy config deployed as part of the NixOS configuration
 
 ---
 
