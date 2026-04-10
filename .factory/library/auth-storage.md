@@ -1,11 +1,14 @@
-# Auth Storage Foundation
+# Auth Package
 
-This document describes the `internal/auth` package created during the `auth-storage-foundation` feature.
+This document describes the `internal/auth` package built across auth-foundation features.
 
 ## Package Structure
 
 - `internal/auth/config.go` — `Config` struct and `LoadConfig()` function that resolves all AUTH_* env vars
 - `internal/auth/store.go` — `Store` struct wrapping SQLite with schema bootstrap and CRUD operations
+- `internal/auth/handlers.go` — HTTP handlers for `/auth/register/begin`, `/auth/login/begin`, and `/auth/session`
+- `internal/auth/webauthn_user.go` — Adapter implementing `webauthn.User` interface for Store User + Credentials
+- `internal/auth/keys.go` — Ed25519 private key loading from OpenSSH PEM files
 - `internal/auth/testhelpers.go` — `TestStore(t)` and `TestConfig(t)` helpers for unit tests
 
 ## Configuration (AUTH_* env vars)
@@ -54,4 +57,35 @@ The `Store` provides CRUD for all four tables:
 
 ## cmd/auth Integration
 
-`cmd/auth/main.go` loads config via `auth.LoadConfig()`, ensures dirs, opens the store, and starts the HTTP server. The store and config are ready for handler wiring in later features.
+`cmd/auth/main.go` loads config, ensures dirs, opens the store, creates the WebAuthn instance, loads the Ed25519 signing key, creates a `Handler`, and registers `/auth/register/begin`, `/auth/login/begin`, and `/auth/session` routes on the shared server.
+
+## Auth HTTP Handlers
+
+### Handler construction
+
+`auth.NewHandler(store, wa, cfg, signer)` creates a `Handler` with:
+- `store` — SQLite Store for user/credential/challenge persistence
+- `wa` — `*webauthn.WebAuthn` instance bound to the configured RP ID and origins
+- `cfg` — `*Config` for cookie settings and RP ID
+- `signer` — `ed25519.PrivateKey` for JWT signing/verification
+
+### POST /auth/register/begin
+
+Accepts `{"username": "alice"}`, creates the user if not existing, generates WebAuthn registration options with a challenge, persists the challenge in `challenge_state`, and returns `*protocol.CredentialCreation` as JSON. Malformed or missing input returns JSON 4xx.
+
+### POST /auth/login/begin
+
+Accepts `{"username": "alice"}`, looks up existing user and credentials, generates WebAuthn assertion options with a challenge, persists the challenge in `challenge_state`, and returns `*protocol.CredentialAssertion` as JSON. Returns 404 for unknown users or users without passkeys. Malformed input returns JSON 4xx.
+
+### GET /auth/session
+
+Returns `{"authenticated": false}` for missing, empty, bogus, expired, or tampered access JWT cookies. Returns `{"authenticated": true, "user": {...}}` for valid JWTs. Never returns 5xx for invalid auth state. Never leaks tokens, passkey material, or challenge records.
+
+### Key loading
+
+`auth.LoadPrivateKey(path)` reads an OpenSSH PEM-encoded Ed25519 private key and returns `ed25519.PrivateKey`. The init.sh script generates keys in this format.
+
+### Test helpers for handler tests
+
+- `testHandlerEnv(t)` — creates a Handler with test Store, WebAuthn, and temporary Ed25519 key material
+- `writeTestKey(t, path, priv)` — writes an Ed25519 private key in OpenSSH PEM format
