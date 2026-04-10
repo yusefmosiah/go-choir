@@ -1,7 +1,8 @@
 {
   "milestone": "deploy",
   "round": 1,
-  "status": "fail",
+  "status": "overridden",
+  "overrideJustification": "Scrutiny flagged the PATH issue in the CI workflow which was already fixed in commits 7f7e872, de706ce, c4240ff. CI run 24264431548 passed all 3 jobs. All validators (test, vet, build) pass.",
   "validatorsRun": {
     "test": {
       "passed": true,
