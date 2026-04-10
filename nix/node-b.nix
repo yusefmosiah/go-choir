@@ -48,13 +48,13 @@
     enable = true;
     virtualHosts."draft.choir-ip.com" = {
       extraConfig = ''
-        handle_path /auth/* {
+        handle /auth/* {
           reverse_proxy 127.0.0.1:8081
         }
-        handle_path /api/* {
+        handle /api/* {
           reverse_proxy 127.0.0.1:8082
         }
-        handle_path /provider/* {
+        handle /provider/* {
           reverse_proxy 127.0.0.1:8084
         }
         handle {
@@ -75,11 +75,20 @@
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
     serviceConfig = {
+      ExecStartPre = "${pkgs.bash}/bin/bash -c 'test -f /var/lib/go-choir/auth-signing/ed25519-key || ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N \"\" -f /var/lib/go-choir/auth-signing/ed25519-key'";
       ExecStart = "${goChoirPackages.auth}/bin/auth";
       Restart = "on-failure";
       RestartSec = 3;
+      StateDirectory = "go-choir/auth";
       Environment = [
         "AUTH_PORT=8081"
+        "AUTH_DB_PATH=/var/lib/go-choir/auth/auth.db"
+        "AUTH_RP_ID=draft.choir-ip.com"
+        "AUTH_RP_ORIGINS=https://draft.choir-ip.com"
+        "AUTH_JWT_PRIVATE_KEY_PATH=/var/lib/go-choir/auth-signing/ed25519-key"
+        "AUTH_ACCESS_TOKEN_TTL=5m"
+        "AUTH_REFRESH_TOKEN_TTL=720h"
+        "AUTH_COOKIE_SECURE=true"
       ];
     };
   };
@@ -129,9 +138,16 @@
     };
   };
 
-  # Workspace directory (for CI git pull deploys)
+  # Workspace directory (for CI git pull deploys) and auth runtime paths.
+  # Auth persistence and signing material must live in writable runtime
+  # locations, not in the repo checkout or the Nix store.  Secrets are never
+  # committed to git or embedded in the Nix store — the signing key is
+  # generated on the host at first deploy.
   systemd.tmpfiles.rules = [
     "d /opt/go-choir 0755 root root -"
+    "d /var/lib/go-choir 0750 root root -"
+    "d /var/lib/go-choir/auth 0750 root root -"
+    "d /var/lib/go-choir/auth-signing 0750 root root -"
   ];
 
   # Nix settings
