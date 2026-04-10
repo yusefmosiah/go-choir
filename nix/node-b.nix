@@ -30,7 +30,7 @@
   # SSH authorized keys — copied EXACTLY from choiros-rs nix/hosts/ovh-node.nix
   users.users.root.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILN3IIn6TzBBExWiJTJ7aDlA/LlEMXvjFlSfkKkV02TZ wiz@choiros-ovh"
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfYv0qn1XjuKuddQqmDEk/nS3NUP/6+1pG9/DRq4NUS github-actions-deploy@choiros"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHR2N41wH+Uw3BFTbgThe4f4PGnODEcm6nVI6aPN2ugf github-actions-deploy@go-choir"
   ];
 
   # Firewall — ports 22, 80, 443 ONLY. Service ports (8081-8084) NOT open externally.
