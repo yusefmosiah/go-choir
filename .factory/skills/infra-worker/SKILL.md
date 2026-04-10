@@ -1,6 +1,6 @@
 ---
 name: infra-worker
-description: Builds NixOS configuration, Caddy config, GitHub Actions CI/CD, and Node B infrastructure
+description: Builds NixOS/Caddy/deploy/runtime configuration for Mission 2 Milestone 1
 ---
 
 # Infra Worker
@@ -9,7 +9,11 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Features that involve NixOS configuration (flake.nix, modules, systemd units), Caddy configuration, GitHub Actions CI/CD workflows, or Node B infrastructure setup.
+Use for features that change:
+- NixOS modules or systemd units on Node B
+- Caddy routing and public route preservation
+- deploy/runtime configuration for auth/proxy/sandbox
+- secret or persistent-path wiring needed for deployed validation
 
 ## Required Skills
 
@@ -17,74 +21,63 @@ None
 
 ## Work Procedure
 
-1. **Read the feature description** carefully. Understand preconditions, expected behavior, and verification steps.
+1. **Read the mission contract before editing infra**
+   - Read the feature, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, and `.factory/services.yaml`.
+   - Preserve the public route contract and Mission 2 boundaries.
 
-2. **Read existing infrastructure files** before writing anything:
-   - Check `flake.nix` if it exists
-   - Check `nix/` directory for existing modules
-   - Check `.github/workflows/` for existing CI configs
-   - Read `.factory/library/architecture.md` for system topology
-   - Read `.factory/library/environment.md` for env vars and credentials
+2. **Inspect the existing infra first**
+   - Read `flake.nix`, `nix/*.nix`, and any relevant workflow/runtime files before changing them.
+   - Keep ports on `8081-8085` unless the feature explicitly requires otherwise.
 
-3. **For NixOS features**:
-   - Reference the choiros-rs patterns at `/Users/wiz/choiros-rs/` for proven NixOS module patterns:
-     - `flake.nix` — flake structure, buildGoModule pattern (see the `cogent` package), nixosConfigurations
-     - `nix/ovh-node.nix` — base node config (Caddy, SSH, firewall, systemd services)
-     - `nix/ovh-node-b.nix` — Node B overrides (hostname, domain)
-     - `nix/ovh-node-b-disks.nix` — disk layout (btrfs RAID, UUIDs)
-     - `nix/ovh-node-hardware.nix` — hardware config
-   - Adapt these patterns for Go services (not Rust). Key differences:
-     - Use `pkgs.buildGoModule` instead of crane
-     - 4 separate systemd services instead of 1 monolithic hypervisor
-     - Caddy routes to 3 backends (auth, proxy, gateway) instead of 1
-   - Node B hardware facts: 12 cores, 32GB RAM, 2x512GB NVMe in RAID, root btrfs UUID `3b71f2a6-7820-47a1-ba22-c44c65e31ea1`
-   - SSH authorized keys: preserve BOTH the human operator key AND the GitHub Actions deploy key from the choiros-rs config
+3. **Apply Mission 2 Milestone 1 infra rules**
+   - Caddy must use `handle`, not `handle_path`, for the public prefixes this mission depends on.
+   - Do not expose internal service ports externally.
+   - Keep secrets out of git and out of the Nix store.
+   - If auth needs runtime keys or DB paths on Node B, wire them through runtime files or systemd credentials.
+   - For Milestone 1, it is acceptable for the placeholder sandbox to run as a host service on `8085`; do not introduce VM routing yet.
 
-4. **For Caddy configuration**:
-   - Use NixOS `services.caddy` module (not a raw Caddyfile)
-   - Virtual host: `draft.choir-ip.com`
-   - Routes: `/auth/*` → 127.0.0.1:8081, `/api/*` → 127.0.0.1:8082, `/provider/*` → 127.0.0.1:8084
-   - Root `/` serves Svelte static assets (file_server with root pointing to the frontend Nix package)
-   - vmctl (:8083) is NOT exposed through Caddy
-   - TLS is automatic via Let's Encrypt (Caddy default)
+4. **Verify the Node B runtime story**
+   - Make sure the deployed auth/proxy/sandbox services have the files, directories, and environment they need.
+   - Keep `draft.choir-ip.com` as the deployed acceptance origin.
+   - Do not broaden scope into provider/gateway or VM-isolation features.
 
-5. **For GitHub Actions**:
-   - Reference `/Users/wiz/choiros-rs/.github/workflows/ci.yml` for the deploy pattern
-   - The deploy pattern: SSH → git pull → nix build (pre-check) → nixos-rebuild switch → health check
-   - Workspace on Node B: `/opt/go-choir`
-   - Secrets: `OVH_DEPLOY_SSH_KEY`, `OVH_NODE_B_HOST`
-   - The workflow must include: Go vet, Go test, Go build (linux/amd64), frontend build, deploy, smoke test
+5. **Run infra validation**
+   - Prefer syntax/evaluation checks that are safe on this machine.
+   - Verify that service ports, routes, and runtime files line up with the mission contract.
+   - If you cannot fully run a Nix check locally, record the strongest safe verification you performed.
 
-6. **For Node B setup**:
-   - Create workspace directory, clone the repo
-   - This can be done via SSH from the CI workflow or as a one-time setup step
-   - Ensure the deploy user can git pull (HTTPS clone, no auth needed for public repo)
-
-7. **Verify your work**:
-   - For Nix: Run `nix flake check` or `nix flake show` locally if possible. If the flake is linux-only, verify syntax and structure.
-   - For CI: Verify YAML syntax. Cross-reference with the choiros-rs workflow for correctness.
-   - For modules: Ensure all systemd units have `Restart=on-failure`, correct ports, and proper `ExecStart` paths.
-   - Record all verification in `commandsRun`.
-
-8. **Commit** with a descriptive message.
+6. **Return a precise handoff**
+   - Name the exact files changed, the public routes affected, the runtime secrets/paths introduced, and how you verified they stay outside the repo/Nix store.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Created flake.nix with buildGoModule for all 5 Go binaries and a frontend package. Added NixOS configuration for Node B with hardware config, disk mounts, SSH, firewall (ports 22/80/443), Caddy routing for draft.choir-ip.com, and 4 systemd services. Verified flake evaluates without errors.",
-  "whatWasImplemented": "flake.nix with inputs (nixpkgs unstable), 6 packages (auth, proxy, vmctl, gateway, sandbox, frontend), and nixosConfigurations.go-choir-b. NixOS modules: nix/hardware.nix (OVH bare metal), nix/disks.nix (btrfs RAID), nix/node-b.nix (full system: SSH with 2 authorized keys, firewall ports 22/80/443, Caddy with TLS for draft.choir-ip.com routing /auth→8081 /api→8082 /provider→8084 /→frontend, 4 systemd services with Restart=on-failure and EnvironmentFile for port config).",
-  "whatWasLeftUndone": "",
+  "salientSummary": "Updated Node B routing for Mission 2 Milestone 1 by switching Caddy from `handle_path` to `handle`, wiring the placeholder sandbox as a host service on 8085, and adding runtime paths for auth state outside the Nix store. Verified route definitions and service wiring still align with the deploy contract.",
+  "whatWasImplemented": "Updated `nix/node-b.nix` so public `/auth/*`, `/api/*`, and `/provider/*` routes keep their prefixes, added the placeholder sandbox systemd service on port 8085 for the Milestone 1 proxy target, and introduced runtime file/directory wiring for auth persistence and signing material under writable Node B paths instead of embedding secrets in the Nix store.",
+  "whatWasLeftUndone": "Live deployed passkey/browser validation remains for milestone validation after implementation features complete.",
   "verification": {
     "commandsRun": [
-      {"command": "nix flake show", "exitCode": 0, "observation": "All packages and nixosConfigurations listed correctly"},
-      {"command": "yamllint .github/workflows/ci.yml", "exitCode": 0, "observation": "Valid YAML"},
-      {"command": "grep -c Restart=on-failure nix/node-b.nix", "exitCode": 0, "observation": "4 occurrences, one per service"}
+      {
+        "command": "nix flake show",
+        "exitCode": 0,
+        "observation": "The flake still evaluates and exposes the expected packages/configuration."
+      },
+      {
+        "command": "go build ./cmd/...",
+        "exitCode": 0,
+        "observation": "Service binaries referenced by the NixOS modules still compile."
+      }
     ],
     "interactiveChecks": [
-      {"action": "Reviewed flake.nix buildGoModule config", "observed": "Uses subPackages for each cmd/, vendorHash = null (will need updating after first build)"},
-      {"action": "Reviewed Caddy NixOS config", "observed": "3 reverse_proxy routes + file_server for frontend, vmctl NOT exposed"},
-      {"action": "Reviewed firewall config", "observed": "allowedTCPPorts = [22 80 443], no 8081-8084"}
+      {
+        "action": "Reviewed Node B Caddy route definitions after the change",
+        "observed": "Public prefixes are preserved with `handle`; no service ports are exposed directly."
+      },
+      {
+        "action": "Reviewed runtime secret/persistence paths",
+        "observed": "Auth DB and signing material are expected in writable runtime locations, not in git or the Nix store."
+      }
     ]
   },
   "tests": {
@@ -96,8 +89,7 @@ None
 
 ## When to Return to Orchestrator
 
-- SSH access to Node B fails or credentials are incorrect
-- NixOS build fails with dependency issues requiring user input
-- Go binary packages fail to build with Nix (vendorHash mismatch, missing dependencies)
-- GitHub secrets need to be configured (cannot be done programmatically without user authorization)
-- Hardware configuration details are unclear (disk layout, network interfaces)
+- The feature requires a mission-boundary change (ports, hosts, or exposing internal services publicly)
+- Runtime secrets or deploy credentials are missing and cannot be created safely from within the repo
+- The only way forward would place secrets in git or the Nix store
+- Node B runtime behavior cannot be verified without user intervention or unavailable external access

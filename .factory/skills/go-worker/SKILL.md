@@ -1,6 +1,6 @@
 ---
 name: go-worker
-description: Builds Go services, internal packages, tests, and frontend scaffold
+description: Builds Go auth/proxy/sandbox services, internal packages, and tests for Mission 2 Milestone 1
 ---
 
 # Go Worker
@@ -9,7 +9,11 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Features that involve writing Go code (services, handlers, internal packages, tests) or scaffolding the Svelte frontend project.
+Use for Go features in Mission 2 Milestone 1:
+- auth handlers, WebAuthn flows, session/refresh logic, SQLite-backed storage
+- proxy auth gating, HTTP/WS forwarding, user-context injection
+- placeholder sandbox HTTP/WS endpoints used by the shell
+- shared internal packages, config loading, and Go tests
 
 ## Required Skills
 
@@ -17,68 +21,101 @@ None
 
 ## Work Procedure
 
-1. **Read the feature description** carefully. Understand preconditions, expected behavior, and verification steps.
+1. **Read the feature and contract first**
+   - Read the feature description, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, and `.factory/services.yaml`.
+   - Identify exactly which contract assertions this feature fulfills.
 
-2. **Read existing code** before writing anything. Check `internal/` for shared packages, `cmd/` for service entry points, `go.mod` for dependencies. Match existing patterns.
+2. **Read the existing Go surface before editing**
+   - Inspect the relevant `cmd/*`, `internal/*`, and `go.mod` files.
+   - Reuse the shared `internal/server` patterns where sensible.
+   - Keep route names aligned with the mission contract: `/auth/*`, `GET /api/shell/bootstrap`, `GET /api/ws`.
 
-3. **Write tests first** (TDD):
-   - Create `_test.go` files alongside the code being tested.
-   - Write failing tests that cover the expected behavior described in the feature.
-   - Run `go test ./...` to confirm they fail (red).
+3. **Write failing tests first**
+   - Add or extend `_test.go` coverage before implementation.
+   - Cover happy path plus the contract-critical failure cases for the feature.
+   - Confirm the new tests fail first before writing production code.
 
-4. **Implement the code**:
-   - Write the minimum code to make tests pass (green).
-   - Use stdlib (`net/http`, `encoding/json`, `os/signal`) — no external dependencies for Mission 1.
-   - For shared code (e.g., server setup), put it in `internal/server/`.
-   - For service-specific code, put it in the service's `cmd/` directory or a dedicated `internal/` subpackage.
+4. **Implement the smallest correct slice**
+   - Write the minimum production code to make the tests pass.
+   - Match Mission 2 decisions:
+     - WebAuthn bound to `draft.choir-ip.com` for deployed acceptance
+     - no local auth bypass
+     - cookie-backed auth state
+     - short-lived access + rotating refresh state
+     - proxy trusts its own verified auth context, not client-supplied identity headers
+   - Use the current planned stack when needed: stdlib `net/http`, `github.com/go-webauthn/webauthn`, `github.com/golang-jwt/jwt/v5`, and `modernc.org/sqlite`.
 
-5. **For Svelte scaffold features**:
-   - Use `pnpm create` or manual scaffolding in a `frontend/` directory.
-   - Ensure `pnpm install && pnpm build` produces static output with `index.html`.
-   - The placeholder page must contain "go-choir" text.
+5. **Verify the contract surface directly**
+   - For auth routes, use `curl` to check JSON shape, cookies, and status codes.
+   - For proxy/bootstrap routes, verify the concrete public paths in the contract.
+   - For WebSocket features, prove the live channel opens/closes as required and record the observed behavior.
+   - Do not leave long-running processes behind; if you start a service, you must stop it.
 
-6. **Run all checks**:
-   - `go vet ./...` — must pass with no warnings
-   - `go test ./...` — must pass with all tests green
-   - `go build ./cmd/...` — must compile all 5 binaries
-   - For frontend: `cd frontend && pnpm build` — must produce output
+6. **Run validators before handoff**
+   - `go test ./... -count=1 -p 4`
+   - `go vet ./...`
+   - `go build ./cmd/...`
+   - If the feature changes public route contracts consumed by the frontend, also run `cd frontend && pnpm build`
 
-7. **Manual verification**:
-   - Start each service binary, curl its `/health` endpoint, confirm the JSON response.
-   - Test graceful shutdown: start service, send SIGTERM, verify clean exit.
-   - Test port configuration: start with custom `*_PORT` env var, verify it listens on that port.
-   - Record each manual check in `interactiveChecks`.
-
-8. **Commit** with a descriptive message.
+7. **Return a concrete handoff**
+   - Record the exact failing tests you added, the focused verification commands you ran, and the interactive or curl checks that prove the contract behavior.
+   - If anything remained partial, say exactly what and why.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Implemented shared internal/server package with health handler and graceful shutdown. All 5 service binaries (auth, proxy, vmctl, gateway, sandbox) now start HTTP servers on configurable ports and respond to GET /health with JSON. Wrote 12 tests covering health response, port config, and shutdown. All pass.",
-  "whatWasImplemented": "internal/server/ package with NewServer(), health handler, graceful shutdown. Updated all 5 cmd/*/main.go to use it. Each service responds to GET /health with {\"status\":\"ok\",\"service\":\"<name>\"}. Port configurable via AUTH_PORT, PROXY_PORT, etc. with defaults 8081-8085.",
-  "whatWasLeftUndone": "",
+  "salientSummary": "Implemented auth register/login begin routes plus signed-out and signed-in `/auth/session` behavior. Added SQLite-backed challenge/session storage scaffolding and wired WebAuthn option generation for the configured RP. Verified malformed begin payloads return JSON 4xx and valid begin payloads return challenge data bound to the expected RP.",
+  "whatWasImplemented": "Added `internal/auth` configuration and storage primitives, auth HTTP handlers for `/auth/register/begin`, `/auth/login/begin`, and `/auth/session`, and tests covering malformed payload rejection, RP-bound WebAuthn option generation, and signed-out vs signed-in session inspection behavior. Kept route names aligned with the public `/auth/*` contract and matched the cookie-backed session model expected by the frontend.",
+  "whatWasLeftUndone": "Register/login finish handlers and logout/refresh rotation are not part of this feature and remain for later features.",
   "verification": {
     "commandsRun": [
-      {"command": "go vet ./...", "exitCode": 0, "observation": "No warnings"},
-      {"command": "go test ./...", "exitCode": 0, "observation": "12 tests pass across 2 packages"},
-      {"command": "go build ./cmd/...", "exitCode": 0, "observation": "All 5 binaries compile"}
+      {
+        "command": "go test ./... -count=1 -p 4",
+        "exitCode": 0,
+        "observation": "New auth handler and store tests pass; begin-route negative cases fail closed."
+      },
+      {
+        "command": "go vet ./...",
+        "exitCode": 0,
+        "observation": "No vet findings."
+      },
+      {
+        "command": "go build ./cmd/...",
+        "exitCode": 0,
+        "observation": "All service binaries still compile."
+      }
     ],
     "interactiveChecks": [
-      {"action": "Started auth binary, curled localhost:8081/health", "observed": "200 OK, {\"status\":\"ok\",\"service\":\"auth\"}"},
-      {"action": "Sent SIGTERM to auth process", "observed": "Process exited with code 0, no error output"},
-      {"action": "Started auth with AUTH_PORT=9999, curled localhost:9999/health", "observed": "200 OK on custom port"}
+      {
+        "action": "Started local auth service with `.factory/services.yaml` auth command and POSTed malformed JSON to `/auth/register/begin` and `/auth/login/begin`",
+        "observed": "Both endpoints returned JSON 4xx responses instead of HTML or 5xx."
+      },
+      {
+        "action": "POSTed valid begin payloads and fetched `/auth/session` with and without cookies",
+        "observed": "Begin routes returned RP-bound challenges; `/auth/session` cleanly distinguished signed-out and signed-in state."
+      }
     ]
   },
   "tests": {
     "added": [
-      {"file": "internal/server/server_test.go", "cases": [
-        {"name": "TestHealthHandler", "verifies": "Returns 200 with correct JSON"},
-        {"name": "TestHealthHandlerServiceName", "verifies": "JSON includes the configured service name"},
-        {"name": "TestServerStartAndShutdown", "verifies": "Server starts, accepts requests, shuts down cleanly"},
-        {"name": "TestPortFromEnv", "verifies": "Server reads port from environment variable"},
-        {"name": "TestPortDefault", "verifies": "Server uses default port when env var is unset"}
-      ]}
+      {
+        "file": "internal/auth/handlers_test.go",
+        "cases": [
+          {
+            "name": "TestRegisterBeginRejectsMalformedInput",
+            "verifies": "Invalid begin payloads return JSON 4xx instead of 5xx."
+          },
+          {
+            "name": "TestRegisterBeginReturnsRPBoundChallenge",
+            "verifies": "Register begin response includes a challenge bound to the configured RP."
+          },
+          {
+            "name": "TestSessionReportsSignedOutWithoutCookies",
+            "verifies": "Session inspection returns a signed-out result when auth state is missing."
+          }
+        ]
+      }
     ]
   },
   "discoveredIssues": []
@@ -87,7 +124,7 @@ None
 
 ## When to Return to Orchestrator
 
-- Feature requires external Go dependencies not yet in go.mod
-- Feature requires NixOS configuration changes (use infra-worker)
-- Existing code patterns are unclear or contradictory
-- Tests reveal a bug in shared infrastructure
+- The feature needs Nix/Caddy/systemd or Node B secret-management changes
+- The feature depends on a public route or acceptance invariant that conflicts with `validation-contract.md`
+- The feature would require a local auth bypass or direct-browser access to service ports
+- A contract-critical verification path cannot be exercised with the current services or test setup
