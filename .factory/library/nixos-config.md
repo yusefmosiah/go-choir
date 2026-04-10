@@ -16,7 +16,7 @@ Each Go service is built with `buildGoModule` using `subPackages` to select the 
 Currently set to `null` because go.mod has no external dependencies. When dependencies are added, the first build will fail with a hash mismatch error — the correct hash will be shown in the error message and should be pasted into `vendorHash`.
 
 ### Frontend Package
-Uses `stdenv.mkDerivation` with `pnpm install --frozen-lockfile` and `pnpm build`. Output is the `dist/` directory contents copied to `$out`.
+Uses `pkgs.runCommand` to generate a placeholder `index.html` with "go-choir" text. This avoids network access in the Nix sandbox (pnpm install would fail). The real Svelte build pipeline with pnpm will be added in Mission 2 when the frontend has real content.
 
 ### nixosConfigurations.go-choir-b
 The NixOS system config is built from 3 modules passed as `specialArgs.goChoirPackages` so systemd services and Caddy can reference the built packages.

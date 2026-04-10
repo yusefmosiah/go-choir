@@ -19,45 +19,39 @@
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
+            type == "directory" ||
             (pkgs.lib.hasSuffix ".go" path) ||
-            (pkgs.lib.hasSuffix "go.mod" path) ||
-            (pkgs.lib.hasSuffix "go.sum" path) ||
-            (baseNameOf path) == "go.mod" ||
-            (baseNameOf path) == "go.sum";
+            (baseNameOf path == "go.mod") ||
+            (baseNameOf path == "go.sum");
         };
         vendorHash = null; # No external Go dependencies yet
         doCheck = false; # Tests run separately in CI
       };
 
-      # Frontend package — build Svelte app with pnpm
-      frontendPkg = pkgs.stdenv.mkDerivation {
+      # Frontend package — placeholder index.html for Caddy to serve.
+      # The real Svelte build pipeline with pnpm will be added in Mission 2
+      # when the frontend has real content. For now, Nix just needs to produce
+      # an index.html with "go-choir" for Caddy's file_server.
+      frontendPkg = pkgs.runCommand "go-choir-frontend" {
         pname = "go-choir-frontend";
         version = goModuleVersion;
-        src = pkgs.lib.cleanSource ./frontend;
-
-        nativeBuildInputs = with pkgs; [
-          nodejs
-          pnpm
-        ];
-
-        # pnpm fetch — uses pnpm-lock.yaml for deterministic downloads
-        postPatch = ''
-          pnpm install --frozen-lockfile
-        '';
-
-        buildPhase = ''
-          runHook preBuild
-          pnpm build
-          runHook postBuild
-        '';
-
-        installPhase = ''
-          runHook preInstall
-          mkdir -p $out
-          cp -r dist/* $out/
-          runHook postInstall
-        '';
-      };
+      } ''
+        mkdir -p $out
+        cat > $out/index.html <<'EOF'
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <title>go-choir</title>
+          </head>
+          <body>
+            <h1>go-choir</h1>
+            <p>Distributed multiagent operating system</p>
+          </body>
+        </html>
+        EOF
+      '';
 
       # Build a single Go service binary
       mkGoService = { pname, subPackage }:
