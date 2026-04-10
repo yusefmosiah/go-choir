@@ -47,7 +47,9 @@ func main() {
 
 	// Register /auth/* routes.
 	s.HandleFunc("/auth/register/begin", handler.HandleRegisterBegin)
+	s.HandleFunc("/auth/register/finish", handler.HandleRegisterFinish)
 	s.HandleFunc("/auth/login/begin", handler.HandleLoginBegin)
+	s.HandleFunc("/auth/login/finish", handler.HandleLoginFinish)
 	s.HandleFunc("/auth/session", handler.HandleSession)
 
 	s.Start()

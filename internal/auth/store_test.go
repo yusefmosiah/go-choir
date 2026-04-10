@@ -501,6 +501,85 @@ func TestChallengeStateLoginWithAllowedCredentials(t *testing.T) {
 	}
 }
 
+func TestChallengeStateWithWebAuthnSessionData(t *testing.T) {
+	store := TestStore(t)
+
+	if _, err := store.CreateUser("user-1", "alice"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	sessionData := `{"challenge":"test-challenge","rpId":"localhost","user_id":"dXNlci0x"}`
+	cs := &ChallengeState{
+		ID:                 "challenge-wa",
+		UserID:             "user-1",
+		Challenge:          "test-challenge",
+		Type:               "registration",
+		WebAuthnSessionData: sessionData,
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("SaveChallengeState: %v", err)
+	}
+
+	got, err := store.GetChallengeStateByID("challenge-wa")
+	if err != nil {
+		t.Fatalf("GetChallengeStateByID: %v", err)
+	}
+	if got.WebAuthnSessionData != sessionData {
+		t.Errorf("WebAuthnSessionData: got %q, want %q", got.WebAuthnSessionData, sessionData)
+	}
+}
+
+func TestGetChallengeStatesByUserID(t *testing.T) {
+	store := TestStore(t)
+
+	if _, err := store.CreateUser("user-1", "alice"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	// Create two challenges.
+	cs1 := &ChallengeState{
+		ID:        "challenge-1",
+		UserID:    "user-1",
+		Challenge: "challenge-1",
+		Type:      "registration",
+		CreatedAt: time.Now().UTC().Add(-1 * time.Minute),
+		ExpiresAt: time.Now().UTC().Add(4 * time.Minute),
+	}
+	if err := store.SaveChallengeState(cs1); err != nil {
+		t.Fatalf("SaveChallengeState 1: %v", err)
+	}
+
+	cs2 := &ChallengeState{
+		ID:        "challenge-2",
+		UserID:    "user-1",
+		Challenge: "challenge-2",
+		Type:      "login",
+		CreatedAt: time.Now().UTC(),
+		ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := store.SaveChallengeState(cs2); err != nil {
+		t.Fatalf("SaveChallengeState 2: %v", err)
+	}
+
+	results, err := store.GetChallengeStatesByUserID("user-1")
+	if err != nil {
+		t.Fatalf("GetChallengeStatesByUserID: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 challenges, got %d", len(results))
+	}
+
+	// Should be ordered by created_at descending (most recent first).
+	if results[0].ID != "challenge-2" {
+		t.Errorf("first result: got %q, want %q", results[0].ID, "challenge-2")
+	}
+	if results[1].ID != "challenge-1" {
+		t.Errorf("second result: got %q, want %q", results[1].ID, "challenge-1")
+	}
+}
+
 // --- RefreshSession CRUD ---
 
 func TestCreateAndGetRefreshSession(t *testing.T) {

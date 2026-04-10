@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/pem"
 	"encoding/json"
 	"fmt"
@@ -969,4 +971,1328 @@ func TestSSHPackageImportUsed(t *testing.T) {
 	// If this compiles, the import path is correct.
 	_ = ssh.MarshalPrivateKey
 	_ = fmt.Sprintf
+}
+
+// ======================================================================
+// Finish route tests
+// ======================================================================
+
+// --- Register Finish Tests ---
+
+func TestRegisterFinishRejectsNonPost(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/auth/register/finish", nil)
+		rec := httptest.NewRecorder()
+		h.HandleRegisterFinish(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("method %s: got status %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+		}
+
+		var resp errorResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode error response: %v", err)
+		}
+		if resp.Error == "" {
+			t.Errorf("method %s: expected non-empty error message", method)
+		}
+	}
+}
+
+func TestRegisterFinishRejectsEmptyBody(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish", nil)
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+}
+
+func TestRegisterFinishRejectsInvalidWebAuthnResponse(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Send a body that is valid JSON but not a valid WebAuthn response.
+	body := `{"id":"abc","response":{"clientDataJSON":"","attestationObject":""}}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	// Should return 4xx, not 5xx.
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Errorf("status: got %d, want 4xx; body: %s", rec.Code, rec.Body.String())
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+}
+
+func TestRegisterFinishRejectsChallengeNotFound(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a valid-looking WebAuthn response body with a challenge that
+	// doesn't exist in the store. This simulates a replay attack where the
+	// challenge has already been consumed.
+	clientDataJSON := base64RawURLEncode([]byte(`{"type":"webauthn.create","challenge":"nonexistent-challenge","origin":"http://localhost:4173"}`))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","attestationObject":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake-attestation")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("expected non-empty error message for missing challenge")
+	}
+
+	// Most critically: no auth cookies should have been set.
+	cookies := rec.Result().Cookies()
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("auth cookie %q should not be set on failed finish", c.Name)
+		}
+	}
+}
+
+func TestRegisterFinishRejectsExpiredChallenge(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user and store an expired challenge.
+	user, err := h.store.CreateUser("expired-ch-user", "expiredch")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "expired-test-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "expired-test-challenge",
+		UserID:             user.ID,
+		Challenge:          "expired-test-challenge",
+		Type:               "registration",
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC().Add(-10 * time.Minute),
+		ExpiresAt:          time.Now().UTC().Add(-5 * time.Minute), // already expired
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	// Build a request with the expired challenge.
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.create","challenge":"%s","origin":"http://localhost:4173"}`, "expired-test-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","attestationObject":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("expected non-empty error message for expired challenge")
+	}
+
+	// No auth cookies should be set.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("auth cookie %q should not be set on expired challenge", c.Name)
+		}
+	}
+
+	// The expired challenge should have been cleaned up from the store.
+	_, err = h.store.GetChallengeStateByID("expired-test-challenge")
+	if err == nil {
+		t.Error("expired challenge should have been deleted")
+	}
+}
+
+func TestRegisterFinishRejectsChallengeTypeMismatch(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user and store a LOGIN-type challenge, then try to use it for registration.
+	user, err := h.store.CreateUser("type-mismatch-user", "typemismatch")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "type-mismatch-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "type-mismatch-challenge",
+		UserID:             user.ID,
+		Challenge:          "type-mismatch-challenge",
+		Type:               "login", // wrong type for register finish
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.create","challenge":"%s","origin":"http://localhost:4173"}`, "type-mismatch-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","attestationObject":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("expected error for challenge type mismatch")
+	}
+}
+
+func TestRegisterFinishReplayDoesNotMintSession(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user and store a valid challenge.
+	user, err := h.store.CreateUser("replay-user", "replay")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "replay-test-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "replay-test-challenge",
+		UserID:             user.ID,
+		Challenge:          "replay-test-challenge",
+		Type:               "registration",
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.create","challenge":"%s","origin":"http://localhost:4173"}`, "replay-test-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","attestationObject":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake")))
+
+	// First attempt: the challenge exists but the WebAuthn verification will fail
+	// (fake response). The challenge will be consumed/deleted.
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec, req)
+
+	// The finish should fail (WebAuthn verification fails on fake data)
+	// and no cookies should be set.
+	if rec.Code == http.StatusOK {
+		t.Error("finish should not succeed with fake WebAuthn data")
+	}
+
+	// Second attempt: replay the exact same body. Now the challenge is gone.
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/register/finish",
+		bytes.NewBufferString(body))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	h.HandleRegisterFinish(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("replay status: got %d, want %d; body: %s", rec2.Code, http.StatusBadRequest, rec2.Body.String())
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("replay should produce an error message")
+	}
+
+	// No auth cookies should be set on either attempt.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("first attempt: auth cookie %q should not be set", c.Name)
+		}
+	}
+	for _, c := range rec2.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("replay attempt: auth cookie %q should not be set", c.Name)
+		}
+	}
+
+	// Follow-up: /auth/session should report signed-out.
+	sessionReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	// Carry forward any cookies from the replay attempt.
+	for _, c := range rec2.Result().Cookies() {
+		sessionReq.AddCookie(c)
+	}
+	sessionRec := httptest.NewRecorder()
+	h.HandleSession(sessionRec, sessionReq)
+
+	var sessionResp sessionResponse
+	if err := json.NewDecoder(sessionRec.Body).Decode(&sessionResp); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if sessionResp.Authenticated {
+		t.Error("session should not be authenticated after failed/replayed finish")
+	}
+}
+
+// --- Login Finish Tests ---
+
+func TestLoginFinishRejectsNonPost(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/auth/login/finish", nil)
+		rec := httptest.NewRecorder()
+		h.HandleLoginFinish(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("method %s: got status %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func TestLoginFinishRejectsEmptyBody(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish", nil)
+	rec := httptest.NewRecorder()
+	h.HandleLoginFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestLoginFinishRejectsInvalidWebAuthnResponse(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	body := `{"id":"abc","response":{"clientDataJSON":"","authenticatorData":"","signature":""}}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginFinish(rec, req)
+
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Errorf("status: got %d, want 4xx; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoginFinishRejectsChallengeNotFound(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	clientDataJSON := base64RawURLEncode([]byte(`{"type":"webauthn.get","challenge":"nonexistent-login-challenge","origin":"http://localhost:4173"}`))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","authenticatorData":"%s","signature":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake-ad")), base64RawURLEncode([]byte("fake-sig")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	// No auth cookies.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("auth cookie %q should not be set on failed login finish", c.Name)
+		}
+	}
+}
+
+func TestLoginFinishRejectsExpiredChallenge(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user with a credential.
+	user, err := h.store.CreateUser("login-expired-user", "loginexpired")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "login-expired-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "login-expired-challenge",
+		UserID:             user.ID,
+		Challenge:          "login-expired-challenge",
+		Type:               "login",
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC().Add(-10 * time.Minute),
+		ExpiresAt:          time.Now().UTC().Add(-5 * time.Minute),
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"http://localhost:4173"}`, "login-expired-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","authenticatorData":"%s","signature":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake-ad")), base64RawURLEncode([]byte("fake-sig")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	// No auth cookies.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("auth cookie %q should not be set on expired challenge", c.Name)
+		}
+	}
+}
+
+func TestLoginFinishRejectsChallengeTypeMismatch(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("login-type-mismatch-user", "logintm")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "login-type-mismatch-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "login-type-mismatch-challenge",
+		UserID:             user.ID,
+		Challenge:          "login-type-mismatch-challenge",
+		Type:               "registration", // wrong type for login finish
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"http://localhost:4173"}`, "login-type-mismatch-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","authenticatorData":"%s","signature":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake-ad")), base64RawURLEncode([]byte("fake-sig")))
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginFinish(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestLoginFinishReplayDoesNotMintSession(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("login-replay-user", "loginreplay")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	cred := &Credential{
+		ID:              "cred-login-replay",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	sessionData := webauthn.SessionData{
+		Challenge:      "login-replay-challenge",
+		RelyingPartyID: h.config.RPID,
+		UserID:         []byte(user.ID),
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                 "login-replay-challenge",
+		UserID:             user.ID,
+		Challenge:          "login-replay-challenge",
+		Type:               "login",
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := h.store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
+
+	clientDataJSON := base64RawURLEncode([]byte(fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"http://localhost:4173"}`, "login-replay-challenge")))
+	body := fmt.Sprintf(`{"id":"cred-id","rawId":"cred-id","type":"public-key","response":{"clientDataJSON":"%s","authenticatorData":"%s","signature":"%s"}}`, clientDataJSON, base64RawURLEncode([]byte("fake-ad")), base64RawURLEncode([]byte("fake-sig")))
+
+	// First attempt: will fail (fake response) and consume the challenge.
+	req1 := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	h.HandleLoginFinish(rec1, req1)
+
+	// Second attempt: replay — challenge should be gone.
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewBufferString(body))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	h.HandleLoginFinish(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("replay status: got %d, want %d", rec2.Code, http.StatusBadRequest)
+	}
+
+	// No auth cookies on either attempt.
+	for _, c := range rec1.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("first attempt: auth cookie %q should not be set", c.Name)
+		}
+	}
+	for _, c := range rec2.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			t.Errorf("replay attempt: auth cookie %q should not be set", c.Name)
+		}
+	}
+
+	// Follow-up /auth/session should show signed-out.
+	sessionReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	for _, c := range rec2.Result().Cookies() {
+		sessionReq.AddCookie(c)
+	}
+	sessionRec := httptest.NewRecorder()
+	h.HandleSession(sessionRec, sessionReq)
+
+	var sessionResp sessionResponse
+	if err := json.NewDecoder(sessionRec.Body).Decode(&sessionResp); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if sessionResp.Authenticated {
+		t.Error("session should not be authenticated after failed/replayed login finish")
+	}
+}
+
+// --- Session Issuance Tests ---
+
+func TestIssueSessionSetsCookiesAndMintsJWT(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("session-user", "sessiontest")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Use the handler's issueSession method via the finish flow.
+	// We'll simulate this by directly calling the internal helpers
+	// through a recorder.
+	rec := httptest.NewRecorder()
+	userInfo, err := h.issueSession(rec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	if userInfo.ID != user.ID {
+		t.Errorf("user ID: got %q, want %q", userInfo.ID, user.ID)
+	}
+	if userInfo.Username != "sessiontest" {
+		t.Errorf("username: got %q, want %q", userInfo.Username, "sessiontest")
+	}
+
+	// Check that auth cookies were set.
+	cookies := rec.Result().Cookies()
+	var accessCookie, refreshCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName {
+			accessCookie = c
+		}
+		if c.Name == RefreshTokenCookieName {
+			refreshCookie = c
+		}
+	}
+
+	if accessCookie == nil {
+		t.Fatal("access token cookie not set")
+	}
+	if refreshCookie == nil {
+		t.Fatal("refresh token cookie not set")
+	}
+
+	// Validate cookie attributes: HttpOnly, SameSite, Secure, Path.
+	if !accessCookie.HttpOnly {
+		t.Error("access cookie should be HttpOnly")
+	}
+	if accessCookie.SameSite != http.SameSiteLaxMode {
+		t.Error("access cookie should use SameSite=Lax")
+	}
+	if accessCookie.Secure {
+		// In test config, CookieSecure is false.
+		t.Error("access cookie should not be Secure in test config (CookieSecure=false)")
+	}
+	if accessCookie.Path != "/" {
+		t.Errorf("access cookie Path: got %q, want %q", accessCookie.Path, "/")
+	}
+
+	if !refreshCookie.HttpOnly {
+		t.Error("refresh cookie should be HttpOnly")
+	}
+	if refreshCookie.SameSite != http.SameSiteLaxMode {
+		t.Error("refresh cookie should use SameSite=Lax")
+	}
+	if refreshCookie.Path != "/auth" {
+		t.Errorf("refresh cookie Path: got %q, want %q", refreshCookie.Path, "/auth")
+	}
+
+	// Validate the access JWT.
+	token, err := jwt.Parse(accessCookie.Value, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodEdDSA {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return priv.Public(), nil
+	})
+	if err != nil {
+		t.Fatalf("parse access JWT: %v", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		t.Fatal("invalid JWT claims type")
+	}
+	if claims["sub"] != user.ID {
+		t.Errorf("JWT sub: got %v, want %q", claims["sub"], user.ID)
+	}
+	if scope, _ := claims["scope"].(string); scope != "access" {
+		t.Errorf("JWT scope: got %q, want %q", scope, "access")
+	}
+
+	// Validate the refresh token is stored in the database.
+	hash := sha256Sum([]byte(refreshCookie.Value))
+	_, err = h.store.GetRefreshSessionByTokenHash(hash)
+	if err != nil {
+		t.Fatalf("refresh session not found by hash: %v", err)
+	}
+}
+
+func TestAuthenticatedSessionWithValidCookies(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("auth-cookie-user", "cookieauth")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue a session and capture the cookies.
+	rec := httptest.NewRecorder()
+	_, err = h.issueSession(rec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	// Use the set cookies in a /auth/session request.
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	sessionRec := httptest.NewRecorder()
+	h.HandleSession(sessionRec, req)
+
+	if sessionRec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", sessionRec.Code, http.StatusOK)
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(sessionRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Authenticated {
+		t.Error("should be authenticated with valid cookies")
+	}
+	if resp.User == nil {
+		t.Fatal("user info should be present")
+	}
+	if resp.User.Username != "cookieauth" {
+		t.Errorf("username: got %q, want %q", resp.User.Username, "cookieauth")
+	}
+	if resp.User.ID != user.ID {
+		t.Errorf("user ID: got %q, want %q", resp.User.ID, user.ID)
+	}
+
+	// Verify no secrets are leaked.
+	body := sessionRec.Body.String()
+	for _, secret := range []string{
+		"choir_refresh",
+		"public_key",
+		"credential",
+	} {
+		if bytes.Contains([]byte(body), []byte(secret)) {
+			t.Errorf("session response leaks secret %q", secret)
+		}
+	}
+
+	// Explicitly verify the JWT value is NOT in the response body.
+	// The access cookie value should only be in the cookie header, not the body.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName {
+			if bytes.Contains([]byte(body), []byte(c.Value)) {
+				t.Error("session response body should not contain the raw access JWT value")
+			}
+		}
+	}
+
+	_ = priv // used in closure above
+}
+
+func TestAuthenticatedSessionDoesNotLeakCredentialMaterial(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	// Create a user with a credential.
+	user, err := h.store.CreateUser("no-leak-user", "noleak")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "sensitive-cred-id",
+		UserID:          user.ID,
+		PublicKey:       []byte("sensitive-public-key-data-1234"),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Create a valid JWT for this user.
+	claims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(5 * time.Minute).Unix(),
+		"iat":   time.Now().Unix(),
+		"scope": "access",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenStr, err := token.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  AccessTokenCookieName,
+		Value: tokenStr,
+	})
+	rec := httptest.NewRecorder()
+	h.HandleSession(rec, req)
+
+	body := rec.Body.String()
+
+	// The response must not contain any raw credential material.
+	for _, secret := range []string{
+		"sensitive-public-key-data-1234",
+		"sensitive-cred-id",
+		"choir_refresh",
+		"token_hash",
+		"challenge",
+	} {
+		if bytes.Contains([]byte(body), []byte(secret)) {
+			t.Errorf("session response leaks secret %q", secret)
+		}
+	}
+
+	// The response should contain user identity fields.
+	if !bytes.Contains([]byte(body), []byte("noleak")) {
+		t.Error("session response should contain username")
+	}
+	if !bytes.Contains([]byte(body), []byte(user.ID)) {
+		t.Error("session response should contain user ID")
+	}
+}
+
+// --- Refresh Rotation Tests ---
+
+func TestRefreshRotationRenewsAccessJWT(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("refresh-user", "refresh")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue a session.
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	// Extract the refresh cookie.
+	var refreshCookie *http.Cookie
+	for _, c := range issueRec.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			refreshCookie = c
+		}
+	}
+	if refreshCookie == nil {
+		t.Fatal("refresh cookie not set")
+	}
+
+	// Create an expired access JWT (simulating access token expiry).
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(), // expired
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, err := expiredToken.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+
+	// Request /auth/session with expired access + valid refresh.
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	req.AddCookie(refreshCookie)
+	rec := httptest.NewRecorder()
+	h.HandleSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Authenticated {
+		t.Error("should be authenticated after refresh rotation")
+	}
+	if resp.User == nil || resp.User.Username != "refresh" {
+		t.Error("user info should be present after refresh rotation")
+	}
+
+	// New access cookie should be set.
+	var newAccessCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName {
+			newAccessCookie = c
+		}
+	}
+	if newAccessCookie == nil {
+		t.Fatal("new access cookie should be set after rotation")
+	}
+
+	// The new access JWT should be valid.
+	newToken, err := jwt.Parse(newAccessCookie.Value, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodEdDSA {
+			return nil, fmt.Errorf("unexpected method")
+		}
+		return priv.Public(), nil
+	})
+	if err != nil {
+		t.Fatalf("parse new access JWT: %v", err)
+	}
+	if !newToken.Valid {
+		t.Error("new access JWT should be valid")
+	}
+
+	// New refresh cookie should be set (rotation).
+	var newRefreshCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			newRefreshCookie = c
+		}
+	}
+	if newRefreshCookie == nil {
+		t.Fatal("new refresh cookie should be set after rotation")
+	}
+
+	// The old refresh session should be gone (rotated).
+	oldHash := sha256Sum([]byte(refreshCookie.Value))
+	_, err = h.store.GetRefreshSessionByTokenHash(oldHash)
+	if err == nil {
+		t.Error("old refresh session should be deleted after rotation")
+	}
+
+	// The new refresh session should exist.
+	newHash := sha256Sum([]byte(newRefreshCookie.Value))
+	_, err = h.store.GetRefreshSessionByTokenHash(newHash)
+	if err != nil {
+		t.Fatalf("new refresh session should exist: %v", err)
+	}
+}
+
+func TestRefreshRotationRejectsExpiredRefresh(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("expired-refresh-user", "expiredrefresh")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Create an expired refresh session directly in the store.
+	rawRefresh := "expired-refresh-token-value"
+	hash := sha256Sum([]byte(rawRefresh))
+	rs := &RefreshSession{
+		ID:        "expired-rs-id",
+		UserID:    user.ID,
+		TokenHash: hash,
+		CreatedAt: time.Now().UTC().Add(-800 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(-1 * time.Hour), // expired
+	}
+	if err := h.store.CreateRefreshSession(rs); err != nil {
+		t.Fatalf("create refresh session: %v", err)
+	}
+
+	// Create an expired access JWT.
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, _ := expiredToken.SignedString(priv)
+
+	// Request /auth/session with both expired.
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	req.AddCookie(&http.Cookie{Name: RefreshTokenCookieName, Value: rawRefresh})
+	rec := httptest.NewRecorder()
+	h.HandleSession(rec, req)
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("should not be authenticated with expired refresh")
+	}
+}
+
+func TestReplayedOldRefreshTokenFailsAfterRotation(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("replay-refresh-user", "replayrefresh")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue a session.
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	var oldRefreshCookie *http.Cookie
+	for _, c := range issueRec.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			oldRefreshCookie = c
+		}
+	}
+	if oldRefreshCookie == nil {
+		t.Fatal("refresh cookie not set")
+	}
+
+	// Use the refresh to rotate (simulate access expiry).
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, _ := expiredToken.SignedString(priv)
+
+	rotateReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	rotateReq.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	rotateReq.AddCookie(oldRefreshCookie)
+	rotateRec := httptest.NewRecorder()
+	h.HandleSession(rotateRec, rotateReq)
+
+	var rotateResp sessionResponse
+	if err := json.NewDecoder(rotateRec.Body).Decode(&rotateResp); err != nil {
+		t.Fatalf("decode rotation: %v", err)
+	}
+	if !rotateResp.Authenticated {
+		t.Error("rotation should succeed with valid refresh")
+	}
+
+	// Now try to use the OLD refresh token again (replay after rotation).
+	replayReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	replayReq.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	replayReq.AddCookie(oldRefreshCookie) // old refresh token, already rotated
+	replayRec := httptest.NewRecorder()
+	h.HandleSession(replayRec, replayReq)
+
+	var replayResp sessionResponse
+	if err := json.NewDecoder(replayRec.Body).Decode(&replayResp); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if replayResp.Authenticated {
+		t.Error("should NOT be authenticated with replayed old refresh token after rotation")
+	}
+}
+
+// --- ValidateAccessToken tests (for proxy use) ---
+
+func TestValidateAccessTokenValidJWT(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("validate-user", "validate")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue a valid access JWT.
+	accessToken, err := h.issueAccessJWT(user)
+	if err != nil {
+		t.Fatalf("issue access JWT: %v", err)
+	}
+
+	// Validate it.
+	userID, err := h.ValidateAccessToken(accessToken)
+	if err != nil {
+		t.Fatalf("ValidateAccessToken: %v", err)
+	}
+	if userID != user.ID {
+		t.Errorf("user ID: got %q, want %q", userID, user.ID)
+	}
+
+	_ = priv
+}
+
+func TestValidateAccessTokenRejectsTamperedJWT(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("tamper-user", "tamper")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	accessToken, err := h.issueAccessJWT(user)
+	if err != nil {
+		t.Fatalf("issue access JWT: %v", err)
+	}
+
+	// Tamper with the token.
+	tampered := accessToken[:len(accessToken)-5] + "XXXXX"
+
+	_, err = h.ValidateAccessToken(tampered)
+	if err == nil {
+		t.Error("tampered JWT should be rejected")
+	}
+
+	_ = priv
+}
+
+func TestValidateAccessTokenRejectsExpiredJWT(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("expired-jwt-user", "expiredjwt")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Create an expired JWT manually.
+	claims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenStr, _ := token.SignedString(priv)
+
+	_, err = h.ValidateAccessToken(tokenStr)
+	if err == nil {
+		t.Error("expired JWT should be rejected")
+	}
+
+	_ = priv
+}
+
+func TestValidateAccessTokenRejectsNonAccessToken(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("non-access-user", "nonaccess")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Create a JWT without the "access" scope.
+	claims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(5 * time.Minute).Unix(),
+		"iat":   time.Now().Unix(),
+		"scope": "refresh", // wrong scope
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenStr, _ := token.SignedString(priv)
+
+	_, err = h.ValidateAccessToken(tokenStr)
+	if err == nil {
+		t.Error("JWT without access scope should be rejected")
+	}
+
+	_ = priv
+}
+
+// --- Cookie attribute tests ---
+
+func TestAuthCookiesAreSecureWhenConfigured(t *testing.T) {
+	store := TestStore(t)
+	cfg := &Config{
+		Port:              "0",
+		DBPath:            filepath.Join(t.TempDir(), "auth.db"),
+		RPID:              "localhost",
+		RPOrigins:         []string{"http://localhost:4173"},
+		JWTPrivateKeyPath: filepath.Join(t.TempDir(), "key"),
+		AccessTokenTTL:    5 * time.Minute,
+		RefreshTokenTTL:   720 * time.Hour,
+		CookieSecure:      true, // simulate deployed HTTPS
+	}
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	wa, err := webauthn.New(&webauthn.Config{
+		RPID:          cfg.RPID,
+		RPDisplayName: "go-choir test",
+		RPOrigins:     cfg.RPOrigins,
+	})
+	if err != nil {
+		t.Fatalf("create webauthn: %v", err)
+	}
+
+	h := NewHandler(store, wa, cfg, priv)
+
+	user, err := store.CreateUser("secure-cookie-user", "securecookie")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	_, err = h.issueSession(rec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == AccessTokenCookieName || c.Name == RefreshTokenCookieName {
+			if !c.Secure {
+				t.Errorf("cookie %q should be Secure when CookieSecure=true", c.Name)
+			}
+			if !c.HttpOnly {
+				t.Errorf("cookie %q should be HttpOnly", c.Name)
+			}
+			if c.SameSite != http.SameSiteLaxMode {
+				t.Errorf("cookie %q should use SameSite=Lax", c.Name)
+			}
+		}
+	}
+}
+
+// --- Challenge session data storage tests ---
+
+func TestRegisterBeginStoresSessionData(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	body := `{"username": "sessiondata"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Find the user.
+	user, err := h.store.GetUserByUsername("sessiondata")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+
+	// Find the challenge for this user.
+	// The challenge ID is the challenge string from the WebAuthn session.
+	// We can look it up by checking recent challenge states.
+	challenges, err := h.store.GetChallengeStatesByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get challenges: %v", err)
+	}
+	if len(challenges) == 0 {
+		t.Fatal("no challenges found for user")
+	}
+
+	cs := challenges[0]
+	if cs.WebAuthnSessionData == "" {
+		t.Error("challenge state should have WebAuthn session data")
+	}
+	if cs.Type != "registration" {
+		t.Errorf("challenge type: got %q, want %q", cs.Type, "registration")
+	}
+
+	// Verify the session data is valid JSON.
+	var sessionData webauthn.SessionData
+	if err := json.Unmarshal([]byte(cs.WebAuthnSessionData), &sessionData); err != nil {
+		t.Fatalf("unmarshal session data: %v", err)
+	}
+	if sessionData.Challenge == "" {
+		t.Error("session data challenge should not be empty")
+	}
+}
+
+func TestLoginBeginStoresSessionData(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user with a credential.
+	user, err := h.store.CreateUser("login-session-data-user", "loginsd")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "cred-lsd",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	body := `{"username": "loginsd"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginBegin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	challenges, err := h.store.GetChallengeStatesByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get challenges: %v", err)
+	}
+	if len(challenges) == 0 {
+		t.Fatal("no challenges found for user")
+	}
+
+	cs := challenges[0]
+	if cs.WebAuthnSessionData == "" {
+		t.Error("login challenge state should have WebAuthn session data")
+	}
+	if cs.Type != "login" {
+		t.Errorf("challenge type: got %q, want %q", cs.Type, "login")
+	}
+
+	var sessionData webauthn.SessionData
+	if err := json.Unmarshal([]byte(cs.WebAuthnSessionData), &sessionData); err != nil {
+		t.Fatalf("unmarshal session data: %v", err)
+	}
+}
+
+// --- Helper functions for tests ---
+
+// base64RawURLEncode encodes bytes to base64url without padding.
+func base64RawURLEncode(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// sha256Sum returns the hex-encoded SHA-256 hash of the input.
+func sha256Sum(data []byte) string {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash)
 }
