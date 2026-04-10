@@ -1,6 +1,6 @@
 {
   "milestone": "foundation",
-  "round": 2,
+  "round": 1,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -10,7 +10,7 @@
     },
     "typecheck": {
       "passed": true,
-      "command": "go build ./cmd/... && cd frontend && pnpm install --frozen-lockfile && pnpm build",
+      "command": "go build ./cmd/... && cd frontend && pnpm build",
       "exitCode": 0
     },
     "lint": {
@@ -20,8 +20,8 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
-    "passed": 0,
+    "total": 3,
+    "passed": 2,
     "failed": 1,
     "failedFeatures": [
       "nixos-config"
@@ -33,14 +33,14 @@
       "file": "flake.nix",
       "line": 21,
       "severity": "blocking",
-      "description": "Prior blocking issue remains. `commonGoArgs.src` uses `pkgs.lib.cleanSourceWith`, but the filter at lines 21-26 only keeps `.go`, `go.mod`, and `go.sum` paths and never keeps directories such as `cmd/` or `internal/`. That means the source tree handed to `buildGoModule` does not preserve the service package directories required by `subPackages = [ subPackage ]`, so the Go package builds are not actually deployable."
+      "description": "The `cleanSourceWith` filter only keeps `.go`, `go.mod`, and `go.sum` paths and never keeps directories. That strips `cmd/` and `internal/` from the source tree before `buildGoModule` runs, so `nix build .#auth` and the other Go package builds will not have the package directories they need."
     },
     {
       "featureId": "nixos-config",
       "file": "flake.nix",
       "line": 44,
       "severity": "blocking",
-      "description": "Prior blocking issue remains. The frontend derivation still runs `pnpm install --frozen-lockfile` in `postPatch`. Normal Nix builds are sandboxed and do not allow the network access that install step requires, so the frontend package is not reproducibly buildable for deployment. This still needs a Nix-native dependency fetch path such as `buildNpmPackage` or a pre-fetched pnpm store."
+      "description": "The frontend derivation runs `pnpm install --frozen-lockfile` during the build. Nix builds are sandboxed and do not have network access, so this package will fail when the deployment actually tries to build the frontend on Node B or in CI. This needs a Nix-native dependency fetch path such as `buildNpmPackage` or a pre-fetched pnpm store."
     }
   ],
   "appliedUpdates": [],
@@ -62,5 +62,5 @@
       "reason": "specific handoff error; no clear AGENTS.md or skill change identified from a single occurrence"
     }
   ],
-  "previousRound": ".factory/validation/foundation/scrutiny/synthesis.round1.json"
+  "previousRound": null
 }
