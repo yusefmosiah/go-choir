@@ -48,13 +48,13 @@
     enable = true;
     virtualHosts."draft.choir-ip.com" = {
       extraConfig = ''
-        handle /auth/* {
+        handle_path /auth/* {
           reverse_proxy 127.0.0.1:8081
         }
-        handle /api/* {
+        handle_path /api/* {
           reverse_proxy 127.0.0.1:8082
         }
-        handle /provider/* {
+        handle_path /provider/* {
           reverse_proxy 127.0.0.1:8084
         }
         handle {
