@@ -16,6 +16,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// clientIdentityHeaders is the list of HTTP headers that must be stripped from
+// client requests before forwarding to the sandbox. These headers could be used
+// to impersonate or spoof user identity, so the proxy removes them all and
+// only injects the JWT-verified user context via X-Authenticated-User.
+var clientIdentityHeaders = []string{
+	"X-Authenticated-User",
+	"X-User-Id",
+	"X-User-Name",
+	"X-Forwarded-User",
+	"X-Remote-User",
+	"X-Auth-User",
+}
+
 // errorResponse is a generic JSON error envelope.
 type errorResponse struct {
 	Error string `json:"error"`
@@ -54,10 +67,10 @@ func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 	// path (e.g., /api/shell/bootstrap) so that prefix preservation is
 	// observable end to end.
 	//
-	// The director also handles user-context injection: it strips any
-	// client-supplied X-Authenticated-User header (to prevent spoofing),
-	// then sets it from the trusted X-Proxy-Trusted-User header that the
-	// proxy handler sets after JWT validation.
+	// The director also handles user-context injection: it strips all
+	// client-supplied identity headers (to prevent spoofing), then sets
+	// X-Authenticated-User from the trusted X-Proxy-Trusted-User header
+	// that the proxy handler sets after JWT validation.
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -71,10 +84,14 @@ func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 		// the correct Host.
 		req.Host = sandboxURL.Host
 
-		// Inject trusted user context: strip any client-supplied value,
-		// then set from the proxy-validated trusted user header.
+		// Strip ALL client-supplied identity headers to prevent spoofing.
+		// Only the proxy-verified user context is allowed through.
+		for _, hdr := range clientIdentityHeaders {
+			req.Header.Del(hdr)
+		}
+
+		// Inject trusted user context from the proxy-validated JWT.
 		trustedUser := req.Header.Get("X-Proxy-Trusted-User")
-		req.Header.Del("X-Authenticated-User")
 		if trustedUser != "" {
 			req.Header.Set("X-Authenticated-User", trustedUser)
 		}

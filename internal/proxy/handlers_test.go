@@ -1196,6 +1196,323 @@ func TestWSAuthDenialReturnsJSONWithoutUpgrade(t *testing.T) {
 	}
 }
 
+// --- VAL-PROXY-005: Spoofed identity headers, same sandbox, distinct user context ---
+
+func TestBootstrapTwoDistinctUsersSameSandboxDifferentContext(t *testing.T) {
+	h, priv, _ := testProxyEnv(t)
+
+	// User A requests bootstrap.
+	accessTokenA := issueTestAccessJWT(priv, "user-alice")
+	reqA := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	reqA.AddCookie(&http.Cookie{Name: "choir_access", Value: accessTokenA})
+	wA := httptest.NewRecorder()
+	h.HandleBootstrap(wA, reqA)
+
+	if wA.Code != http.StatusOK {
+		t.Fatalf("user A: got status %d, want %d", wA.Code, http.StatusOK)
+	}
+
+	var respA map[string]interface{}
+	if err := json.NewDecoder(wA.Body).Decode(&respA); err != nil {
+		t.Fatalf("decode user A bootstrap: %v", err)
+	}
+
+	// User B requests bootstrap.
+	accessTokenB := issueTestAccessJWT(priv, "user-bob")
+	reqB := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	reqB.AddCookie(&http.Cookie{Name: "choir_access", Value: accessTokenB})
+	wB := httptest.NewRecorder()
+	h.HandleBootstrap(wB, reqB)
+
+	if wB.Code != http.StatusOK {
+		t.Fatalf("user B: got status %d, want %d", wB.Code, http.StatusOK)
+	}
+
+	var respB map[string]interface{}
+	if err := json.NewDecoder(wB.Body).Decode(&respB); err != nil {
+		t.Fatalf("decode user B bootstrap: %v", err)
+	}
+
+	// Both users must reach the same sandbox instance.
+	if respA["sandbox_id"] != respB["sandbox_id"] {
+		t.Errorf("sandbox identity mismatch: user A saw %v, user B saw %v", respA["sandbox_id"], respB["sandbox_id"])
+	}
+
+	// Each user must see their own authenticated context.
+	if respA["user"] != "user-alice" {
+		t.Errorf("user A context: got %v, want %q", respA["user"], "user-alice")
+	}
+	if respB["user"] != "user-bob" {
+		t.Errorf("user B context: got %v, want %q", respB["user"], "user-bob")
+	}
+
+	// The contexts must be distinct.
+	if respA["user"] == respB["user"] {
+		t.Errorf("user A and user B should have different context, both got %v", respA["user"])
+	}
+}
+
+func TestBootstrapNoStaleIdentityLeakBetweenUsers(t *testing.T) {
+	h, priv, _ := testProxyEnv(t)
+
+	// User A requests bootstrap.
+	accessTokenA := issueTestAccessJWT(priv, "user-alice")
+	reqA := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	reqA.AddCookie(&http.Cookie{Name: "choir_access", Value: accessTokenA})
+	wA := httptest.NewRecorder()
+	h.HandleBootstrap(wA, reqA)
+
+	var respA map[string]interface{}
+	if err := json.NewDecoder(wA.Body).Decode(&respA); err != nil {
+		t.Fatalf("decode user A: %v", err)
+	}
+
+	// Immediately after, user B requests bootstrap on the same handler.
+	accessTokenB := issueTestAccessJWT(priv, "user-bob")
+	reqB := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	reqB.AddCookie(&http.Cookie{Name: "choir_access", Value: accessTokenB})
+	wB := httptest.NewRecorder()
+	h.HandleBootstrap(wB, reqB)
+
+	var respB map[string]interface{}
+	if err := json.NewDecoder(wB.Body).Decode(&respB); err != nil {
+		t.Fatalf("decode user B: %v", err)
+	}
+
+	// User B must NOT see user A's identity.
+	if respB["user"] != "user-bob" {
+		t.Errorf("user B should see own identity, got %v (possible leak from user A %v)", respB["user"], respA["user"])
+	}
+}
+
+func TestBootstrapStripsAdditionalSpoofedIdentityHeaders(t *testing.T) {
+	// Verify that the proxy strips common identity-spoofing headers
+	// beyond just X-Authenticated-User.
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Create a sandbox that echoes all received identity headers.
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/shell/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"sandbox_id":          "sandbox-test",
+			"user":                r.Header.Get("X-Authenticated-User"),
+			"x_user_id":          r.Header.Get("X-User-Id"),
+			"x_forwarded_user":   r.Header.Get("X-Forwarded-User"),
+			"x_remote_user":     r.Header.Get("X-Remote-User"),
+			"x_auth_user":       r.Header.Get("X-Auth-User"),
+			"x_user_name":       r.Header.Get("X-User-Name"),
+			"path":              r.URL.Path,
+		})
+	})
+	sandboxServer := httptest.NewServer(sandboxMux)
+	defer sandboxServer.Close()
+
+	cfg := &Config{Port: "0", SandboxURL: sandboxServer.URL, AuthPublicKeyPath: "/unused"}
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	accessToken := issueTestAccessJWT(priv, "user-real-identity")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req.AddCookie(&http.Cookie{Name: "choir_access", Value: accessToken})
+	// Spoof multiple identity headers.
+	req.Header.Set("X-Authenticated-User", "spoofed-auth-user")
+	req.Header.Set("X-User-Id", "spoofed-user-id")
+	req.Header.Set("X-Forwarded-User", "spoofed-forwarded-user")
+	req.Header.Set("X-Remote-User", "spoofed-remote-user")
+	req.Header.Set("X-Auth-User", "spoofed-auth-user-header")
+	req.Header.Set("X-User-Name", "spoofed-user-name")
+
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// The trusted X-Authenticated-User must be the JWT-verified identity.
+	if resp["user"] != "user-real-identity" {
+		t.Errorf("X-Authenticated-User: got %v, want %q", resp["user"], "user-real-identity")
+	}
+
+	// All other identity headers must be stripped — not forwarded to sandbox.
+	for _, header := range []string{"x_user_id", "x_forwarded_user", "x_remote_user", "x_auth_user", "x_user_name"} {
+		if resp[header] != "" {
+			t.Errorf("spoofed header %q leaked to sandbox: got %v", header, resp[header])
+		}
+	}
+}
+
+func TestWSAuthenticatedTwoDistinctUsersSameSandboxDifferentContext(t *testing.T) {
+	proxyServer, priv := testWSProxyEnv(t)
+
+	// User A connects via WS.
+	accessTokenA := issueTestAccessJWT(priv, "user-ws-alice")
+	connA := wsDialWithCookie(t, proxyServer.URL, accessTokenA)
+	defer connA.Close()
+
+	var connectedA map[string]interface{}
+	connA.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := connA.ReadJSON(&connectedA); err != nil {
+		t.Fatalf("user A: read connected: %v", err)
+	}
+
+	// User B connects via WS.
+	accessTokenB := issueTestAccessJWT(priv, "user-ws-bob")
+	connB := wsDialWithCookie(t, proxyServer.URL, accessTokenB)
+	defer connB.Close()
+
+	var connectedB map[string]interface{}
+	connB.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := connB.ReadJSON(&connectedB); err != nil {
+		t.Fatalf("user B: read connected: %v", err)
+	}
+
+	// Both users must reach the same sandbox instance.
+	if connectedA["sandbox_id"] != connectedB["sandbox_id"] {
+		t.Errorf("sandbox identity mismatch: user A saw %v, user B saw %v", connectedA["sandbox_id"], connectedB["sandbox_id"])
+	}
+
+	// Each user must see their own authenticated context.
+	if connectedA["user"] != "user-ws-alice" {
+		t.Errorf("user A context: got %v, want %q", connectedA["user"], "user-ws-alice")
+	}
+	if connectedB["user"] != "user-ws-bob" {
+		t.Errorf("user B context: got %v, want %q", connectedB["user"], "user-ws-bob")
+	}
+
+	// The contexts must be distinct.
+	if connectedA["user"] == connectedB["user"] {
+		t.Errorf("user A and user B should have different context, both got %v", connectedA["user"])
+	}
+}
+
+func TestWSNoStaleIdentityLeakBetweenUsers(t *testing.T) {
+	proxyServer, priv := testWSProxyEnv(t)
+
+	// User A connects and receives initial context.
+	accessTokenA := issueTestAccessJWT(priv, "user-ws-first")
+	connA := wsDialWithCookie(t, proxyServer.URL, accessTokenA)
+
+	var connectedA map[string]interface{}
+	connA.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := connA.ReadJSON(&connectedA); err != nil {
+		connA.Close()
+		t.Fatalf("user A: read connected: %v", err)
+	}
+
+	// Close user A's connection.
+	connA.Close()
+
+	// User B connects on the same proxy.
+	accessTokenB := issueTestAccessJWT(priv, "user-ws-second")
+	connB := wsDialWithCookie(t, proxyServer.URL, accessTokenB)
+	defer connB.Close()
+
+	var connectedB map[string]interface{}
+	connB.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := connB.ReadJSON(&connectedB); err != nil {
+		t.Fatalf("user B: read connected: %v", err)
+	}
+
+	// User B must NOT see user A's identity.
+	if connectedB["user"] != "user-ws-second" {
+		t.Errorf("user B should see own identity, got %v (possible leak from user A %v)", connectedB["user"], connectedA["user"])
+	}
+}
+
+func TestWSSpoofedIdentityHeadersDoNotReachSandbox(t *testing.T) {
+	// Create a sandbox that echoes all received identity headers over WS.
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/ws", func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool { return true },
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Echo all identity headers we received.
+		connected := map[string]interface{}{
+			"sandbox_id":         "sandbox-test",
+			"user":               r.Header.Get("X-Authenticated-User"),
+			"x_user_id":         r.Header.Get("X-User-Id"),
+			"x_forwarded_user":  r.Header.Get("X-Forwarded-User"),
+			"x_remote_user":     r.Header.Get("X-Remote-User"),
+			"type":              "connected",
+		}
+		if err := conn.WriteJSON(connected); err != nil {
+			return
+		}
+	})
+	sandboxServer := httptest.NewServer(sandboxMux)
+	defer sandboxServer.Close()
+
+	cfg := &Config{Port: "0", SandboxURL: sandboxServer.URL, AuthPublicKeyPath: "/unused"}
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/ws", handler.HandleWS)
+	proxyServer := httptest.NewServer(mux)
+	defer proxyServer.Close()
+
+	accessToken := issueTestAccessJWT(priv, "user-real-ws")
+
+	// Dial with spoofed identity headers on the handshake.
+	wsURL := "ws" + strings.TrimPrefix(proxyServer.URL, "http") + "/api/ws"
+	header := http.Header{}
+	header.Set("Cookie", "choir_access="+accessToken)
+	header.Set("X-Authenticated-User", "spoofed-auth-user")
+	header.Set("X-User-Id", "spoofed-user-id")
+	header.Set("X-Forwarded-User", "spoofed-forwarded")
+	header.Set("X-Remote-User", "spoofed-remote")
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("dial proxy WS: %v", err)
+	}
+	defer conn.Close()
+
+	var connected map[string]interface{}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := conn.ReadJSON(&connected); err != nil {
+		t.Fatalf("read connected: %v", err)
+	}
+
+	// Trusted identity must match JWT.
+	if connected["user"] != "user-real-ws" {
+		t.Errorf("X-Authenticated-User: got %v, want %q", connected["user"], "user-real-ws")
+	}
+
+	// All other identity headers must NOT reach the sandbox.
+	for _, header := range []string{"x_user_id", "x_forwarded_user", "x_remote_user"} {
+		if connected[header] != "" {
+			t.Errorf("spoofed header %q leaked to sandbox via WS: got %v", header, connected[header])
+		}
+	}
+}
+
 func TestWSDeniesWrongSigningKey(t *testing.T) {
 	h, _, _ := testProxyEnv(t)
 
