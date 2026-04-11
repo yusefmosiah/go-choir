@@ -31,8 +31,13 @@ func main() {
 		log.Printf("gateway: no real provider configured; inference requests will fail")
 	}
 
-	// Create the gateway handler with registry and provider.
-	handler := gateway.NewHandler(registry, p)
+	// Initialize per-sandbox rate limiting (VAL-GATEWAY-005).
+	rlCfg := gateway.LoadRateLimiterConfig()
+	rl := gateway.NewPerSandboxRateLimiter(rlCfg.MaxRequests, rlCfg.WindowSize)
+	log.Printf("gateway: rate limiter enabled: %s", rl)
+
+	// Create the gateway handler with registry, provider, and rate limiter.
+	handler := gateway.NewHandlerWithRateLimit(registry, p, rl)
 	gateway.RegisterRoutes(s, handler)
 
 	s.Start()

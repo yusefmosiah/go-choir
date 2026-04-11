@@ -54,9 +54,30 @@ func LoadConfig() Config {
 	}
 
 	return Config{
-		Port:           port,
+		Port:            port,
 		SandboxTokenTTL: ttl,
 	}
+}
+
+// LoadRateLimiterConfig resolves rate limiter configuration from
+// environment variables and returns a resolved RateLimiterConfig
+// with defaults applied.
+func LoadRateLimiterConfig() RateLimiterConfig {
+	cfg := RateLimiterConfig{}
+
+	if v := os.Getenv("GATEWAY_RATE_LIMIT_MAX_REQUESTS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &cfg.MaxRequests); err == nil && n == 1 {
+			// parsed successfully
+		}
+	}
+
+	if v := os.Getenv("GATEWAY_RATE_LIMIT_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.WindowSize = d
+		}
+	}
+
+	return cfg.Resolve()
 }
 
 func envOr(key, fallback string) string {

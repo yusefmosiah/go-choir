@@ -16,10 +16,12 @@ import (
 
 // HealthResponse is the JSON structure returned by GET /health.
 type gatewayHealthResponse struct {
-	Status         string `json:"status"`
-	Service        string `json:"service"`
-	Provider       string `json:"provider"`
-	ActiveIdentities int   `json:"active_identities"`
+	Status             string `json:"status"`
+	Service            string `json:"service"`
+	Provider           string `json:"provider"`
+	ActiveIdentities   int    `json:"active_identities"`
+	RateLimitMaxRequests int  `json:"rate_limit_max_requests,omitempty"`
+	RateLimitWindowMs  int64  `json:"rate_limit_window_ms,omitempty"`
 }
 
 // ProviderRequest is the JSON payload for POST /provider/v1/inference.
@@ -84,22 +86,36 @@ type ErrorResponse struct {
 
 // Handler provides HTTP handlers for the gateway service.
 type Handler struct {
-	registry *IdentityRegistry
-	provider provider.Provider // the resolved real provider (bedrock or zai)
+	registry   *IdentityRegistry
+	provider   provider.Provider       // the resolved real provider (bedrock or zai)
+	rateLimiter *PerSandboxRateLimiter // per-sandbox rate limiter (may be nil)
 }
 
 // NewHandler creates a gateway Handler with the given identity registry
 // and provider. The provider may be nil if no real provider is configured;
 // in that case, inference requests will fail with a clear error.
+// No rate limiting is applied when using this constructor.
 func NewHandler(registry *IdentityRegistry, p provider.Provider) *Handler {
 	return &Handler{
-		registry: registry,
-		provider: p,
+		registry:    registry,
+		provider:    p,
+		rateLimiter: nil,
+	}
+}
+
+// NewHandlerWithRateLimit creates a gateway Handler with per-sandbox rate
+// limiting. Each sandbox identity gets an independent request quota so one
+// noisy sandbox cannot starve another (VAL-GATEWAY-005, VAL-CROSS-115).
+func NewHandlerWithRateLimit(registry *IdentityRegistry, p provider.Provider, rl *PerSandboxRateLimiter) *Handler {
+	return &Handler{
+		registry:    registry,
+		provider:    p,
+		rateLimiter: rl,
 	}
 }
 
 // HandleHealth handles GET /health for the gateway service.
-// It reports the active provider and identity count.
+// It reports the active provider, identity count, and rate limiter config.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeGatewayJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
@@ -118,12 +134,22 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeGatewayJSON(w, http.StatusOK, gatewayHealthResponse{
-		Status:         "ok",
-		Service:        "gateway",
-		Provider:       providerName,
+	resp := gatewayHealthResponse{
+		Status:           "ok",
+		Service:          "gateway",
+		Provider:         providerName,
 		ActiveIdentities: activeCount,
-	})
+	}
+
+	if h.rateLimiter != nil {
+		used, limit, resetIn := h.rateLimiter.Status("__health_check__")
+		_ = used
+		_ = resetIn
+		resp.RateLimitMaxRequests = limit
+		resp.RateLimitWindowMs = h.rateLimiter.window.Milliseconds()
+	}
+
+	writeGatewayJSON(w, http.StatusOK, resp)
 }
 
 // HandleInference handles POST /provider/v1/inference.
@@ -145,7 +171,25 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Check that a real provider is configured.
+	// Step 2: Enforce per-sandbox rate limiting (VAL-GATEWAY-005).
+	if h.rateLimiter != nil {
+		if !h.rateLimiter.Record(sandboxID) {
+			_, _, resetIn := h.rateLimiter.Status(sandboxID)
+			retrySeconds := int(resetIn.Seconds())
+			if retrySeconds < 1 {
+				retrySeconds = 1
+			}
+			log.Printf("gateway: rate limit exceeded for sandbox %s", sandboxID)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySeconds))
+			writeGatewayJSON(w, http.StatusTooManyRequests, ErrorResponse{
+				Error: fmt.Sprintf("rate limit exceeded for sandbox %s (limit %d requests per %s)",
+					sandboxID, h.rateLimiter.maxReqs, h.rateLimiter.window),
+			})
+			return
+		}
+	}
+
+	// Step 3: Check that a real provider is configured.
 	if h.provider == nil {
 		log.Printf("gateway: no provider configured for request from sandbox %s", sandboxID)
 		writeGatewayJSON(w, http.StatusServiceUnavailable, ErrorResponse{
@@ -154,14 +198,14 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Decode the request.
+	// Step 4: Decode the request.
 	var req ProviderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
 		return
 	}
 
-	// Step 4: Reject unsupported providers (VAL-GATEWAY-006).
+	// Step 5: Reject unsupported providers (VAL-GATEWAY-006).
 	if req.Provider != "" && req.Provider != h.provider.Name() {
 		log.Printf("gateway: unsupported provider %q requested (have %s)", req.Provider, h.provider.Name())
 		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{
@@ -170,7 +214,7 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 5: Build the LLM request and call the provider.
+	// Step 6: Build the LLM request and call the provider.
 	llmReq := provider.LLMRequest{
 		Model:     req.Model,
 		System:    req.System,
@@ -198,7 +242,7 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 6: Return the successful response.
+	// Step 7: Return the successful response.
 	log.Printf("gateway: inference succeeded for sandbox %s (provider=%s tokens=%d+%d text_len=%d)",
 		sandboxID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
 
