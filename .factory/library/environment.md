@@ -47,9 +47,20 @@ Environment variables, external dependencies, and setup notes.
 ### VM runtime
 - `VMCTL_PORT` — vmctl service listen port (default: `8083`)
 - `VMCTL_SANDBOX_URL_BASE` — base URL for sandbox runtimes assigned to VMs (default: `http://127.0.0.1:8085`)
+- `VMCTL_IDLE_TIMEOUT` — duration after which inactive VMs are hibernated (default: `0` = no timeout; set to `30m` on Node B)
 - `PROXY_VMCTL_URL` — when set, the proxy resolves user VM ownership through vmctl instead of using the static `PROXY_SANDBOX_URL` (VAL-VM-001, VAL-VM-002)
 - vmctl control endpoints live under `/internal/vmctl/*` and are internal-only (VAL-VM-012)
-- expect additional Firecracker env vars for image paths, kernel paths, and lifecycle settings once the VM milestone lands
+- vmctl lifecycle endpoints: `/internal/vmctl/hibernate`, `/internal/vmctl/resume`, `/internal/vmctl/recover`, `/internal/vmctl/logout`, `/internal/vmctl/idle-check`
+- `VM_FIRECRACKER_BIN` — path to Firecracker binary (default: `firecracker` in `$PATH`)
+- `VM_KERNEL_IMAGE` — path to repo-built guest kernel (vmlinux)
+- `VM_ROOTFS_IMAGE` — path to repo-built guest rootfs (ext4 image)
+- `VM_STATE_DIR` — directory for VM state, epoch tracking, and per-VM persistent data
+- `VM_HOST_BASE_PORT` — starting host port for VM sandbox listeners (default: `9000`)
+- `VM_CPU_COUNT` — vCPUs per VM (default: `2`)
+- `VM_MEM_MIB` — memory per VM in MiB (default: `512`)
+- `VM_HEALTH_CHECK_INTERVAL` — health check interval (default: `15s`)
+- `VM_HEALTH_CHECK_TIMEOUT` — per-check HTTP timeout (default: `3s`)
+- Guest images are built via `nix build .#guest-image` and contain only the sandbox binary — no provider credentials (VAL-VM-010, VAL-VM-011)
 
 ### Route invariants
 These browser-facing routes remain the stable contract:

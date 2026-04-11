@@ -114,9 +114,14 @@ in
 
   # ── Systemd services ──────────────────────────────────────────────────
   # 5 host services: auth, proxy, vmctl, gateway, sandbox
-  # For Milestone 1, the placeholder sandbox runs as a host service on
-  # 8085.  In later milestones, sandbox workloads will run inside
-  # Firecracker microVMs and the host-process sandbox will be removed.
+  # The placeholder sandbox on 8085 runs as a host service for dev.
+  # In production, sandbox workloads run inside Firecracker microVMs
+  # managed by vmctl, and the host-process sandbox is a fallback only.
+  #
+  # Firecracker guest images are repo-built (VAL-VM-010):
+  #   nix build .#guest-image  →  kernel (vmlinux) + rootfs (ext4)
+  # The guest contains ONLY the sandbox binary — no provider credentials,
+  # no auth signing keys, no gateway secrets (VAL-VM-011).
   #
   # Restart and recovery behavior (VAL-DEPLOY-008 / VAL-CROSS-118):
   # - Each service uses Restart=on-failure with a 3-second backoff.
@@ -174,12 +179,16 @@ in
         "PROXY_PORT=8082"
         "PROXY_SANDBOX_URL=http://127.0.0.1:8085"
         "PROXY_AUTH_PUBLIC_KEY_PATH=${authSigningDir}/ed25519-key.pub"
+        # When vmctl is running, the proxy resolves user VM ownership
+        # through vmctl instead of using the static sandbox URL
+        # (VAL-VM-001, VAL-VM-002).
+        "PROXY_VMCTL_URL=http://127.0.0.1:8083"
       ];
     };
   };
 
   systemd.services.go-choir-vmctl = {
-    description = "go-choir VMCtl Service";
+    description = "go-choir VMCtl Service (Firecracker VM lifecycle)";
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
@@ -188,8 +197,27 @@ in
       Restart = "on-failure";
       RestartSec = 3;
       WatchdogSec = 30;
+      # VM state directory for Firecracker VM persistence and epoch tracking.
+      # Persistent user data in VMs is stored here and survives stop/resume
+      # cycles (VAL-CROSS-116). Provider credentials are NEVER written here
+      # (VAL-VM-011).
+      StateDirectory = "go-choir/vm-state";
+      ReadWritePaths = [ "/var/lib/go-choir/vm-state" ];
       Environment = [
         "VMCTL_PORT=8083"
+        # Firecracker VM configuration (VAL-VM-010):
+        # Guest images are built from the repo via `nix build .#guest-image`.
+        "VM_FIRECRACKER_BIN=${pkgs.firecracker}/bin/firecracker"
+        "VM_KERNEL_IMAGE=/var/lib/go-choir/guest/vmlinux"
+        "VM_ROOTFS_IMAGE=/var/lib/go-choir/guest/rootfs.ext4"
+        "VM_STATE_DIR=/var/lib/go-choir/vm-state"
+        "VM_HOST_BASE_PORT=9000"
+        "VM_CPU_COUNT=2"
+        "VM_MEM_MIB=512"
+        "VM_HEALTH_CHECK_INTERVAL=15s"
+        "VM_HEALTH_CHECK_TIMEOUT=3s"
+        # Idle timeout: VMs idle for 30 minutes are hibernated (VAL-VM-008).
+        "VMCTL_IDLE_TIMEOUT=30m"
       ];
     };
   };
@@ -210,9 +238,11 @@ in
     };
   };
 
-  # Placeholder sandbox — host-process upstream for Milestone 1 only.
+  # Placeholder sandbox — host-process upstream for dev/fallback.
   # NOT exposed through Caddy or the firewall; reachable only via the
-  # proxy on 127.0.0.1:8085.  Will be replaced by Firecracker VMs later.
+  # proxy on 127.0.0.1:8085. When Firecracker VMs are active, vmctl
+  # routes per-user requests to VM-backed sandboxes and this host
+  # process is only a fallback (VAL-VM-002).
   # The proxy's /health endpoint reports upstream reachability, making
   # sandbox health observable through the proxy (VAL-DEPLOY-008).
   systemd.services.go-choir-sandbox = {
@@ -237,12 +267,18 @@ in
   # locations, not in the repo checkout or the Nix store.  Secrets are never
   # committed to git or embedded in the Nix store — the signing key is
   # generated on the host at first deploy.  The sandbox and proxy are
-  # stateless for Milestone 1 and need no writable directories.
+  # stateless for dev and need no writable directories.
+  #
+  # Firecracker guest image directory (VAL-VM-010): the repo-built guest
+  # kernel and rootfs are deployed here. Provider credentials are never
+  # placed in this directory or in the guest image itself (VAL-VM-011).
   systemd.tmpfiles.rules = [
     "d /opt/go-choir 0755 root root -"
     "d /var/lib/go-choir 0750 root root -"
     "d /var/lib/go-choir/auth 0750 root root -"
     "d /var/lib/go-choir/auth-signing 0750 root root -"
+    "d /var/lib/go-choir/guest 0750 root root -"
+    "d /var/lib/go-choir/vm-state 0750 root root -"
   ];
 
   # Nix settings
@@ -257,6 +293,7 @@ in
     btrfs-progs
     coreutils
     curl
+    firecracker
     git
     gnugrep
     gnused

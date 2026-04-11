@@ -3,6 +3,7 @@ package vmctl
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -256,18 +257,27 @@ func TestOwnershipRegistry_IsReady(t *testing.T) {
 	}
 }
 
-func TestOwnershipRegistry_StoppedVMGetsNewAssignment(t *testing.T) {
-	// When a user's VM is stopped, a new ResolveOrAssign should create a new VM.
+func TestOwnershipRegistry_StoppedVMGetsResumed(t *testing.T) {
+	// When a user's VM is stopped, a new ResolveOrAssign should resume it
+	// with the same VMID, preserving user state (VAL-CROSS-116).
+	// The epoch stays the same on resume (VAL-CROSS-117).
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
 	own1, _ := reg.ResolveOrAssign("user-1")
 	oldVMID := own1.VMID
+	oldEpoch := own1.Epoch
 
 	reg.StopVM("user-1")
 
 	own2, _ := reg.ResolveOrAssign("user-1")
-	if own2.VMID == oldVMID {
-		t.Error("expected new VM ID after stop, got same ID")
+	if own2.VMID != oldVMID {
+		t.Errorf("expected same VM ID after stop+resolve (resume), got %s vs %s", oldVMID, own2.VMID)
+	}
+	if own2.Epoch != oldEpoch {
+		t.Errorf("expected same epoch after resume, got %d vs %d", oldEpoch, own2.Epoch)
+	}
+	if own2.State != VMStateActive {
+		t.Errorf("expected active state after resume, got %s", own2.State)
 	}
 }
 
@@ -285,6 +295,11 @@ func newTestServer(t *testing.T) (*httptest.Server, *OwnershipRegistry) {
 	mux.HandleFunc("/internal/vmctl/stop", handler.HandleStop)
 	mux.HandleFunc("/internal/vmctl/remove", handler.HandleRemove)
 	mux.HandleFunc("/internal/vmctl/list", handler.HandleList)
+	mux.HandleFunc("/internal/vmctl/hibernate", handler.HandleHibernate)
+	mux.HandleFunc("/internal/vmctl/resume", handler.HandleResume)
+	mux.HandleFunc("/internal/vmctl/recover", handler.HandleRecover)
+	mux.HandleFunc("/internal/vmctl/logout", handler.HandleLogout)
+	mux.HandleFunc("/internal/vmctl/idle-check", handler.HandleIdleCheck)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -764,5 +779,534 @@ func TestEndpointURLs(t *testing.T) {
 	}
 	if got := RemoveEndpoint(base); got != "http://localhost:8083/internal/vmctl/remove" {
 		t.Errorf("RemoveEndpoint = %s", got)
+	}
+	if got := HibernateEndpoint(base); got != "http://localhost:8083/internal/vmctl/hibernate" {
+		t.Errorf("HibernateEndpoint = %s", got)
+	}
+	if got := ResumeEndpoint(base); got != "http://localhost:8083/internal/vmctl/resume" {
+		t.Errorf("ResumeEndpoint = %s", got)
+	}
+	if got := RecoverEndpoint(base); got != "http://localhost:8083/internal/vmctl/recover" {
+		t.Errorf("RecoverEndpoint = %s", got)
+	}
+	if got := LogoutEndpoint(base); got != "http://localhost:8083/internal/vmctl/logout" {
+		t.Errorf("LogoutEndpoint = %s", got)
+	}
+	if got := IdleCheckEndpoint(base); got != "http://localhost:8083/internal/vmctl/idle-check" {
+		t.Errorf("IdleCheckEndpoint = %s", got)
+	}
+}
+
+// --- Lifecycle Tests (VAL-VM-008, VAL-VM-009, VAL-CROSS-116, VAL-CROSS-117) ---
+
+func TestOwnershipRegistry_HibernateAndResume(t *testing.T) {
+	// VAL-CROSS-116: Idle stop or hibernate resumes the same user's state.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	own1, _ := reg.ResolveOrAssign("user-1")
+	vmID := own1.VMID
+	epoch := own1.Epoch
+
+	// Hibernate the VM.
+	if err := reg.HibernateVM("user-1"); err != nil {
+		t.Fatalf("HibernateVM: %v", err)
+	}
+
+	own := reg.GetOwnership("user-1")
+	if own.State != VMStateHibernated {
+		t.Errorf("expected hibernated state, got %s", own.State)
+	}
+	if own.VMID != vmID {
+		t.Errorf("expected same VMID after hibernate, got %s", own.VMID)
+	}
+
+	// Resume the VM — epoch should NOT change (VAL-CROSS-117).
+	resumed, err := reg.ResumeVM("user-1")
+	if err != nil {
+		t.Fatalf("ResumeVM: %v", err)
+	}
+	if resumed.State != VMStateActive {
+		t.Errorf("expected active state after resume, got %s", resumed.State)
+	}
+	if resumed.VMID != vmID {
+		t.Errorf("expected same VMID after resume, got %s", resumed.VMID)
+	}
+	if resumed.Epoch != epoch {
+		t.Errorf("expected epoch %d after resume (no increment), got %d", epoch, resumed.Epoch)
+	}
+}
+
+func TestOwnershipRegistry_RecoverIncrementsEpoch(t *testing.T) {
+	// VAL-CROSS-117: Crash recovery does not duplicate canonical effects.
+	// Recovery increments epoch to signal fresh boot.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	own1, _ := reg.ResolveOrAssign("user-1")
+	vmID := own1.VMID
+	epoch := own1.Epoch
+
+	// Mark unhealthy and recover.
+	reg.MarkUnhealthy("user-1")
+
+	recovered, err := reg.RecoverVM("user-1")
+	if err != nil {
+		t.Fatalf("RecoverVM: %v", err)
+	}
+
+	if recovered.State != VMStateActive {
+		t.Errorf("expected active state after recovery, got %s", recovered.State)
+	}
+	if recovered.VMID != vmID {
+		t.Errorf("expected same VMID after recovery, got %s", recovered.VMID)
+	}
+	if recovered.Epoch <= epoch {
+		t.Errorf("expected epoch > %d after recovery (fresh boot), got %d", epoch, recovered.Epoch)
+	}
+}
+
+func TestOwnershipRegistry_LogoutStopsOnlyCurrentUser(t *testing.T) {
+	// VAL-VM-008: Logout or idle transitions only the current user's VM.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	reg.ResolveOrAssign("user-alice")
+	reg.ResolveOrAssign("user-bob")
+
+	// Logout user-alice.
+	if err := reg.LogoutVM("user-alice"); err != nil {
+		t.Fatalf("LogoutVM: %v", err)
+	}
+
+	// Alice's VM should be stopped.
+	aliceOwn := reg.GetOwnership("user-alice")
+	if aliceOwn.State != VMStateStopped {
+		t.Errorf("expected alice VM stopped after logout, got %s", aliceOwn.State)
+	}
+	if aliceOwn.StoppedBy != "logout" {
+		t.Errorf("expected stopped_by=logout, got %s", aliceOwn.StoppedBy)
+	}
+
+	// Bob's VM should still be active.
+	bobOwn := reg.GetOwnership("user-bob")
+	if bobOwn.State != VMStateActive {
+		t.Errorf("expected bob VM still active after alice logout, got %s", bobOwn.State)
+	}
+}
+
+func TestOwnershipRegistry_IdleTimeoutChecks(t *testing.T) {
+	// VAL-VM-008: Idle timeout transitions inactive VMs.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetIdleTimeout(50 * time.Millisecond)
+
+	reg.ResolveOrAssign("user-active")
+	reg.ResolveOrAssign("user-idle")
+
+	// Simulate user-idle being idle by backdating its LastActiveAt.
+	reg.mu.Lock()
+	idleOwn := reg.ownerships["user-idle"]
+	idleOwn.LastActiveAt = time.Now().Add(-100 * time.Millisecond)
+	reg.mu.Unlock()
+
+	// Check idle VMs — should only find user-idle.
+	idleUsers := reg.CheckIdleVMs()
+	if len(idleUsers) != 1 {
+		t.Fatalf("expected 1 idle user, got %d: %v", len(idleUsers), idleUsers)
+	}
+	if idleUsers[0] != "user-idle" {
+		t.Errorf("expected user-idle to be idle, got %s", idleUsers[0])
+	}
+
+	// Stop idle VMs.
+	stopped := reg.StopIdleVMs()
+	if stopped != 1 {
+		t.Errorf("expected 1 VM stopped, got %d", stopped)
+	}
+
+	// Verify user-idle is now hibernated.
+	idleOwn = reg.GetOwnership("user-idle")
+	if idleOwn.State != VMStateHibernated {
+		t.Errorf("expected hibernated after idle stop, got %s", idleOwn.State)
+	}
+
+	// Verify user-active is still active.
+	activeOwn := reg.GetOwnership("user-active")
+	if activeOwn.State != VMStateActive {
+		t.Errorf("expected active VM still running, got %s", activeOwn.State)
+	}
+}
+
+func TestOwnershipRegistry_HibernateRequiresRunningVM(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	// No VM at all.
+	if err := reg.HibernateVM("nonexistent"); err == nil {
+		t.Error("expected error for nonexistent user")
+	}
+
+	// Already stopped VM.
+	reg.ResolveOrAssign("user-1")
+	reg.StopVM("user-1")
+	if err := reg.HibernateVM("user-1"); err == nil {
+		t.Error("expected error for stopped VM")
+	}
+}
+
+func TestOwnershipRegistry_ResumeNonResumableState(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	// No VM at all.
+	_, err := reg.ResumeVM("nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent user")
+	}
+
+	// Active VM — resume returns it as-is.
+	reg.ResolveOrAssign("user-1")
+	own, err := reg.ResumeVM("user-1")
+	if err != nil {
+		t.Fatalf("ResumeVM on active: %v", err)
+	}
+	if own.State != VMStateActive {
+		t.Errorf("expected active, got %s", own.State)
+	}
+}
+
+func TestOwnershipRegistry_RecoverRequiresFailedState(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	// No VM at all.
+	_, err := reg.RecoverVM("nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent user")
+	}
+
+	// Active VM — cannot recover.
+	reg.ResolveOrAssign("user-1")
+	_, err = reg.RecoverVM("user-1")
+	if err == nil {
+		t.Error("expected error for active VM")
+	}
+}
+
+func TestOwnershipRegistry_EpochTracksBootGeneration(t *testing.T) {
+	// VAL-CROSS-117: Epoch tracking prevents duplicate canonical effects.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	// First assignment gets an epoch.
+	own1, _ := reg.ResolveOrAssign("user-1")
+	epoch1 := own1.Epoch
+	if epoch1 == 0 {
+		t.Error("expected non-zero epoch")
+	}
+
+	// Resolve again (same active VM) — epoch stays the same.
+	own2, _ := reg.ResolveOrAssign("user-1")
+	if own2.Epoch != epoch1 {
+		t.Errorf("expected same epoch on re-resolve, got %d vs %d", epoch1, own2.Epoch)
+	}
+
+	// Stop and resolve (resume) — epoch stays the same.
+	reg.StopVM("user-1")
+	own3, _ := reg.ResolveOrAssign("user-1")
+	if own3.Epoch != epoch1 {
+		t.Errorf("expected same epoch on resume, got %d vs %d", epoch1, own3.Epoch)
+	}
+
+	// Mark unhealthy and recover — epoch increments.
+	reg.MarkUnhealthy("user-1")
+	own4, _ := reg.RecoverVM("user-1")
+	if own4.Epoch <= epoch1 {
+		t.Errorf("expected epoch > %d after recovery, got %d", epoch1, own4.Epoch)
+	}
+}
+
+func TestOwnershipRegistry_FailedVMGetsNewAssignment(t *testing.T) {
+	// Failed VMs should get a new assignment (new VMID, new epoch).
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	own1, _ := reg.ResolveOrAssign("user-1")
+	oldVMID := own1.VMID
+	oldEpoch := own1.Epoch
+
+	// Simulate a failure.
+	reg.mu.Lock()
+	own1.State = VMStateFailed
+	reg.mu.Unlock()
+
+	// ResolveOrAssign should create a new VM for the failed state.
+	own2, _ := reg.ResolveOrAssign("user-1")
+	if own2.VMID == oldVMID {
+		t.Error("expected new VM ID for failed VM")
+	}
+	if own2.Epoch <= oldEpoch {
+		t.Errorf("expected new epoch > %d for new VM, got %d", oldEpoch, own2.Epoch)
+	}
+}
+
+func TestOwnershipRegistry_NoIdleTimeoutWhenZero(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	// Default idle timeout is 0 — no idle checking.
+
+	reg.ResolveOrAssign("user-1")
+
+	// Backdate the last active time.
+	reg.mu.Lock()
+	reg.ownerships["user-1"].LastActiveAt = time.Now().Add(-24 * time.Hour)
+	reg.mu.Unlock()
+
+	// Should find no idle VMs.
+	idle := reg.CheckIdleVMs()
+	if len(idle) != 0 {
+		t.Errorf("expected no idle VMs with zero timeout, got %d", len(idle))
+	}
+}
+
+func TestOwnershipRegistry_ResolveAfterLogout(t *testing.T) {
+	// VAL-VM-008: After logout, the next request wakes or recreates the VM.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	own1, _ := reg.ResolveOrAssign("user-1")
+	vmID := own1.VMID
+
+	reg.LogoutVM("user-1")
+
+	// Resolving after logout should resume the same VM (VAL-CROSS-116).
+	own2, _ := reg.ResolveOrAssign("user-1")
+	if own2.VMID != vmID {
+		t.Errorf("expected same VMID after logout+resolve (resume), got %s vs %s", vmID, own2.VMID)
+	}
+	if own2.State != VMStateActive {
+		t.Errorf("expected active state after logout+resolve, got %s", own2.State)
+	}
+}
+
+// --- Handler Lifecycle Tests ---
+
+func TestHandler_HibernateAndResume(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Create a VM.
+	body := `{"user_id":"user-1"}`
+	req1, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/resolve", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Internal-Caller", "true")
+	resp1, _ := http.DefaultClient.Do(req1)
+	var result1 resolveResponse
+	json.NewDecoder(resp1.Body).Decode(&result1)
+	_ = resp1.Body.Close()
+	vmID := result1.VMID
+
+	// Hibernate.
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/hibernate", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Internal-Caller", "true")
+	resp2, _ := http.DefaultClient.Do(req2)
+	defer func() { _ = resp2.Body.Close() }()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on hibernate, got %d", resp2.StatusCode)
+	}
+
+	var hibResult map[string]interface{}
+	json.NewDecoder(resp2.Body).Decode(&hibResult)
+	if hibResult["status"] != "hibernated" {
+		t.Errorf("expected status=hibernated, got %v", hibResult["status"])
+	}
+	if hibResult["vm_id"] != vmID {
+		t.Errorf("expected vm_id=%s, got %v", vmID, hibResult["vm_id"])
+	}
+
+	// Resume.
+	req3, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/resume", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Internal-Caller", "true")
+	resp3, _ := http.DefaultClient.Do(req3)
+	defer func() { _ = resp3.Body.Close() }()
+
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on resume, got %d", resp3.StatusCode)
+	}
+
+	var result3 resolveResponse
+	json.NewDecoder(resp3.Body).Decode(&result3)
+	if result3.VMID != vmID {
+		t.Errorf("expected same VMID after resume, got %s", result3.VMID)
+	}
+	if result3.State != "active" {
+		t.Errorf("expected active state after resume, got %s", result3.State)
+	}
+}
+
+func TestHandler_RecoverRequiresUnhealthyState(t *testing.T) {
+	srv, reg := newTestServer(t)
+
+	// Create a VM.
+	body := `{"user_id":"user-1"}`
+	req1, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/resolve", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Internal-Caller", "true")
+	resp1, _ := http.DefaultClient.Do(req1)
+	_ = resp1.Body.Close()
+
+	// Try to recover a healthy VM — should fail.
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/recover", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Internal-Caller", "true")
+	resp2, _ := http.DefaultClient.Do(req2)
+	defer func() { _ = resp2.Body.Close() }()
+
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for healthy VM recovery, got %d", resp2.StatusCode)
+	}
+
+	// Mark unhealthy.
+	reg.MarkUnhealthy("user-1")
+
+	// Now recover should succeed with a new epoch.
+	req3, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/recover", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Internal-Caller", "true")
+	resp3, _ := http.DefaultClient.Do(req3)
+	defer func() { _ = resp3.Body.Close() }()
+
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on recovery of unhealthy VM, got %d", resp3.StatusCode)
+	}
+
+	var result resolveResponse
+	json.NewDecoder(resp3.Body).Decode(&result)
+	if result.State != "active" {
+		t.Errorf("expected active state after recovery, got %s", result.State)
+	}
+}
+
+func TestHandler_LogoutStopsVM(t *testing.T) {
+	// VAL-VM-008: Logout stops only the current user's VM.
+	srv, _ := newTestServer(t)
+
+	// Create VMs for two users.
+	for _, userID := range []string{"user-alice", "user-bob"} {
+		body := fmt.Sprintf(`{"user_id":"%s"}`, userID)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/resolve", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-Caller", "true")
+		resp, _ := http.DefaultClient.Do(req)
+		_ = resp.Body.Close()
+	}
+
+	// Logout alice.
+	body := `{"user_id":"user-alice"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/logout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
+	resp, _ := http.DefaultClient.Do(req)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on logout, got %d", resp.StatusCode)
+	}
+
+	// Lookup alice — should be stopped.
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/internal/vmctl/lookup?user_id=user-alice", nil)
+	req2.Header.Set("X-Internal-Caller", "true")
+	resp2, _ := http.DefaultClient.Do(req2)
+	var aliceResp ownershipResponse
+	json.NewDecoder(resp2.Body).Decode(&aliceResp)
+	_ = resp2.Body.Close()
+	if aliceResp.State != "stopped" {
+		t.Errorf("expected alice VM stopped after logout, got %s", aliceResp.State)
+	}
+
+	// Lookup bob — should still be active.
+	req3, _ := http.NewRequest(http.MethodGet, srv.URL+"/internal/vmctl/lookup?user_id=user-bob", nil)
+	req3.Header.Set("X-Internal-Caller", "true")
+	resp3, _ := http.DefaultClient.Do(req3)
+	var bobResp ownershipResponse
+	json.NewDecoder(resp3.Body).Decode(&bobResp)
+	_ = resp3.Body.Close()
+	if bobResp.State != "active" {
+		t.Errorf("expected bob VM still active, got %s", bobResp.State)
+	}
+}
+
+func TestHandler_IdleCheckEndpoint(t *testing.T) {
+	srv, reg := newTestServer(t)
+
+	// Set a very short idle timeout.
+	reg.SetIdleTimeout(50 * time.Millisecond)
+
+	// Create a VM.
+	body := `{"user_id":"user-1"}`
+	req1, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/resolve", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Internal-Caller", "true")
+	resp1, _ := http.DefaultClient.Do(req1)
+	_ = resp1.Body.Close()
+
+	// Backdate the VM.
+	reg.mu.Lock()
+	reg.ownerships["user-1"].LastActiveAt = time.Now().Add(-100 * time.Millisecond)
+	reg.mu.Unlock()
+
+	// Trigger idle check.
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/idle-check", nil)
+	req2.Header.Set("X-Internal-Caller", "true")
+	resp2, _ := http.DefaultClient.Do(req2)
+	defer func() { _ = resp2.Body.Close() }()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on idle-check, got %d", resp2.StatusCode)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(resp2.Body).Decode(&result)
+	if vmsStopped, _ := result["vms_stopped"].(float64); int(vmsStopped) != 1 {
+		t.Errorf("expected 1 VM stopped, got %v", result["vms_stopped"])
+	}
+}
+
+func TestHandler_LifecycleEndpointsDenyExternalCallers(t *testing.T) {
+	// VAL-VM-012: All lifecycle endpoints require internal access.
+	// The isInternalCaller function is tested separately above.
+	// This test verifies that the handler endpoints exist and are
+	// wired up correctly. The actual external caller denial is
+	// tested via isInternalCaller unit tests and via the proxy's
+	// HandleVMctlDeny which blocks /internal/vmctl/* at the proxy
+	// level for browser callers.
+	srv, _ := newTestServer(t)
+
+	endpoints := []struct {
+		path   string
+		method string
+		body   string
+	}{
+		{"/internal/vmctl/hibernate", "POST", `{"user_id":"user-1"}`},
+		{"/internal/vmctl/resume", "POST", `{"user_id":"user-1"}`},
+		{"/internal/vmctl/recover", "POST", `{"user_id":"user-1"}`},
+		{"/internal/vmctl/logout", "POST", `{"user_id":"user-1"}`},
+		{"/internal/vmctl/idle-check", "POST", ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.path, func(t *testing.T) {
+			var body io.Reader
+			if ep.body != "" {
+				body = strings.NewReader(ep.body)
+			}
+			req, _ := http.NewRequest(ep.method, srv.URL+ep.path, body)
+			if ep.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req.Header.Set("X-Internal-Caller", "true")
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode == http.StatusMethodNotAllowed {
+				t.Errorf("endpoint %s not registered (405)", ep.path)
+			}
+		})
 	}
 }

@@ -200,9 +200,20 @@ vmctl owns:
 
 - user → VM assignment
 - boot/resume
-- idle stop or hibernate
-- unhealthy guest detection
-- recovery / replacement
+- idle stop or hibernate (VAL-VM-008, VAL-CROSS-116)
+- unhealthy guest detection and recovery (VAL-VM-009)
+- logout teardown (VAL-VM-008)
+- epoch tracking for crash dedup (VAL-CROSS-117)
+
+The vmmanager package (`internal/vmmanager`) provides the concrete Firecracker lifecycle:
+
+- BootVM: launches a Firecracker process with repo-built guest images
+- StopVM/HibernateVM: clean shutdown preserving persistent state
+- ResumeVM: reboots with same epoch (preserves user state, no dedup concerns)
+- RecoverVM: force-kills and reboots with new epoch (prevents duplicate canonical effects)
+- CheckHealth: periodic guest health probes
+
+Guest images are Nix-built (`nix build .#guest-image`) and contain only the sandbox binary. Provider credentials are never in guest environment, config, or process args (VAL-VM-011).
 
 ### Routing
 

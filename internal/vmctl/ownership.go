@@ -9,6 +9,11 @@
 //   - Concurrent first requests for one user converge on one assignment (VAL-VM-004).
 //   - VM control endpoints are internal-only (VAL-VM-012).
 //   - Invalid auth is denied before VM or gateway side effects (VAL-CROSS-110).
+//   - Idle/logout lifecycle transitions only the current user's VM (VAL-VM-008).
+//   - vmctl detects unhealthy guests and recovers safely (VAL-VM-009).
+//   - Guest VM files/env/process args remain free of provider credentials (VAL-VM-011).
+//   - Crash recovery does not duplicate canonical effects (VAL-CROSS-117).
+//   - Idle stop or hibernate resumes the same user's state (VAL-CROSS-116).
 package vmctl
 
 import (
@@ -37,7 +42,15 @@ const (
 	VMStateStopping VMState = "stopping"
 
 	// VMStateStopped means the VM has been stopped and is not running.
+	// The VM can be resumed, restoring the same user's persisted state
+	// (VAL-CROSS-116, VAL-VM-008).
 	VMStateStopped VMState = "stopped"
+
+	// VMStateHibernated means the VM's persistent state has been preserved
+	// and the VM is not running. Resume restores the same user state.
+	// The epoch does NOT increment on resume, so callers can distinguish
+	// fresh boot from resume (VAL-CROSS-117).
+	VMStateHibernated VMState = "hibernated"
 
 	// VMStateFailed means the VM failed to start or has crashed.
 	VMStateFailed VMState = "failed"
@@ -66,6 +79,17 @@ type VMOwnership struct {
 	// SandboxCredential is the credential issued by the gateway for this VM.
 	// It is used to authenticate sandbox-to-gateway provider requests.
 	SandboxCredential string `json:"-"`
+
+	// Epoch is the monotonically increasing boot counter for this VM.
+	// On fresh boot or recovery, the epoch increments. On resume from
+	// hibernate, the epoch stays the same. Callers can use epoch to
+	// detect whether a VM went through a fresh boot vs. a resume,
+	// which prevents duplicate canonical effects (VAL-CROSS-117).
+	Epoch int64 `json:"epoch"`
+
+	// StoppedBy indicates why the VM was stopped. Empty if running.
+	// Valid values: "idle", "logout", "recovery", "manual".
+	StoppedBy string `json:"stopped_by,omitempty"`
 }
 
 // IsReady returns true if the VM is in a state that can serve requests.
@@ -77,6 +101,14 @@ func (o *VMOwnership) IsReady() bool {
 // thread-safe VM assignment with singleflight semantics so that concurrent
 // first requests for the same user collapse onto one VM assignment
 // (VAL-VM-004).
+//
+// The registry also manages lifecycle transitions:
+//   - Idle timeout: VMs idle beyond a configurable threshold transition
+//     to stopped/hibernated state (VAL-VM-008, VAL-CROSS-116).
+//   - Logout teardown: removing ownership on logout (VAL-VM-008).
+//   - Unhealthy recovery: detecting and recovering failed VMs (VAL-VM-009).
+//   - Crash dedup: epoch tracking prevents duplicate canonical effects
+//     across recovery (VAL-CROSS-117).
 type OwnershipRegistry struct {
 	mu sync.RWMutex
 
@@ -94,9 +126,20 @@ type OwnershipRegistry struct {
 	// sandboxURLBase is the base URL pattern for sandbox runtimes.
 	// The VM ID is appended as a path component: base + "/" + vmID
 	sandboxURLBase string
+
+	// idleTimeout is the duration after which a VM with no activity
+	// is eligible for stop/hibernate. Zero means no idle timeout.
+	idleTimeout time.Duration
+
+	// epochCounter tracks the global epoch counter for VM boot tracking.
+	// Each fresh boot or recovery increments this counter, providing a
+	// mechanism to prevent duplicate canonical effects (VAL-CROSS-117).
+	epochCounter int64
 }
 
 // NewOwnershipRegistry creates a new ownership registry.
+// The idleTimeout parameter configures automatic VM stop after inactivity.
+// Zero means no idle timeout (VMs stay active indefinitely).
 func NewOwnershipRegistry(sandboxURLBase string) *OwnershipRegistry {
 	if sandboxURLBase == "" {
 		sandboxURLBase = "http://127.0.0.1:8085"
@@ -106,7 +149,26 @@ func NewOwnershipRegistry(sandboxURLBase string) *OwnershipRegistry {
 		vmByID:         make(map[string]*VMOwnership),
 		pendingWaiters: make(map[string][]chan *VMOwnership),
 		sandboxURLBase: sandboxURLBase,
+		idleTimeout:    0, // no idle timeout by default
+		epochCounter:   1,
 	}
+}
+
+// SetIdleTimeout configures the idle timeout for automatic VM lifecycle
+// management. After this duration of inactivity, VMs are eligible for
+// stop/hibernate (VAL-VM-008, VAL-CROSS-116).
+func (r *OwnershipRegistry) SetIdleTimeout(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.idleTimeout = d
+}
+
+// nextEpoch returns the next epoch value and increments the counter.
+// This is used to track VM boot/recovery generations for crash dedup
+// (VAL-CROSS-117).
+func (r *OwnershipRegistry) nextEpoch() int64 {
+	r.epochCounter++
+	return r.epochCounter
 }
 
 // ResolveOrAssign resolves the VM ownership for the given user. If the user
@@ -128,8 +190,21 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 			return own, nil
 		}
 
-		// VM exists but is not ready (stopped, failed). Create a new one.
-		// Clean up the old mapping.
+		// VM exists but is stopped or hibernated. Resume it instead
+		// of creating a new VM, preserving the user's state and epoch
+		// (VAL-CROSS-116, VAL-CROSS-117).
+		if own.State == VMStateStopped || own.State == VMStateHibernated {
+			// Resume: keep the same VMID, same epoch.
+			own.State = VMStateActive
+			own.LastActiveAt = time.Now()
+			own.StoppedBy = ""
+			r.mu.Unlock()
+			log.Printf("vmctl: resumed VM %s for user %s on resolve (epoch=%d)", own.VMID, userID, own.Epoch)
+			return own, nil
+		}
+
+		// VM exists but failed or is degraded. Create a new one
+		// with a fresh epoch. Clean up the old mapping.
 		delete(r.vmByID, own.VMID)
 	}
 
@@ -158,6 +233,7 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 		State:       VMStateBooting,
 		CreatedAt:   time.Now(),
 		LastActiveAt: time.Now(),
+		Epoch:       r.nextEpoch(),
 	}
 
 	// Register pending waiters map before unlocking so other callers can find it.
@@ -263,6 +339,147 @@ func (r *OwnershipRegistry) MarkUnhealthy(userID string) error {
 	own.LastActiveAt = time.Now()
 	log.Printf("vmctl: marked VM %s unhealthy for user %s", own.VMID, userID)
 	return nil
+}
+
+// HibernateVM transitions the VM for the given user to hibernated state.
+// The VM can be resumed later with ResumeVM, restoring the same user's
+// persisted state (VAL-CROSS-116, VAL-VM-008).
+//
+// The epoch does NOT change on hibernate; it will stay the same on resume,
+// allowing callers to distinguish fresh boot from resume (VAL-CROSS-117).
+func (r *OwnershipRegistry) HibernateVM(userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.ownerships[userID]
+	if !ok {
+		return fmt.Errorf("no VM found for user %s", userID)
+	}
+
+	if own.State != VMStateActive && own.State != VMStateDegraded {
+		return fmt.Errorf("VM %s cannot be hibernated (state=%s)", own.VMID, own.State)
+	}
+
+	own.State = VMStateHibernated
+	own.LastActiveAt = time.Now()
+	own.StoppedBy = "idle"
+	log.Printf("vmctl: hibernated VM %s for user %s (epoch=%d)", own.VMID, userID, own.Epoch)
+	return nil
+}
+
+// ResumeVM resumes a stopped or hibernated VM for the given user,
+// restoring the same user's persisted state (VAL-CROSS-116).
+//
+// The epoch does NOT increment on resume, so callers can detect that
+// this is a resume rather than a fresh boot. This prevents duplicate
+// canonical effects (VAL-CROSS-117).
+func (r *OwnershipRegistry) ResumeVM(userID string) (*VMOwnership, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.ownerships[userID]
+	if !ok {
+		return nil, fmt.Errorf("no VM found for user %s", userID)
+	}
+
+	if own.State != VMStateStopped && own.State != VMStateHibernated {
+		if own.State == VMStateActive || own.State == VMStateBooting {
+			own.LastActiveAt = time.Now()
+			return own, nil
+		}
+		return nil, fmt.Errorf("VM %s cannot be resumed (state=%s)", own.VMID, own.State)
+	}
+
+	// Transition to active. Epoch stays the same for resume (VAL-CROSS-117).
+	// A fresh boot would increment the epoch.
+	own.State = VMStateActive
+	own.LastActiveAt = time.Now()
+	own.StoppedBy = ""
+	log.Printf("vmctl: resumed VM %s for user %s (epoch=%d, same-epoch=resume)", own.VMID, userID, own.Epoch)
+	return own, nil
+}
+
+// RecoverVM recovers an unhealthy or failed VM for the given user.
+// Unlike ResumeVM, RecoverVM creates a fresh boot by incrementing the
+// epoch counter. This signals to callers that any in-flight work from
+// the previous boot should not be retried (VAL-CROSS-117, VAL-VM-009).
+//
+// The persistent user data is preserved across recovery so the user's
+// state survives the crash (VAL-CROSS-116).
+func (r *OwnershipRegistry) RecoverVM(userID string) (*VMOwnership, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.ownerships[userID]
+	if !ok {
+		return nil, fmt.Errorf("no VM found for user %s", userID)
+	}
+
+	if own.State != VMStateDegraded && own.State != VMStateFailed {
+		return nil, fmt.Errorf("VM %s is not in a recoverable state (state=%s)", own.VMID, own.State)
+	}
+
+	// Increment epoch on recovery — this is a fresh boot, not a resume.
+	// The epoch change prevents duplicate canonical effects (VAL-CROSS-117).
+	own.Epoch = r.nextEpoch()
+	own.State = VMStateActive
+	own.LastActiveAt = time.Now()
+	own.StoppedBy = ""
+	log.Printf("vmctl: recovered VM %s for user %s (new_epoch=%d, fresh-boot)", own.VMID, userID, own.Epoch)
+	return own, nil
+}
+
+// LogoutVM handles VM lifecycle transition on user logout. It transitions
+// only the current user's VM to stopped state (VAL-VM-008).
+// Other users' VMs are not affected.
+func (r *OwnershipRegistry) LogoutVM(userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.ownerships[userID]
+	if !ok {
+		return nil // no VM for this user, idempotent
+	}
+
+	own.State = VMStateStopped
+	own.LastActiveAt = time.Now()
+	own.StoppedBy = "logout"
+	log.Printf("vmctl: stopped VM %s for user %s (reason=logout)", own.VMID, userID)
+	return nil
+}
+
+// CheckIdleVMs returns the user IDs whose VMs have exceeded the idle
+// timeout and should be stopped or hibernated (VAL-VM-008).
+// Only VMs in active state are considered.
+func (r *OwnershipRegistry) CheckIdleVMs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.idleTimeout <= 0 {
+		return nil
+	}
+
+	var idle []string
+	now := time.Now()
+	for userID, own := range r.ownerships {
+		if own.State == VMStateActive && now.Sub(own.LastActiveAt) > r.idleTimeout {
+			idle = append(idle, userID)
+		}
+	}
+	return idle
+}
+
+// StopIdleVMs transitions all idle VMs to hibernated state.
+// Returns the number of VMs that were stopped (VAL-VM-008).
+func (r *OwnershipRegistry) StopIdleVMs() int {
+	idleUsers := r.CheckIdleVMs()
+	stopped := 0
+	for _, userID := range idleUsers {
+		if err := r.HibernateVM(userID); err == nil {
+			stopped++
+		}
+	}
+	return stopped
 }
 
 // SetSandboxCredential stores the gateway credential for a VM's sandbox.

@@ -25,7 +25,7 @@ services:
     depends_on: [auth, sandbox, vmctl]
 
   vmctl:
-    start: VMCTL_PORT=8083 VMCTL_SANDBOX_URL_BASE="http://127.0.0.1:8085" go run ./cmd/vmctl
+    start: VMCTL_PORT=8083 VMCTL_SANDBOX_URL_BASE="http://127.0.0.1:8085" VMCTL_IDLE_TIMEOUT="30m" go run ./cmd/vmctl
     stop: lsof -ti :8083 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://127.0.0.1:8083/health
     port: 8083

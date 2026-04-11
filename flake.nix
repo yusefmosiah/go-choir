@@ -99,10 +99,21 @@
         frontend = frontendPkg;
       };
 
+      # Firecracker guest image artifacts (VAL-VM-010).
+      # Builds the repo-built guest kernel and rootfs that Node B boots.
+      # Guest images contain ONLY the sandbox runtime binary — no provider
+      # credentials, no auth signing keys, no gateway secrets (VAL-VM-011).
+      guestImage = import ./nix/guest-image.nix {
+        inherit pkgs goChoirPackages;
+      };
+
     in
     {
       packages.${system} = goChoirPackages // {
         default = self.packages.${system}.auth;
+        # Expose the guest image as a top-level package for easy building:
+        #   nix build .#guest-image
+        inherit (guestImage) guest-image guestRootfs guestKernel;
       };
 
       nixosConfigurations.go-choir-b = nixpkgs.lib.nixosSystem {
