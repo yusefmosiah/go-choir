@@ -78,7 +78,7 @@ let
   # Firecracker-compatible Linux kernel.
   # Firecracker requires an uncompressed ELF kernel (vmlinux).
   # We use the nixpkgs kernel with the required KVM guest config.
-  guestKernel = pkgs.linuxKernel.kernels.linux_6_1.kernel;
+  guestKernel = pkgs.linuxKernel.kernels.linux_6_1;
 
 in
 {
