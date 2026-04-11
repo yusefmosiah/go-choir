@@ -105,8 +105,9 @@ in
   systemd.services.go-choir-proxy = {
     description = "go-choir Proxy Service";
     wantedBy = [ "multi-user.target" ];
-    after = [ "network-online.target" ];
+    after = [ "network-online.target" "go-choir-auth.service" ];
     wants = [ "network-online.target" ];
+    requires = [ "go-choir-auth.service" ];
     serviceConfig = {
       ExecStart = "${goChoirPackages.proxy}/bin/proxy";
       Restart = "on-failure";
