@@ -6,6 +6,8 @@
     - session-aware current-user display
     - bootstrap data from GET /api/shell/bootstrap
     - live-channel status from GET /api/ws
+    - in-shell protected refresh action that triggers renewal when
+      access expires but refresh state is still valid
 
   Does not render or boot any protected traffic until the shell
   component is mounted in the authenticated state.
@@ -17,6 +19,10 @@
       the root App transitions to the guest auth state.
     - The live channel reconnects after successful renewal. If renewal
       fails during reconnection, the shell also dispatches "authexpired".
+    - The in-shell "Refresh" action re-fetches bootstrap data via
+      fetchWithRenewal. When access is expired but refresh is valid,
+      this triggers refresh rotation without a page reload. When both
+      are invalid, the shell falls back cleanly to guest auth state.
 
   Data attributes for test targeting:
     data-shell               — root container
@@ -25,6 +31,8 @@
     data-shell-user          — current user display
     data-shell-bootstrap     — bootstrap data section
     data-shell-live-status   — live channel status indicator
+    data-shell-refresh       — in-shell protected refresh action button
+    data-shell-refresh-status — renewal status indicator next to refresh
 -->
 <script>
   import { createEventDispatcher } from 'svelte';
@@ -48,6 +56,13 @@
 
   /** WebSocket reference. */
   let ws = null;
+
+  // ----- In-shell refresh / renewal state -----
+  /** Whether an in-shell refresh is in progress. */
+  let refreshing = false;
+
+  /** Status message from the last in-shell refresh attempt. */
+  let refreshStatus = '';
 
   // ----- WS reconnection state -----
   /** Whether the WS was closed intentionally (logout). */
@@ -83,6 +98,43 @@
         return;
       }
       bootstrapError = 'Bootstrap request failed';
+    }
+  }
+
+  /**
+   * In-shell protected action: re-fetches bootstrap data via
+   * fetchWithRenewal. When the access JWT is expired but the refresh
+   * cookie is still valid, this triggers refresh rotation through
+   * GET /auth/session without a page reload. If renewal fails, the
+   * shell dispatches "authexpired" so the app falls back to guest
+   * auth state cleanly.
+   */
+  async function handleRefresh() {
+    refreshing = true;
+    refreshStatus = '';
+    bootstrapError = '';
+
+    try {
+      const res = await fetchWithRenewal('/api/shell/bootstrap', {
+        method: 'GET',
+      });
+      if (!res.ok) {
+        bootstrapError = `Bootstrap failed (${res.status})`;
+        refreshStatus = 'Refresh failed';
+        return;
+      }
+      bootstrapData = await res.json();
+      refreshStatus = 'Session renewed';
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        // Renewal failed — fall back to guest auth state.
+        dispatch('authexpired');
+        return;
+      }
+      bootstrapError = 'Bootstrap request failed';
+      refreshStatus = 'Refresh failed';
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -214,6 +266,14 @@
       {:else}
         <p class="panel-loading">Loading bootstrap data…</p>
       {/if}
+      <div class="refresh-row">
+        <button class="refresh-btn" data-shell-refresh on:click={handleRefresh} disabled={refreshing}>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {#if refreshStatus}
+          <span class="refresh-status" data-shell-refresh-status>{refreshStatus}</span>
+        {/if}
+      </div>
     </section>
 
     <section class="panel live-panel" data-shell-live-status>
@@ -412,5 +472,40 @@
   .desktop-placeholder {
     color: #555;
     font-size: 0.9rem;
+  }
+
+  /* ---- Refresh row ---- */
+  .refresh-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+
+  .refresh-btn {
+    padding: 0.35rem 0.9rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .refresh-btn:hover:not(:disabled) {
+    background: rgba(96, 165, 250, 0.2);
+    border-color: rgba(96, 165, 250, 0.4);
+  }
+
+  .refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .refresh-status {
+    font-size: 0.8rem;
+    color: #4ade80;
   }
 </style>
