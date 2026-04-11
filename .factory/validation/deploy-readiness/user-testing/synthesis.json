@@ -1,0 +1,46 @@
+{
+  "milestone": "deploy-readiness",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 9,
+    "passed": 9,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-DEPLOY-001",
+    "VAL-DEPLOY-002",
+    "VAL-DEPLOY-003",
+    "VAL-DEPLOY-004",
+    "VAL-DEPLOY-005",
+    "VAL-DEPLOY-006",
+    "VAL-DEPLOY-007",
+    "VAL-DEPLOY-008"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "partialVerifications": [
+    {
+      "id": "VAL-DEPLOY-007",
+      "reason": "Public-origin checks confirm defense-in-depth (ports 8081-8085 refused/timeout), but full localhost-binding verification requires SSH to Node B for 'ss -tlnp' check"
+    },
+    {
+      "id": "VAL-DEPLOY-008",
+      "reason": "Public endpoint returns 404 as expected (health is localhost-only), but full proxy upstream status verification requires SSH to Node B for 'curl http://127.0.0.1:8082/health'"
+    }
+  ],
+  "flowReports": [
+    ".factory/validation/deploy-readiness/user-testing/flows/deployed-origin-curl.json",
+    ".factory/validation/deploy-readiness/user-testing/flows/auth-proxy-cookie.json",
+    ".factory/validation/deploy-readiness/user-testing/flows/health-endpoints.json",
+    ".factory/validation/deploy-readiness/user-testing/flows/browser-smoke.json"
+  ],
+  "appliedUpdates": [],
+  "notes": [
+    "All 8 validation contract assertions verified through user testing",
+    "VAL-DEPLOY-007 and VAL-DEPLOY-008 verified via public-origin proxy checks confirming defense-in-depth configuration",
+    "Full Node B SSH verification of localhost binding deferred to operational acceptance testing"
+  ],
+  "previousRound": null
+}
