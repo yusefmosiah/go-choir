@@ -1,0 +1,36 @@
+{
+  "featureId": "etext-authoring-and-history-ui",
+  "reviewedAt": "2026-04-11T09:45:00.000Z",
+  "commitId": "d48271a",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The e-text authoring and history UI implementation is comprehensive and well-structured. All 8 validation assertions (VAL-ETEXT-001 through VAL-ETEXT-010) are fully implemented and covered by 9 Playwright tests. The implementation follows established patterns: cookie-backed auth via fetchWithRenewal, proper error handling with AuthRequiredError, data attributes for test targeting, and clean separation of concerns between the API client (etext.js) and UI component (ETextEditor.svelte). The proxy routing correctly adds auth-gated /api/etext/* endpoints.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "services",
+      "observation": "No .factory/services.yaml file exists in the repository. The mission documentation references this file but it is not present. The worker proceeded without it, suggesting either the file should be created or documentation should be updated.",
+      "evidence": "Read attempt on /Users/wiz/go-choir/.factory/services.yaml returned ENOENT error during evidence gathering."
+    },
+    {
+      "area": "library",
+      "observation": "The worker created a new library file .factory/library/etext-authoring-ui.md documenting the e-text UI conventions, data attributes, and API contracts. This is good practice for preserving knowledge.",
+      "evidence": "frontend/.factory/library/etext-authoring-ui.md was added in commit d48271a with 82 lines of documentation."
+    },
+    {
+      "area": "skills",
+      "observation": "The worker followed the frontend-worker skill procedure correctly. The skillFeedback in the handoff indicates followedProcedure: true with no deviations.",
+      "evidence": "Handoff shows skillFeedback.followedProcedure: true and empty deviations array."
+    },
+    {
+      "area": "conventions",
+      "observation": "ETextEditor.svelte includes comprehensive data attributes for Playwright test targeting (data-etext-editor, data-etext-doclist, etc.). This follows the established pattern from other desktop components and should be documented as a project convention.",
+      "evidence": "ETextEditor.svelte header comment lists 15 data attributes for test targeting, following the same pattern as Desktop.svelte."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The etext-authoring-and-history-ui feature passes review. Implementation covers all expected behaviors: document creation, direct user edits with canonical revision saving, reload/fresh-session durability, history with attribution, snapshot viewing without head mutation, diff and blame views, and citations/metadata persistence. All 8 validation assertions (VAL-ETEXT-001 through VAL-ETEXT-010) are addressed. The 9 Playwright tests provide comprehensive coverage. Code quality is high with proper error handling, auth integration via fetchWithRenewal, and clean component architecture. Minor observation: .factory/services.yaml is referenced but does not exist."
+}

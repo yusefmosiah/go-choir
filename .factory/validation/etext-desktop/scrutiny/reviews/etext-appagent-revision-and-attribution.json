@@ -1,0 +1,32 @@
+{
+  "featureId": "etext-appagent-revision-and-attribution",
+  "reviewedAt": "2026-04-11T12:00:00Z",
+  "commitId": "89043759fa3b712ef02fa91668a22969282753b6",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly delivers all five contract assertions: (1) VAL-ETEXT-003 - agent revision creates canonical appagent-authored revisions via the handleTaskCompletion hook; (2) VAL-ETEXT-004 - live progress events with doc_id correlation; (3) VAL-CROSS-119 - end-to-end attribution preservation in history; (4) VAL-CROSS-120 - no worker authorship (only user/appagent as canonical authors); (5) VAL-CROSS-122 - idempotent mutation tracking preventing duplicates on renewal/retry. The worker followed the go-worker skill procedure, added comprehensive tests (9 runtime tests, 7 store tests, 1 type test), and all validators pass.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "Worker created .factory/library/etext-agent-revision.md documenting the feature's architecture, idempotency mechanism, event vocabulary, and key design decisions. This is excellent practice that should be encouraged for complex features.",
+      "evidence": "File .factory/library/etext-agent-revision.md created with comprehensive documentation covering VAL-ETEXT-003, VAL-ETEXT-004, VAL-CROSS-119, VAL-CROSS-120, VAL-CROSS-122 implementations."
+    },
+    {
+      "area": "conventions",
+      "observation": "The implementation follows the established pattern of using 'INSERT OR IGNORE' for idempotent operations, matching the existing task submission pattern seen in the runtime store.",
+      "evidence": "internal/store/etext.go:297-314 uses INSERT OR IGNORE for CreateAgentMutation, similar to how runtime store handles task creation."
+    },
+    {
+      "area": "patterns",
+      "observation": "The handleTaskCompletion hook pattern for feature-specific side effects is a clean extension point that keeps the runtime generic while allowing features to respond to task completion.",
+      "evidence": "internal/runtime/runtime.go:336-395 - handleTaskCompletion is called after both executeWithToolLoop and executeWithProvider, with etext-specific logic cleanly separated."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature passes review. The e-text appagent revision flow is fully implemented with prompt-driven canonical revisions, live progress events, idempotent mutation tracking, and correct user-vs-appagent attribution. All 17 new tests pass, the frontend integration is complete, and documentation was added to the library."
+}
+</invoke>

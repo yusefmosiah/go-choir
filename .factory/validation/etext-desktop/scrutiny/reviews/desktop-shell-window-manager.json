@@ -1,0 +1,66 @@
+{
+  "featureId": "desktop-shell-window-manager",
+  "reviewedAt": "2026-04-11T09:30:00Z",
+  "commitId": "7f4941c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Comprehensive implementation of the desktop shell window manager feature. The worker replaced the placeholder Shell.svelte with a full desktop environment including launcher, window lifecycle (focus/z-order, drag/resize, minimize/maximize/restore, close/reopen), and server-backed desktop state persistence. All 7 VAL-DESKTOP assertions are covered by the implementation and verified through 10 new Playwright tests plus 6 Go backend tests. The implementation follows established project patterns: same-origin cookie-backed auth, proxy-routed API requests, SQLite persistence with modernc.org/sqlite, and proper auth-gating with user isolation. Backward compatibility is maintained through dual data-shell/data-desktop attributes.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "The worker created `.factory/library/desktop-shell.md` documenting the new desktop shell architecture. This is a useful addition but was not explicitly required by AGENTS.md or skill files. The documentation covers: component architecture (Desktop, Window, Launcher), API contracts, persistence schema, and test selectors. This pattern should be encouraged for future complex features.",
+      "evidence": ".factory/library/desktop-shell.md: new file with 67 lines documenting the window manager architecture, persistence schema, and test selectors"
+    },
+    {
+      "area": "conventions",
+      "observation": "The worker correctly followed the SQLite persistence pattern documented in AGENTS.md: using `modernc.org/sqlite`, WAL mode, and `SetMaxOpenConns(1)`. The desktop_state table follows the existing pattern with owner_id as primary key for per-user isolation.",
+      "evidence": "internal/store/store.go: added desktop_state DDL with standard SQLite patterns, GetDesktopState/SaveDesktopState methods using WAL mode and SetMaxOpenConns(1)"
+    },
+    {
+      "area": "conventions",
+      "observation": "The worker correctly maintained backward compatibility by preserving `data-shell` attributes alongside new `data-desktop` attributes. This allows existing Playwright tests to continue working without modification.",
+      "evidence": "frontend/src/lib/Desktop.svelte: uses both data-desktop and data-shell attributes; frontend/src/lib/Launcher.svelte and Window.svelte use data-* selectors for test targeting"
+    },
+    {
+      "area": "services",
+      "observation": "The new `/api/desktop/state` endpoint was properly added to proxy routing in internal/proxy/handlers.go, following the existing pattern for runtime API routes. The services.yaml doesn't need updating as it describes service startup, not API routes.",
+      "evidence": "internal/proxy/handlers.go: added `/api/desktop/state` to the sandbox-routed paths alongside `/api/agent/task`, `/api/agent/status`, `/api/events`"
+    },
+    {
+      "area": "skills",
+      "observation": "The worker followed the frontend-worker skill procedure correctly: read contracts first, wrote failing Playwright tests before implementation, implemented the smallest browser slice, verified with agent-browser visual checks, and ran all validators. No deviations were recorded.",
+      "evidence": "handoff.skillFeedback: {\"followedProcedure\": true, \"deviations\": []}"
+    },
+    {
+      "area": "patterns",
+      "observation": "The desktop state API correctly uses `fetchWithRenewal` for auth-gated requests, following the established pattern from auth.js. The API properly dispatches 'authexpired' events on auth failures, maintaining consistency with Shell.svelte behavior.",
+      "evidence": "frontend/src/lib/desktop.js: uses fetchWithRenewal and throws AuthRequiredError; frontend/src/lib/Desktop.svelte: catches AuthRequiredError and dispatches 'authexpired'"
+    },
+    {
+      "area": "patterns",
+      "observation": "The Window component implements proper window state management with restoredGeometry preservation for maximize/restore behavior. This is a thoughtful implementation detail not explicitly required but important for good UX.",
+      "evidence": "frontend/src/lib/Window.svelte: maintains restoredGeometry state before maximize, uses it during restore operation"
+    },
+    {
+      "area": "verification",
+      "observation": "The worker added comprehensive Playwright coverage: 10 new tests in desktop-window-manager.spec.js covering all 7 VAL-DESKTOP assertions plus logout and signed-out state verification. Also added 6 Go backend tests for the desktop state API and store methods.",
+      "evidence": "frontend/tests/desktop-window-manager.spec.js: 10 test cases; internal/runtime/desktop_test.go: 6 test cases; internal/store/desktop_test.go: 5 test cases"
+    },
+    {
+      "area": "verification",
+      "observation": "All 110 Playwright tests pass (100 existing + 10 new), demonstrating that the implementation doesn't break existing functionality. This validates the backward compatibility claim.",
+      "evidence": "handoff.verification.commandsRun: \"All 110 Playwright tests pass including all existing tests and all new desktop tests\""
+    },
+    {
+      "area": "architecture",
+      "observation": "The desktop state persistence uses a debounced save mechanism (500ms) to avoid excessive database writes during rapid window operations like drag/resize. This is a performance-conscious design decision.",
+      "evidence": "frontend/src/lib/Desktop.svelte: scheduleSave() uses 500ms debounce via setTimeout"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The desktop-shell-window-manager feature is fully implemented and verified. The worker delivered a complete window manager with launcher, lifecycle management, and server-backed persistence. All 7 validation assertions (VAL-DESKTOP-001 through VAL-DESKTOP-007) are satisfied. The implementation follows project conventions: same-origin auth, SQLite persistence, proxy-routed APIs, and proper test coverage. The worker also created useful documentation in .factory/library/desktop-shell.md. No blocking issues found. Status: PASS."
+}

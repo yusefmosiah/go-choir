@@ -430,9 +430,10 @@ func (s *Store) GetDiff(ctx context.Context, fromRevID, toRevID, ownerID string)
 
 	added, removed := 0, 0
 	for _, sec := range sections {
-		if sec.Type == "added" {
+		switch sec.Type {
+		case "added":
 			added++
-		} else if sec.Type == "removed" {
+		case "removed":
 			removed++
 		}
 	}
