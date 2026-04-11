@@ -235,6 +235,13 @@ in
       Restart = "on-failure";
       RestartSec = 3;
       WatchdogSec = 30;
+      # Provider credentials are injected via an EnvironmentFile that lives
+      # in a writable runtime location outside the Nix store. The file is
+      # created/updated by the deploy script and never committed to git.
+      # This satisfies VAL-GATEWAY-004 and VAL-OPS-006: credentials stay
+      # out of the repo, the Nix store, and guest-visible surfaces.
+      EnvironmentFile = "-/var/lib/go-choir/gateway-provider.env";
+      ReadWritePaths = [ "/var/lib/go-choir" ];
       Environment = [
         "GATEWAY_PORT=8084"
       ];

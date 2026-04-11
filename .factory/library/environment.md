@@ -40,8 +40,12 @@ Environment variables, external dependencies, and setup notes.
 - `RUNTIME_BEDROCK_MODEL` — Bedrock model ID override (defaults to `us.anthropic.claude-sonnet-4-5-20250514-v1:0`)
 - `ZAI_API_KEY` — API key for Z.AI's Anthropic-compatible endpoint at `https://api.z.ai/api/anthropic`
 - `RUNTIME_ZAI_MODEL` — Z.AI model ID override (defaults to `glm-4.7`)
-- Provider resolution: Bedrock is preferred if `AWS_BEARER_TOKEN_BEDROCK` is set; Z.AI is used if only `ZAI_API_KEY` is set; otherwise the stub provider is used
+- `FIREWORKS_API_KEY` — API key for Fireworks AI's Anthropic-compatible endpoint at `https://api.fireworks.ai/inference`
+- `RUNTIME_FIREWORKS_MODEL` — Fireworks AI model ID override (defaults to `accounts/fireworks/models/llama4-maverick-instruct-basic`)
+- `FIREWORKS_BASE_URL` — Override base URL for Fireworks AI (defaults to `https://api.fireworks.ai/inference`)
+- Provider resolution: Bedrock is preferred if `AWS_BEARER_TOKEN_BEDROCK` is set; Z.AI is used if only `ZAI_API_KEY` is set; Fireworks is used if only `FIREWORKS_API_KEY` is set; otherwise the stub provider is used
 - provider secrets must be injected from host runtime configuration, not committed to the repo and not baked into guest images
+- On Node B, provider credentials are injected via an EnvironmentFile at `/var/lib/go-choir/gateway-provider.env` which is created by the deploy helper script and never committed to git or the Nix store
 - Error responses from providers are sanitized: raw response bodies are never included in error messages to avoid leaking credentials or provider details
 
 ### VM runtime

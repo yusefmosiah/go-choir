@@ -333,6 +333,7 @@ func TestResolveProviderFallsBackToZAI(t *testing.T) {
 func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
 	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("FIREWORKS_API_KEY", "")
 
 	p, err := ResolveProvider()
 	if err != nil {
@@ -340,6 +341,58 @@ func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
 	}
 	if p != nil {
 		t.Errorf("expected nil provider when no credentials, got: %s", p.Name())
+	}
+}
+
+func TestResolveProviderFallsBackToFireworks(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
+	t.Setenv("RUNTIME_FIREWORKS_MODEL", "accounts/fireworks/models/test-model")
+
+	p, err := ResolveProvider()
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if p.Name() != "fireworks" {
+		t.Errorf("expected fireworks, got: %s", p.Name())
+	}
+}
+
+func TestFireworksProviderFromEnvMissingKey(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "")
+
+	_, err := NewFireworksProviderFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "api key") {
+		t.Errorf("expected api key error, got: %v", err)
+	}
+}
+
+func TestFireworksProviderFromEnvDefaultsModel(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
+	t.Setenv("RUNTIME_FIREWORKS_MODEL", "")
+
+	p, err := NewFireworksProviderFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.modelID != "accounts/fireworks/models/llama4-maverick-instruct-basic" {
+		t.Errorf("expected default model, got: %s", p.modelID)
+	}
+}
+
+func TestFireworksProviderFromEnvCustomBaseURL(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
+	t.Setenv("RUNTIME_FIREWORKS_MODEL", "test-model")
+	t.Setenv("FIREWORKS_BASE_URL", "https://custom.example.com/api")
+
+	p, err := NewFireworksProviderFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.baseURL != "https://custom.example.com/api" {
+		t.Errorf("expected custom base URL, got: %s", p.baseURL)
 	}
 }
 

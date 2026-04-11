@@ -100,7 +100,7 @@ func TestManagerBuildFirecrackerConfig_NoSecrets(t *testing.T) {
 	forbidden := []string{
 		"Bearer", "AWS_", "SECRET", "PASSWORD", "TOKEN",
 		"api_key", "apiKey", "api-key",
-		"ZAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+		"ZAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FIREWORKS_API_KEY",
 	}
 	for _, pattern := range forbidden {
 		if contains(fcConfig, pattern) {

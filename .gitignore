@@ -17,6 +17,7 @@
 # Environment
 .env
 .env.local
+gateway-provider.env
 
 # Dolt databases (per-user, not committed)
 *.dolt/

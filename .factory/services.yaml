@@ -8,6 +8,7 @@ commands:
   frontend-e2e: cd frontend && pnpm exec playwright test --workers=1
   nix-eval: nix flake show .
   public-smoke: curl -sf https://draft.choir-ip.com
+  deploy-provider-creds: ./nix/deploy-provider-creds.sh
 
 services:
   auth:

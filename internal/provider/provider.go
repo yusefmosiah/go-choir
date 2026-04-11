@@ -1,7 +1,8 @@
 // Package provider implements real LLM provider bridges for the go-choir
 // sandbox runtime. It supports Bedrock (Anthropic Messages API over AWS
-// Bedrock invoke endpoint) and Z.AI (Anthropic-compatible API) as the first
-// required real-provider paths for Mission 3.
+// Bedrock invoke endpoint), Z.AI (Anthropic-compatible API), and Fireworks AI
+// (Anthropic-compatible API) as the first required real-provider paths for
+// Mission 3.
 //
 // Design decisions:
 //   - Provider credentials are read from environment variables only; they are
@@ -15,6 +16,8 @@
 //     matching the pattern established in choiros-rs.
 //   - Z.AI uses an Anthropic-compatible API at https://api.z.ai/api/anthropic
 //     with bearer auth via ZAI_API_KEY.
+//   - Fireworks AI uses an Anthropic-compatible API at
+//     https://api.fireworks.ai/inference with bearer auth via FIREWORKS_API_KEY.
 package provider
 
 import (
@@ -376,6 +379,116 @@ func (p *ZAIProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	return ar
 }
 
+// FireworksProvider implements the Provider interface for Fireworks AI
+// using the Anthropic-compatible API at https://api.fireworks.ai/inference.
+type FireworksProvider struct {
+	apiKey     string // loaded at init time, never logged
+	modelID   string
+	httpClient *http.Client
+	baseURL    string
+}
+
+// FireworksConfig holds configuration for creating a FireworksProvider.
+type FireworksConfig struct {
+	APIKey  string
+	ModelID string
+	BaseURL string // defaults to https://api.fireworks.ai/inference
+}
+
+// NewFireworksProvider creates a Fireworks provider from the given config.
+func NewFireworksProvider(cfg FireworksConfig) (*FireworksProvider, error) {
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("fireworks provider requires api key")
+	}
+	if cfg.ModelID == "" {
+		return nil, fmt.Errorf("fireworks provider requires model_id")
+	}
+
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.fireworks.ai/inference"
+	}
+
+	return &FireworksProvider{
+		apiKey:     cfg.APIKey,
+		modelID:   cfg.ModelID,
+		httpClient: &http.Client{Timeout: 120 * time.Second},
+		baseURL:   strings.TrimRight(baseURL, "/"),
+	}, nil
+}
+
+// NewFireworksProviderFromEnv creates a Fireworks provider from environment
+// variables: FIREWORKS_API_KEY, RUNTIME_FIREWORKS_MODEL, and optionally
+// FIREWORKS_BASE_URL.
+func NewFireworksProviderFromEnv() (*FireworksProvider, error) {
+	apiKey := os.Getenv("FIREWORKS_API_KEY")
+	modelID := os.Getenv("RUNTIME_FIREWORKS_MODEL")
+	if modelID == "" {
+		modelID = "accounts/fireworks/models/llama4-maverick-instruct-basic"
+	}
+	baseURL := os.Getenv("FIREWORKS_BASE_URL")
+
+	p, err := NewFireworksProvider(FireworksConfig{
+		APIKey:  apiKey,
+		ModelID: modelID,
+		BaseURL: baseURL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fireworks from env: %w", err)
+	}
+	return p, nil
+}
+
+func (p *FireworksProvider) Name() string { return "fireworks" }
+func (p *FireworksProvider) IsReal() bool { return true }
+
+// Call sends the request to Fireworks AI's Anthropic-compatible endpoint.
+func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	endpoint := p.baseURL + "/v1/messages"
+
+	body := p.buildRequestBody(req)
+
+	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("fireworks: build request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+
+	log.Printf("provider: fireworks call model=%s", p.modelID)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("fireworks: http call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return parseAnthropicResponse(resp, p.modelID, "fireworks")
+}
+
+func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
+	ar := anthropicRequest{
+		Model:            p.modelID,
+		MaxTokens:        defaultMaxTokens(req.MaxTokens),
+		AnthropicVersion: "2023-06-01",
+		Stream:           false,
+	}
+
+	if req.System != "" {
+		ar.System = []anthropicSystemBlock{{
+			Type: "text",
+			Text: req.System,
+		}}
+	}
+
+	ar.Messages = convertMessages(req.Messages)
+	ar.Tools = convertToolDefs(req.Tools)
+	return ar
+}
+
 // --- Shared types and helpers ---
 
 type anthropicRequest struct {
@@ -650,8 +763,9 @@ func canonicalJSON(raw json.RawMessage) json.RawMessage {
 
 // ResolveProvider creates the configured real provider from environment
 // variables. It tries Bedrock first (if AWS_BEARER_TOKEN_BEDROCK is set),
-// then Z.AI (if ZAI_API_KEY is set). If neither is configured, it returns
-// nil, indicating that the stub provider should be used instead.
+// then Z.AI (if ZAI_API_KEY is set), then Fireworks (if FIREWORKS_API_KEY
+// is set). If none is configured, it returns nil, indicating that the stub
+// provider should be used instead.
 //
 // This preserves the later gateway boundary: the runtime does not directly
 // expose provider credentials to the browser; it only uses them internally.
@@ -675,6 +789,16 @@ func ResolveProvider() (Provider, error) {
 			return nil, fmt.Errorf("resolve provider: %w", err)
 		}
 		log.Printf("provider: resolved zai (model=%s)", p.modelID)
+		return p, nil
+	}
+
+	// Try Fireworks.
+	if os.Getenv("FIREWORKS_API_KEY") != "" {
+		p, err := NewFireworksProviderFromEnv()
+		if err != nil {
+			return nil, fmt.Errorf("resolve provider: %w", err)
+		}
+		log.Printf("provider: resolved fireworks (model=%s)", p.modelID)
 		return p, nil
 	}
 
