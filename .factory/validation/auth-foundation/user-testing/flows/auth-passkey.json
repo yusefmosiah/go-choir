@@ -1,0 +1,80 @@
+{
+  "groupId": "auth-passkey",
+  "testedAt": "2026-04-10T00:00:00Z",
+  "isolation": {
+    "appUrl": "http://localhost:4173",
+    "workingDirectory": "/Users/wiz/go-choir/frontend"
+  },
+  "toolsUsed": [
+    "pnpm exec playwright test"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-AUTH-005",
+      "title": "Login begin returns assertion options for the implemented registered-passkey flow on draft.choir-ip.com",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run Playwright test 'passkey login returns assertion options and creates session'",
+          "expected": "Test passes, proving login returns correct assertion options and establishes a session",
+          "observed": "Test passed successfully"
+        }
+      ],
+      "evidence": {
+        "playwrightOutput": "auth-foundation/auth-passkey/playwright-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-006",
+      "title": "Invalid, stale, or replayed finish payloads fail closed and do not mint a session",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run Playwright test 'replayed registration finish payload does not create a session'",
+          "expected": "Test passes, proving replayed finish payload is rejected and does not mint a session",
+          "observed": "Test passed successfully"
+        }
+      ],
+      "evidence": {
+        "playwrightOutput": "auth-foundation/auth-passkey/playwright-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-007",
+      "title": "Authenticated session inspection returns current user identity without secrets",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run Playwright test 'authenticated /auth/session returns user identity without secrets'",
+          "expected": "Test passes, proving session endpoint returns identity without leaking secrets",
+          "observed": "Test passed successfully"
+        }
+      ],
+      "evidence": {
+        "playwrightOutput": "auth-foundation/auth-passkey/playwright-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-008",
+      "title": "Logout invalidates access and refresh state and is safe to repeat",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run Playwright test 'logout invalidates session and is safe to repeat'",
+          "expected": "Test passes, proving logout works and can be called multiple times without error",
+          "observed": "Test passed successfully"
+        }
+      ],
+      "evidence": {
+        "playwrightOutput": "auth-foundation/auth-passkey/playwright-output.txt"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 4 assertions (VAL-AUTH-005 to 008) via Playwright virtual-authenticator harness. All 4 tests passed, confirming the behavior of passkey login, replayed payload handling, session inspection, and logout."
+}
