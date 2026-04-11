@@ -118,6 +118,13 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("runtime store: bootstrap: %w", err)
 	}
 
+	// Also apply the e-text schema so the runtime store can serve
+	// e-text operations alongside task/event/desktop state.
+	if err := s.EnsureEtextSchema(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("runtime store: bootstrap etext: %w", err)
+	}
+
 	return s, nil
 }
 
