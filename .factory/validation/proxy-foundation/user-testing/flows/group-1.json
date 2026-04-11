@@ -1,0 +1,81 @@
+{
+  "groupId": "group-1",
+  "testedAt": "2026-04-11T01:08:20.596Z",
+  "isolation": {
+    "proxy": "127.0.0.1:8082",
+    "frontend": "localhost:4173",
+    "missionDir": "/Users/wiz/.factory/missions/22db610a-5743-4016-a102-a5a399f17f23"
+  },
+  "toolsUsed": [
+    "curl",
+    "playwright"
+  ],
+  "assertions": [
+    {
+      "id": "VAL-PROXY-001",
+      "title": "The protected shell bootstrap route denies missing or invalid auth",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "curl without cookie",
+          "expected": "401/403 denied",
+          "observed": "Denied"
+        },
+        {
+          "action": "curl with bogus cookie",
+          "expected": "401/403 denied",
+          "observed": "Denied"
+        }
+      ],
+      "evidence": {
+        "network": "curl transcripts: proxy-foundation/group-1/VAL-PROXY-001-missing-auth.txt, VAL-PROXY-001-bogus-auth.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-PROXY-002",
+      "title": "Authenticated HTTP proxying preserves request and upstream response behavior",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "curl with valid auth, POST body, query param",
+          "expected": "Upstream echo preserving inputs",
+          "observed": "Echod correctly"
+        },
+        {
+          "action": "curl to non-existent route for non-2xx",
+          "expected": "404 passed through",
+          "observed": "Passed through correctly"
+        }
+      ],
+      "evidence": {
+        "network": "curl transcripts: proxy-foundation/group-1/VAL-PROXY-002-auth-bootstrap.txt, VAL-PROXY-002-non-2xx.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-PROXY-005",
+      "title": "The hardcoded placeholder sandbox receives the current authenticated user context and ignores client-spoofed identity headers",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "curl as user1 with spoofed header",
+          "expected": "Reflects user1, strips spoof",
+          "observed": "Correct"
+        },
+        {
+          "action": "curl as user2 with spoofed header",
+          "expected": "Reflects user2, strips spoof",
+          "observed": "Correct"
+        }
+      ],
+      "evidence": {
+        "network": "curl transcripts: proxy-foundation/group-1/VAL-PROXY-005-user1.txt, VAL-PROXY-005-user2.txt"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 3 assertions: 3 passed"
+}
