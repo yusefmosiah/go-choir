@@ -128,7 +128,6 @@ in
   #
   # Restart and recovery behavior (VAL-DEPLOY-008 / VAL-CROSS-118):
   # - Each service uses Restart=on-failure with a 3-second backoff.
-  # - A systemd watchdog (WatchdogSec=30) detects stuck services.
   # - Proxy depends on auth and sandbox; auth and sandbox restart
   #   independently. After an auth restart, existing access JWTs remain
   #   valid because the signing key file persists across restarts. After
@@ -137,6 +136,9 @@ in
   # - Auth sessions are persisted in SQLite, so session state survives
   #   auth restart. Browser users either rehydrate via refresh-token
   #   rotation or fall back safely to the guest state.
+  # - WatchdogSec is intentionally NOT set because the Go server package
+  #   does not send sd_notify keepalives. Adding WatchdogSec without
+  #   sd_notify causes the service to be killed every 30 seconds.
 
   systemd.services.go-choir-auth = {
     description = "go-choir Auth Service";
@@ -148,7 +150,6 @@ in
       ExecStart = "${goChoirPackages.auth}/bin/auth";
       Restart = "on-failure";
       RestartSec = 3;
-      WatchdogSec = 30;
       StateDirectory = "go-choir/auth";
       # Read-write paths for auth persistence and signing key.
       ReadWritePaths = [ "/var/lib/go-choir/auth" "/var/lib/go-choir/auth-signing" ];
@@ -175,7 +176,6 @@ in
       ExecStart = "${goChoirPackages.proxy}/bin/proxy";
       Restart = "on-failure";
       RestartSec = 3;
-      WatchdogSec = 30;
       # Proxy needs to read the auth signing public key.
       ReadWritePaths = [ "/var/lib/go-choir/auth-signing" ];
       Environment = [
@@ -199,7 +199,6 @@ in
       ExecStart = "${goChoirPackages.vmctl}/bin/vmctl";
       Restart = "on-failure";
       RestartSec = 3;
-      WatchdogSec = 30;
       # VM state directory for Firecracker VM persistence and epoch tracking.
       # Persistent user data in VMs is stored here and survives stop/resume
       # cycles (VAL-CROSS-116). Provider credentials are NEVER written here
@@ -234,7 +233,6 @@ in
       ExecStart = "${goChoirPackages.gateway}/bin/gateway";
       Restart = "on-failure";
       RestartSec = 3;
-      WatchdogSec = 30;
       # Provider credentials are injected via an EnvironmentFile that lives
       # in a writable runtime location outside the Nix store. The file is
       # created/updated by the deploy script and never committed to git.
@@ -295,7 +293,6 @@ in
       ExecStart = "${goChoirPackages.sandbox}/bin/sandbox";
       Restart = "on-failure";
       RestartSec = 3;
-      WatchdogSec = 30;
       # Read the gateway token obtained by ExecStartPre.
       EnvironmentFile = "-/var/lib/go-choir/sandbox-gateway-token.env";
       ReadWritePaths = [ "/var/lib/go-choir" ];
