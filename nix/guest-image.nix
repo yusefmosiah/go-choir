@@ -256,7 +256,7 @@ let
       echo "write ${goChoirPackages.sandbox}/bin/sandbox bin/sandbox"
 
       # Copy the init script.
-      echo "write ${guestRoot}/bin/init bin/init"
+      echo "write ${guestInitScript}/bin/guest-init bin/init"
 
       # Copy networking utilities.
       echo "write ${pkgs.iproute2}/bin/ip bin/ip"
@@ -270,8 +270,8 @@ let
       echo "write ${pkgs.coreutils}/bin/cut bin/cut"
       echo "write ${pkgs.gnugrep}/bin/grep bin/grep"
 
-      # Copy resolv.conf.
-      echo "write ${guestRoot}/etc/resolv.conf etc/resolv.conf"
+      # Copy resolv.conf (inline content, not from guestRoot derivation).
+      echo "write /etc/resolv.conf etc/resolv.conf"
     } > /tmp/debugfs.cmds
 
     debugfs -w -f /tmp/debugfs.cmds $out
