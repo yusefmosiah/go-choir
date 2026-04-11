@@ -14,6 +14,7 @@
  *   GET    /api/etext/documents/{id}/history — revision history
  *   GET    /api/etext/diff?from=X&to=Y    — diff two revisions
  *   GET    /api/etext/revisions/{id}/blame — blame revision
+ *   POST   /api/etext/documents/{id}/agent-revision — submit agent revision
  *
  * All requests use cookie-backed auth via fetchWithRenewal so that:
  *   - expired access tokens are silently renewed before retry
@@ -295,6 +296,46 @@ export async function getBlame(revisionId) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Get blame failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Agent revision
+// ---------------------------------------------------------------------------
+
+/**
+ * Submits an agent revision request for a document (VAL-ETEXT-003).
+ *
+ * Submitting a natural-language revision request creates a runtime task
+ * that, when completed, creates a canonical appagent-authored revision.
+ * Returns a stable task handle so the client can track progress through
+ * the event stream (VAL-ETEXT-004).
+ *
+ * If a pending agent mutation already exists for this document (e.g.,
+ * from a previous request that is still in-flight), the existing task
+ * ID is returned instead of creating a new mutation, preventing
+ * duplicate canonical revisions (VAL-CROSS-122).
+ *
+ * Uses fetchWithRenewal so renewal/retry does not duplicate the
+ * mutation (VAL-CROSS-122).
+ *
+ * @param {string} docId - The document ID.
+ * @param {string} prompt - The natural-language revision request.
+ * @returns {Promise<{task_id: string, doc_id: string, state: string, created_at: string}>}
+ * @throws {AuthRequiredError} If auth renewal fails.
+ */
+export async function submitAgentRevision(docId, prompt) {
+  const res = await fetchWithRenewal(`/api/etext/documents/${encodeURIComponent(docId)}/agent-revision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Agent revision failed (${res.status})`);
   }
 
   return res.json();

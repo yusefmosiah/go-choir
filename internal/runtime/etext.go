@@ -1,7 +1,7 @@
 // Package runtime provides e-text document API handlers for the go-choir
 // sandbox runtime. These handlers expose the document CRUD, revision,
-// history, snapshot, diff, and blame APIs through the authenticated
-// same-origin proxy path.
+// history, snapshot, diff, blame, and agent revision APIs through the
+// authenticated same-origin proxy path.
 //
 // API endpoints:
 //
@@ -19,6 +19,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -28,6 +29,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yusefmosiah/go-choir/internal/events"
+	"github.com/yusefmosiah/go-choir/internal/store"
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
@@ -589,4 +592,192 @@ func (h *APIHandler) HandleEtextBlame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeAPIJSON(w, http.StatusOK, etextBlameResponse{BlameResult: blame})
+}
+
+// ----- Agent revision -----
+
+// etextAgentRevisionRequest is the JSON payload for
+// POST /api/etext/documents/{id}/agent-revision.
+// Submitting a natural-language revision request from within an open document
+// creates a new canonical revision attributable to the appagent
+// (VAL-ETEXT-003).
+type etextAgentRevisionRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+// etextAgentRevisionResponse is the JSON response for agent revision
+// submission. It returns the stable task handle so the client can track
+// progress through the event stream (VAL-ETEXT-004).
+type etextAgentRevisionResponse struct {
+	TaskID    string         `json:"task_id"`
+	DocID     string         `json:"doc_id"`
+	State     types.TaskState `json:"state"`
+	CreatedAt string         `json:"created_at"`
+}
+
+// HandleEtextAgentRevision handles POST
+// /api/etext/documents/{id}/agent-revision.
+//
+// It creates a runtime task that, when completed, will create a canonical
+// appagent-authored revision. The task ID is returned so the client can
+// track progress and completion through the existing event stream
+// (VAL-ETEXT-003, VAL-ETEXT-004).
+//
+// If a pending agent mutation already exists for this document (e.g., from
+// a previous request that is still in-flight), the existing task ID is
+// returned instead of creating a new mutation, preventing duplicate
+// canonical revisions when renewal/retry occurs mid-mutation
+// (VAL-CROSS-122).
+func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	docID := extractDocID(r.URL.Path)
+	if docID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "document ID is required"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	var req etextAgentRevisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "prompt is required"})
+		return
+	}
+
+	// Verify the document exists and belongs to this owner.
+	doc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+	if err != nil {
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "document not found"})
+		return
+	}
+
+	// Check for an existing pending agent mutation on this document.
+	// If one exists, return the existing task ID instead of creating a new
+	// mutation. This prevents duplicate canonical revisions when
+	// renewal/retry occurs mid-mutation (VAL-CROSS-122).
+	existing, err := h.rt.Store().GetPendingAgentMutationByDoc(r.Context(), docID, ownerID)
+	if err != nil {
+		log.Printf("etext api: check pending mutation: %v", err)
+	} else if existing != nil {
+		// Return the existing task — idempotent response.
+		writeAPIJSON(w, http.StatusAccepted, etextAgentRevisionResponse{
+			TaskID:    existing.TaskID,
+			DocID:     docID,
+			State:     types.TaskPending,
+			CreatedAt: existing.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		})
+		return
+	}
+
+	// Build the prompt for the provider, including current document content.
+	var currentContent string
+	if doc.CurrentRevisionID != "" {
+		rev, err := h.rt.Store().GetRevision(r.Context(), doc.CurrentRevisionID, ownerID)
+		if err == nil {
+			currentContent = rev.Content
+		}
+	}
+
+	agentPrompt := buildAgentRevisionPrompt(currentContent, req.Prompt)
+
+	// Create the runtime task with etext agent revision metadata.
+	metadata := map[string]any{
+		"type":                   "etext_agent_revision",
+		"doc_id":                 docID,
+		"current_revision_id":    doc.CurrentRevisionID,
+		"original_prompt":        req.Prompt,
+	}
+
+	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, metadata)
+	if err != nil {
+		log.Printf("etext api: submit agent revision task: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
+		return
+	}
+
+	// Record the agent mutation for idempotency tracking (VAL-CROSS-122).
+	if err := h.rt.Store().CreateAgentMutation(r.Context(), store.AgentMutation{
+		DocID:     docID,
+		TaskID:    rec.TaskID,
+		OwnerID:   ownerID,
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		log.Printf("etext api: create agent mutation: %v", err)
+	}
+
+	// Emit the etext-specific agent revision started event.
+	startedPayload, _ := json.Marshal(map[string]string{
+		"doc_id":  docID,
+		"task_id": rec.TaskID,
+	})
+	h.rt.emitEtextAgentEvent(r.Context(), rec, types.EventEtextAgentRevisionStarted,
+		events.CauseTaskLifecycle, startedPayload)
+
+	writeAPIJSON(w, http.StatusAccepted, etextAgentRevisionResponse{
+		TaskID:    rec.TaskID,
+		DocID:     docID,
+		State:     rec.State,
+		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+	})
+}
+
+// buildAgentRevisionPrompt constructs the prompt for the provider that
+// includes the current document content and the user's revision request.
+func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
+	var b strings.Builder
+	b.WriteString("You are revising a document. The user has requested the following change:\n\n")
+	b.WriteString(userPrompt)
+	b.WriteString("\n\nCurrent document content:\n---\n")
+	if currentContent != "" {
+		b.WriteString(currentContent)
+	} else {
+		b.WriteString("(empty document)")
+	}
+	b.WriteString("\n---\n\n")
+	b.WriteString("Provide the complete revised document text. Output only the revised document content, with no additional commentary or explanation.")
+	return b.String()
+}
+
+// emitEtextAgentEvent is a helper that emits an etext-specific agent revision
+// event, carrying the doc_id in the payload so the frontend can correlate
+// progress to the open document (VAL-ETEXT-004).
+func (rt *Runtime) emitEtextAgentEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
+	rt.bus.Publish(events.RuntimeEvent{
+		Record: types.EventRecord{
+			EventID:   uuid.New().String(),
+			TaskID:    rec.TaskID,
+			OwnerID:   rec.OwnerID,
+			Timestamp: time.Now().UTC(),
+			Kind:      kind,
+			Payload:   payload,
+		},
+		Actor: events.ActorRuntime,
+		Cause: cause,
+	})
+
+	// Also persist for catch-up.
+	if err := rt.store.AppendEvent(ctx, &types.EventRecord{
+		EventID:   uuid.New().String(),
+		TaskID:    rec.TaskID,
+		OwnerID:   rec.OwnerID,
+		Timestamp: time.Now().UTC(),
+		Kind:      kind,
+		Payload:   payload,
+	}); err != nil {
+		log.Printf("runtime: persist etext agent event: %v", err)
+	}
 }

@@ -104,6 +104,13 @@ func (rt *Runtime) Stop() {
 // begins execution in a goroutine. It returns the task record with the stable
 // task ID and initial pending state (VAL-RUNTIME-003).
 func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*types.TaskRecord, error) {
+	return rt.SubmitTaskWithMetadata(ctx, prompt, ownerID, nil)
+}
+
+// SubmitTaskWithMetadata creates a new task with the given metadata, persists
+// it, emits a submitted event, and begins execution in a goroutine. Metadata
+// is used to carry feature-specific context (e.g., etext agent revision info).
+func (rt *Runtime) SubmitTaskWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.TaskRecord, error) {
 	now := time.Now().UTC()
 	rec := &types.TaskRecord{
 		TaskID:    uuid.New().String(),
@@ -113,6 +120,7 @@ func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*typ
 		Prompt:    prompt,
 		CreatedAt: now,
 		UpdatedAt: now,
+		Metadata:  metadata,
 	}
 
 	if err := rt.store.CreateTask(ctx, *rec); err != nil {
@@ -296,6 +304,20 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		if kind == types.EventToolInvoked || kind == types.EventToolResult {
 			cause = events.CauseToolExecution
 		}
+		// Also emit etext-specific progress events for agent revision tasks.
+		if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
+			if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
+				if kind == types.EventTaskProgress {
+					progressPayload, _ := json.Marshal(map[string]string{
+						"doc_id":  docID,
+						"task_id": rec.TaskID,
+						"phase":   phase,
+					})
+					rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionProgress,
+						events.CauseProviderProgress, progressPayload)
+				}
+			}
+		}
 		rt.emitEvent(ctx, rec, kind, cause, payload)
 	}
 
@@ -361,6 +383,10 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 		"output_tokens": usage.OutputTokens,
 	})
 	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+
+	// Post-completion: handle feature-specific side effects (e.g., etext
+	// agent revision canonical revision creation).
+	rt.handleTaskCompletion(ctx, rec)
 }
 
 // executeWithProvider runs the task through the simple Provider.Execute path.
@@ -391,6 +417,118 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	}
 	resultLenPayload, _ := json.Marshal(map[string]int{"result_length": len(result)})
 	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+
+	// Post-completion: handle feature-specific side effects (e.g., etext
+	// agent revision canonical revision creation).
+	rt.handleTaskCompletion(ctx, rec)
+}
+
+// handleTaskCompletion processes feature-specific side effects after a task
+// completes successfully. For etext agent revision tasks, it creates the
+// canonical appagent-authored revision and emits the completion event
+// (VAL-ETEXT-003, VAL-CROSS-120).
+//
+// It uses the agent mutation table to ensure that only one canonical revision
+// is created per mutation, even if the completion is processed multiple times
+// (e.g., after crash recovery). This prevents duplicate canonical revisions
+// (VAL-CROSS-122).
+func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskRecord) {
+	taskType, _ := rec.Metadata["type"].(string)
+	if taskType != "etext_agent_revision" {
+		return
+	}
+
+	docID, _ := rec.Metadata["doc_id"].(string)
+	if docID == "" {
+		log.Printf("runtime: etext agent revision task %s: missing doc_id in metadata", rec.TaskID)
+		return
+	}
+
+	// Check the agent mutation record to ensure we don't create a duplicate
+	// canonical revision (VAL-CROSS-122).
+	mutation, err := rt.store.GetAgentMutationByTask(ctx, rec.TaskID)
+	if err != nil {
+		log.Printf("runtime: etext agent revision task %s: get mutation: %v", rec.TaskID, err)
+		return
+	}
+	if mutation == nil {
+		log.Printf("runtime: etext agent revision task %s: no mutation record found", rec.TaskID)
+		return
+	}
+	if mutation.State == "completed" {
+		// Already created the revision — idempotent skip.
+		log.Printf("runtime: etext agent revision task %s: mutation already completed, skipping", rec.TaskID)
+		return
+	}
+
+	ownerID := rec.OwnerID
+	content := rec.Result
+	if content == "" {
+		content = "(agent revision produced no content)"
+	}
+
+	// Get the current document state for the parent revision ID.
+	doc, err := rt.store.GetDocument(ctx, docID, ownerID)
+	if err != nil {
+		log.Printf("runtime: etext agent revision task %s: get document: %v", rec.TaskID, err)
+		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+		return
+	}
+
+	parentID := doc.CurrentRevisionID
+	// Also check if the metadata has a specific current_revision_id from
+	// when the revision was requested. If the document has been edited
+	// since then, we still use the document's current head as the parent
+	// because the agent revision should be based on the latest state.
+	if parentID == "" {
+		if metaParentID, ok := rec.Metadata["current_revision_id"].(string); ok && metaParentID != "" {
+			parentID = metaParentID
+		}
+	}
+
+	now := time.Now().UTC()
+	rev := types.Revision{
+		RevisionID:       uuid.New().String(),
+		DocID:            docID,
+		OwnerID:          ownerID,
+		AuthorKind:       types.AuthorAppAgent,
+		AuthorLabel:      "appagent",
+		Content:          content,
+		Citations:        json.RawMessage("[]"),
+		Metadata:         json.RawMessage(`{"source":"agent_revision","task_id":"` + rec.TaskID + `"}`),
+		ParentRevisionID: parentID,
+		CreatedAt:        now,
+	}
+
+	if err := rt.store.CreateRevision(ctx, rev); err != nil {
+		log.Printf("runtime: etext agent revision task %s: create revision: %v", rec.TaskID, err)
+		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+		return
+	}
+
+	// Mark the mutation as completed. If this fails because it's already
+	// completed, the revision was already created — no duplicate
+	// (VAL-CROSS-122).
+	if err := rt.store.CompleteAgentMutation(ctx, rec.TaskID, rev.RevisionID); err != nil {
+		if err == store.ErrMutationAlreadyCompleted {
+			log.Printf("runtime: etext agent revision task %s: mutation already completed (race condition), revision %s is the canonical one", rec.TaskID, rev.RevisionID)
+		} else {
+			log.Printf("runtime: etext agent revision task %s: complete mutation: %v", rec.TaskID, err)
+		}
+	}
+
+	// Emit the etext-specific agent revision completed event with doc_id
+	// and revision_id so the frontend can correlate to the open document
+	// (VAL-ETEXT-004).
+	completedPayload, _ := json.Marshal(map[string]string{
+		"doc_id":      docID,
+		"revision_id": rev.RevisionID,
+		"task_id":     rec.TaskID,
+	})
+	rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionCompleted,
+		events.CauseTaskLifecycle, completedPayload)
+
+	log.Printf("runtime: etext agent revision task %s: created canonical revision %s for doc %s", rec.TaskID, rev.RevisionID, docID)
 }
 
 // handleExecutionError transitions a task to failed/blocked and emits the
@@ -422,6 +560,21 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 
 	errPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 	rt.emitEvent(ctx, rec, kind, cause, errPayload)
+
+	// If this is an etext agent revision task, mark the mutation as failed
+	// and emit the etext-specific failure event.
+	if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
+		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
+			failPayload, _ := json.Marshal(map[string]string{
+				"doc_id":  docID,
+				"task_id": rec.TaskID,
+				"error":   err.Error(),
+			})
+			rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionFailed,
+				events.CauseProviderFailure, failPayload)
+		}
+	}
 
 	log.Printf("runtime: task %s → %s: %v", rec.TaskID, state, err)
 }

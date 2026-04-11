@@ -807,3 +807,211 @@ func TestEtextBlameOwnerScope(t *testing.T) {
 		t.Errorf("GetBlame as wrong owner: err=%v, want ErrNotFound", err)
 	}
 }
+
+// ----- Agent mutation tracking tests -----
+
+func TestEtextAgentMutationCreateAndGet(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	got, err := s.GetPendingAgentMutationByDoc(ctx, "doc-1", "user-1")
+	if err != nil {
+		t.Fatalf("GetPendingAgentMutationByDoc: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetPendingAgentMutationByDoc returned nil")
+	}
+	if got.TaskID != "task-1" {
+		t.Errorf("TaskID = %q, want %q", got.TaskID, "task-1")
+	}
+	if got.State != "pending" {
+		t.Errorf("State = %q, want %q", got.State, "pending")
+	}
+}
+
+func TestEtextAgentMutationByTask(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	got, err := s.GetAgentMutationByTask(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("GetAgentMutationByTask: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetAgentMutationByTask returned nil")
+	}
+	if got.DocID != "doc-1" {
+		t.Errorf("DocID = %q, want %q", got.DocID, "doc-1")
+	}
+}
+
+func TestEtextAgentMutationComplete(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	// Complete the mutation.
+	if err := s.CompleteAgentMutation(ctx, "task-1", "rev-agent-1"); err != nil {
+		t.Fatalf("CompleteAgentMutation: %v", err)
+	}
+
+	// Verify the mutation is now completed.
+	got, err := s.GetAgentMutationByTask(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("GetAgentMutationByTask: %v", err)
+	}
+	if got.State != "completed" {
+		t.Errorf("State = %q, want %q", got.State, "completed")
+	}
+	if got.RevisionID != "rev-agent-1" {
+		t.Errorf("RevisionID = %q, want %q", got.RevisionID, "rev-agent-1")
+	}
+	if got.CompletedAt == nil {
+		t.Error("CompletedAt is nil, want a timestamp")
+	}
+
+	// No pending mutation should be found for this doc.
+	pending, err := s.GetPendingAgentMutationByDoc(ctx, "doc-1", "user-1")
+	if err != nil {
+		t.Fatalf("GetPendingAgentMutationByDoc: %v", err)
+	}
+	if pending != nil {
+		t.Error("pending mutation should be nil after completion")
+	}
+}
+
+func TestEtextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	// Complete once.
+	if err := s.CompleteAgentMutation(ctx, "task-1", "rev-agent-1"); err != nil {
+		t.Fatalf("first CompleteAgentMutation: %v", err)
+	}
+
+	// Try to complete again — should fail with ErrMutationAlreadyCompleted.
+	err := s.CompleteAgentMutation(ctx, "task-1", "rev-agent-2")
+	if err != ErrMutationAlreadyCompleted {
+		t.Errorf("second CompleteAgentMutation: err=%v, want ErrMutationAlreadyCompleted", err)
+	}
+
+	// Verify only the first revision ID was saved.
+	got, _ := s.GetAgentMutationByTask(ctx, "task-1")
+	if got.RevisionID != "rev-agent-1" {
+		t.Errorf("RevisionID = %q, want %q (should not be overwritten by second completion)", got.RevisionID, "rev-agent-1")
+	}
+}
+
+func TestEtextAgentMutationIdempotentCreation(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("first CreateAgentMutation: %v", err)
+	}
+
+	// Creating the same mutation again should succeed (INSERT OR IGNORE).
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("duplicate CreateAgentMutation: %v", err)
+	}
+}
+
+func TestEtextAgentMutationFail(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	if err := s.FailAgentMutation(ctx, "task-1"); err != nil {
+		t.Fatalf("FailAgentMutation: %v", err)
+	}
+
+	got, _ := s.GetAgentMutationByTask(ctx, "task-1")
+	if got.State != "failed" {
+		t.Errorf("State = %q, want %q", got.State, "failed")
+	}
+}
+
+func TestEtextAgentMutationNoCrossUserAccess(t *testing.T) {
+	s := etextTestStore(t)
+	ctx := context.Background()
+
+	m := AgentMutation{
+		DocID:     "doc-1",
+		TaskID:    "task-1",
+		OwnerID:   "user-1",
+		State:     "pending",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.CreateAgentMutation(ctx, m); err != nil {
+		t.Fatalf("CreateAgentMutation: %v", err)
+	}
+
+	// user-2 should not see user-1's pending mutation.
+	got, err := s.GetPendingAgentMutationByDoc(ctx, "doc-1", "user-2")
+	if err != nil {
+		t.Fatalf("GetPendingAgentMutationByDoc as user-2: %v", err)
+	}
+	if got != nil {
+		t.Error("user-2 should not see user-1's pending mutation")
+	}
+}

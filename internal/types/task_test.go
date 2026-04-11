@@ -209,3 +209,44 @@ func TestRuntimeHealthStateValues(t *testing.T) {
 		}
 	}
 }
+
+func TestEtextAgentRevisionEventKinds(t *testing.T) {
+	// Verify the etext agent revision event kinds exist and are distinct.
+	eventKinds := []EventKind{
+		EventEtextAgentRevisionStarted,
+		EventEtextAgentRevisionProgress,
+		EventEtextAgentRevisionCompleted,
+		EventEtextAgentRevisionFailed,
+	}
+	expected := []string{
+		"etext.agent_revision.started",
+		"etext.agent_revision.progress",
+		"etext.agent_revision.completed",
+		"etext.agent_revision.failed",
+	}
+	for i, kind := range eventKinds {
+		if string(kind) != expected[i] {
+			t.Errorf("event kind %d: got %q, want %q", i, kind, expected[i])
+		}
+	}
+
+	// Verify they're distinct from each other.
+	seen := map[string]bool{}
+	for _, kind := range eventKinds {
+		if seen[string(kind)] {
+			t.Errorf("duplicate event kind: %q", kind)
+		}
+		seen[string(kind)] = true
+	}
+
+	// Verify they're distinct from task lifecycle events.
+	taskKinds := []EventKind{
+		EventTaskSubmitted, EventTaskStarted, EventTaskCompleted,
+		EventTaskFailed, EventTaskCancelled,
+	}
+	for _, tk := range taskKinds {
+		if seen[string(tk)] {
+			t.Errorf("etext event kind collides with task event kind: %q", tk)
+		}
+	}
+}

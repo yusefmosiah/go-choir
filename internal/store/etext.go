@@ -65,6 +65,20 @@ CREATE INDEX IF NOT EXISTS idx_etext_docs_owner ON etext_documents(owner_id);
 CREATE INDEX IF NOT EXISTS idx_etext_revs_doc ON etext_revisions(doc_id);
 CREATE INDEX IF NOT EXISTS idx_etext_revs_owner ON etext_revisions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_etext_revs_doc_created ON etext_revisions(doc_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS etext_agent_mutations (
+	doc_id              TEXT NOT NULL,
+	task_id             TEXT NOT NULL,
+	owner_id            TEXT NOT NULL,
+	state               TEXT NOT NULL DEFAULT 'pending',
+	revision_id         TEXT NOT NULL DEFAULT '',
+	created_at          DATETIME NOT NULL,
+	completed_at        DATETIME,
+	PRIMARY KEY (doc_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_etext_mutations_doc ON etext_agent_mutations(doc_id);
+CREATE INDEX IF NOT EXISTS idx_etext_mutations_task ON etext_agent_mutations(task_id);
 `
 
 // OpenEtextWorkspace opens (or creates) a SQLite database for e-text
@@ -868,4 +882,159 @@ func scanRevision(row interface{ Scan(...any) error }) (types.Revision, error) {
 	}
 
 	return rev, nil
+}
+
+// ----- Agent mutation tracking (VAL-CROSS-122: idempotent revision) -----
+
+// AgentMutation represents an in-flight or completed appagent-driven document
+// mutation. It tracks the mapping from a runtime task to a document mutation,
+// enabling idempotent handling so that renewal/retry does not create a
+// duplicate canonical revision.
+type AgentMutation struct {
+	DocID       string     `json:"doc_id"`
+	TaskID      string     `json:"task_id"`
+	OwnerID     string     `json:"owner_id"`
+	State       string     `json:"state"` // "pending", "completed", "failed"
+	RevisionID  string     `json:"revision_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// CreateAgentMutation records a new in-flight appagent mutation. It uses
+// INSERT OR IGNORE so that duplicate (doc_id, task_id) pairs are silently
+// ignored, supporting idempotent task creation (VAL-CROSS-122).
+func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error {
+	var completedAt any
+	if m.CompletedAt != nil {
+		completedAt = m.CompletedAt.UTC().Format(time.RFC3339Nano)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO etext_agent_mutations (doc_id, task_id, owner_id, state, revision_id, created_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		m.DocID,
+		m.TaskID,
+		m.OwnerID,
+		m.State,
+		m.RevisionID,
+		m.CreatedAt.UTC().Format(time.RFC3339Nano),
+		completedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert etext agent mutation: %w", err)
+	}
+	return nil
+}
+
+// GetPendingAgentMutationByDoc returns the pending agent mutation for a
+// document, if one exists. This is used to return the existing task ID
+// when a retry/renewal occurs, preventing duplicate mutation submissions
+// (VAL-CROSS-122).
+func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID string) (*AgentMutation, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
+		   FROM etext_agent_mutations
+		  WHERE doc_id = ? AND owner_id = ? AND state = 'pending'
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+		docID, ownerID,
+	)
+	return scanAgentMutation(row)
+}
+
+// GetAgentMutationByTask returns the agent mutation for a specific task ID.
+// This is used during task completion to check if the revision has already
+// been created (VAL-CROSS-122: no duplicate canonical revision).
+func (s *Store) GetAgentMutationByTask(ctx context.Context, taskID string) (*AgentMutation, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
+		   FROM etext_agent_mutations
+		  WHERE task_id = ?`,
+		taskID,
+	)
+	return scanAgentMutation(row)
+}
+
+// CompleteAgentMutation marks an agent mutation as completed with the
+// revision ID of the newly created canonical revision. It returns
+// ErrMutationAlreadyCompleted if the mutation is already in a completed
+// state, preventing duplicate canonical revisions (VAL-CROSS-122).
+var ErrMutationAlreadyCompleted = errors.New("agent mutation already completed")
+
+func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID string) error {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE etext_agent_mutations
+		    SET state = 'completed',
+		        revision_id = ?,
+		        completed_at = ?
+		  WHERE task_id = ? AND state = 'pending'`,
+		revisionID,
+		now.Format(time.RFC3339Nano),
+		taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("complete etext agent mutation: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check completed mutation rows: %w", err)
+	}
+	if rows == 0 {
+		return ErrMutationAlreadyCompleted
+	}
+	return nil
+}
+
+// FailAgentMutation marks an agent mutation as failed.
+func (s *Store) FailAgentMutation(ctx context.Context, taskID string) error {
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE etext_agent_mutations
+		    SET state = 'failed',
+		        completed_at = ?
+		  WHERE task_id = ? AND state = 'pending'`,
+		now.Format(time.RFC3339Nano),
+		taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("fail etext agent mutation: %w", err)
+	}
+	return nil
+}
+
+// scanAgentMutation scans an agent mutation record from a single row.
+func scanAgentMutation(row interface{ Scan(...any) error }) (*AgentMutation, error) {
+	var m AgentMutation
+	var createdAt string
+	var completedAt sql.NullString
+
+	err := row.Scan(
+		&m.DocID,
+		&m.TaskID,
+		&m.OwnerID,
+		&m.State,
+		&m.RevisionID,
+		&createdAt,
+		&completedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // no pending mutation is not an error
+		}
+		return nil, fmt.Errorf("scan etext agent mutation: %w", err)
+	}
+
+	m.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent mutation created_at: %w", err)
+	}
+	if completedAt.Valid {
+		t, err := time.Parse(time.RFC3339Nano, completedAt.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse agent mutation completed_at: %w", err)
+		}
+		m.CompletedAt = &t
+	}
+
+	return &m, nil
 }

@@ -159,6 +159,26 @@ const (
 	// channel, making inter-agent coordination observable through the
 	// event stream.
 	EventChannelMessage EventKind = "channel.message"
+
+	// EventEtextAgentRevisionStarted is emitted when an appagent-driven
+	// document revision starts executing. The payload includes the doc_id
+	// so the frontend can correlate the revision to the open document
+	// (VAL-ETEXT-004).
+	EventEtextAgentRevisionStarted EventKind = "etext.agent_revision.started"
+
+	// EventEtextAgentRevisionProgress is emitted during appagent revision
+	// execution, carrying incremental progress that the open document
+	// can display without manual refresh (VAL-ETEXT-004).
+	EventEtextAgentRevisionProgress EventKind = "etext.agent_revision.progress"
+
+	// EventEtextAgentRevisionCompleted is emitted when an appagent-driven
+	// revision completes and the canonical revision is created. The payload
+	// includes the doc_id and revision_id (VAL-ETEXT-003, VAL-ETEXT-004).
+	EventEtextAgentRevisionCompleted EventKind = "etext.agent_revision.completed"
+
+	// EventEtextAgentRevisionFailed is emitted when an appagent-driven
+	// revision fails. The payload includes the doc_id and error message.
+	EventEtextAgentRevisionFailed EventKind = "etext.agent_revision.failed"
 )
 
 // EventRecord represents a single runtime event emitted during task execution

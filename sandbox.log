@@ -3,3 +3,5 @@
 2026/04/11 04:00:03 runtime: started (sandbox=sandbox-dev)
 2026/04/11 04:00:03 sandbox: starting server on 127.0.0.1:8085
 2026/04/11 04:00:08 runtime: health ready → degraded
+2026/04/11 04:31:16 sandbox: received terminated, shutting down gracefully
+2026/04/11 04:31:16 sandbox: server stopped

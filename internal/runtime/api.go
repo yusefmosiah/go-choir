@@ -358,6 +358,7 @@ func RegisterEtextRoutes(s *server.Server, h *APIHandler) {
 //	DELETE /api/etext/documents/{id}           → delete document
 //	POST   /api/etext/documents/{id}/revisions → create revision
 //	GET    /api/etext/documents/{id}/revisions → list revisions
+//	POST   /api/etext/documents/{id}/agent-revision → submit agent revision
 //	GET    /api/etext/documents/{id}/history   → revision history
 //	GET    /api/etext/revisions/{id}          → get revision (snapshot)
 //	GET    /api/etext/revisions/{id}/blame     → blame revision
@@ -391,6 +392,11 @@ func (h *APIHandler) HandleEtextRouter(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(rest, "/revisions") {
 			// /api/etext/documents/{id}/revisions
 			h.HandleEtextRevisions(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, "/agent-revision") {
+			// /api/etext/documents/{id}/agent-revision
+			h.HandleEtextAgentRevision(w, r)
 			return
 		}
 		if strings.HasSuffix(rest, "/history") {

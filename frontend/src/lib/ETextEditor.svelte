@@ -34,8 +34,9 @@
   import {
     createDocument, listDocuments, getDocument, updateDocument, deleteDocument,
     createRevision, getRevision, getHistory, getDiff, getBlame,
+    submitAgentRevision,
   } from './etext.js';
-  import { AuthRequiredError } from './auth.js';
+  import { AuthRequiredError, fetchWithRenewal } from './auth.js';
 
   export let currentUser = null;
 
@@ -76,6 +77,12 @@
 
   // ---- Blame state ----
   let blameResult = null;
+
+  // ---- Agent revision state (VAL-ETEXT-003, VAL-ETEXT-004) ----
+  let agentPrompt = '';
+  let agentTaskId = '';
+  let agentStatus = ''; // 'pending', 'running', 'completed', 'failed', ''
+  let agentSubmitting = false;
 
   // ---- Document list ----
 
@@ -287,6 +294,97 @@
     }
   }
 
+  // ---- Agent revision (VAL-ETEXT-003, VAL-ETEXT-004) ----
+
+  async function handleAgentRevision() {
+    if (!currentDoc || !agentPrompt.trim()) return;
+    error = '';
+    agentSubmitting = true;
+    agentStatus = 'pending';
+
+    try {
+      const resp = await submitAgentRevision(currentDoc.doc_id, agentPrompt.trim());
+      agentTaskId = resp.task_id;
+      agentStatus = resp.state || 'pending';
+      agentPrompt = '';
+
+      // Poll task status until completion.
+      pollAgentRevision(resp.task_id);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        dispatch('authexpired');
+        return;
+      }
+      error = err.message || 'Failed to submit agent revision';
+      agentStatus = 'failed';
+    } finally {
+      agentSubmitting = false;
+    }
+  }
+
+  async function pollAgentRevision(taskId) {
+    // Poll the task status endpoint to track progress.
+    const maxPolls = 120; // 120 * 500ms = 60 seconds max
+    let pollCount = 0;
+
+    const poll = async () => {
+      try {
+        const res = await fetchWithRenewal(`/api/agent/status?task_id=${encodeURIComponent(taskId)}`);
+        if (!res.ok) {
+          agentStatus = 'failed';
+          return;
+        }
+        const data = await res.json();
+
+        if (data.state === 'completed') {
+          agentStatus = 'completed';
+          // Reload the document to get the new appagent revision.
+          await reloadDocument();
+          return;
+        } else if (data.state === 'failed' || data.state === 'cancelled') {
+          agentStatus = 'failed';
+          error = 'Agent revision failed: ' + (data.error || 'unknown error');
+          return;
+        } else if (data.state === 'running') {
+          agentStatus = 'running';
+        }
+
+        pollCount++;
+        if (pollCount < maxPolls) {
+          setTimeout(poll, 500);
+        } else {
+          agentStatus = 'failed';
+          error = 'Agent revision timed out';
+        }
+      } catch (err) {
+        agentStatus = 'failed';
+        error = err.message || 'Error polling agent revision status';
+      }
+    };
+
+    setTimeout(poll, 200);
+  }
+
+  async function reloadDocument() {
+    if (!currentDoc) return;
+    try {
+      const doc = await getDocument(currentDoc.doc_id);
+      currentDoc = doc;
+
+      if (doc.current_revision_id) {
+        const rev = await getRevision(doc.current_revision_id);
+        currentRevision = rev;
+        editContent = rev.content || '';
+        editCitations = rev.citations ? JSON.stringify(rev.citations, null, 2) : '[]';
+        editMetadata = rev.metadata ? JSON.stringify(rev.metadata, null, 2) : '{}';
+      }
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        dispatch('authexpired');
+      }
+    }
+  }
+
   // ---- Navigation helpers ----
 
   function goBackToList() {
@@ -450,6 +548,43 @@
             History
           </button>
         </div>
+      </div>
+
+      <div class="agent-revision-bar" data-etext-agent-revision>
+        <div class="agent-revision-input">
+          <input
+            type="text"
+            placeholder="Ask the agent to revise…"
+            bind:value={agentPrompt}
+            data-etext-agent-prompt
+            disabled={agentSubmitting || agentStatus === 'running' || agentStatus === 'pending'}
+            on:keydown={(e) => { if (e.key === 'Enter') handleAgentRevision(); }}
+          />
+          <button
+            class="btn btn-primary btn-agent"
+            data-etext-agent-submit
+            on:click={handleAgentRevision}
+            disabled={agentSubmitting || !agentPrompt.trim() || agentStatus === 'running' || agentStatus === 'pending'}
+          >
+            {agentSubmitting ? 'Submitting…' : '🤖 Revise'}
+          </button>
+        </div>
+        {#if agentStatus === 'running' || agentStatus === 'pending'}
+          <div class="agent-progress" data-etext-agent-progress>
+            <span class="agent-progress-dot"></span>
+            Agent is revising…
+          </div>
+        {/if}
+        {#if agentStatus === 'completed'}
+          <div class="agent-completed" data-etext-agent-completed>
+            ✓ Revision complete
+          </div>
+        {/if}
+        {#if agentStatus === 'failed'}
+          <div class="agent-failed" data-etext-agent-failed>
+            ✗ Revision failed
+          </div>
+        {/if}
       </div>
 
       <div class="editor-body">
@@ -816,6 +951,76 @@
   .save-status {
     font-size: 0.75rem;
     color: #4ade80;
+  }
+
+  /* ---- Agent revision bar ---- */
+  .agent-revision-bar {
+    margin-bottom: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .agent-revision-input {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .agent-revision-input input {
+    flex: 1;
+    padding: 0.35rem 0.5rem;
+    background: #0a0a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+  }
+
+  .agent-revision-input input:focus {
+    outline: none;
+    border-color: rgba(168, 85, 247, 0.5);
+  }
+
+  .btn-agent {
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.1);
+    border-color: rgba(167, 139, 250, 0.25);
+  }
+
+  .btn-agent:hover:not(:disabled) {
+    background: rgba(167, 139, 250, 0.2);
+  }
+
+  .agent-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: #a78bfa;
+  }
+
+  .agent-progress-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #a78bfa;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  .agent-completed {
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: #4ade80;
+  }
+
+  .agent-failed {
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: #f87171;
   }
 
   .editor-body {
