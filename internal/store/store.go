@@ -75,6 +75,13 @@ CREATE INDEX IF NOT EXISTS idx_tasks_sandbox_id ON tasks(sandbox_id);
 CREATE INDEX IF NOT EXISTS idx_events_task_id_seq ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS idx_events_owner_id ON events(owner_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+
+CREATE TABLE IF NOT EXISTS desktop_state (
+	owner_id       TEXT PRIMARY KEY,
+	windows_json   TEXT NOT NULL DEFAULT '[]',
+	active_window  TEXT NOT NULL DEFAULT '',
+	updated_at     DATETIME NOT NULL
+);
 `
 
 // Open opens (or creates) the SQLite database at dbPath and applies the
@@ -537,6 +544,80 @@ func formatTimePtr(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// ----- Desktop state persistence (VAL-DESKTOP-007) -----
+
+// GetDesktopState returns the persisted desktop state for the given owner.
+// If no state exists, it returns a default empty desktop state with no error.
+func (s *Store) GetDesktopState(ctx context.Context, ownerID string) (types.DesktopState, error) {
+	var windowsJSON, updatedAt string
+	var activeWindow string
+
+	row := s.db.QueryRowContext(ctx,
+		`SELECT windows_json, active_window, updated_at
+		   FROM desktop_state
+		  WHERE owner_id = ?`,
+		ownerID,
+	)
+
+	err := row.Scan(&windowsJSON, &activeWindow, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No persisted state yet — return default empty state.
+			return types.DesktopState{
+				OwnerID:        ownerID,
+				Windows:        []types.WindowState{},
+				ActiveWindowID: "",
+				UpdatedAt:       time.Now().UTC(),
+			}, nil
+		}
+		return types.DesktopState{}, fmt.Errorf("query desktop state: %w", err)
+	}
+
+	var windows []types.WindowState
+	if err := json.Unmarshal([]byte(windowsJSON), &windows); err != nil {
+		return types.DesktopState{}, fmt.Errorf("unmarshal desktop windows: %w", err)
+	}
+
+	parsedTime, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		parsedTime = time.Now().UTC()
+	}
+
+	return types.DesktopState{
+		OwnerID:        ownerID,
+		Windows:        windows,
+		ActiveWindowID: activeWindow,
+		UpdatedAt:      parsedTime,
+	}, nil
+}
+
+// SaveDesktopState persists the desktop state for the given owner.
+// It uses UPSERT so that both initial save and subsequent updates work.
+func (s *Store) SaveDesktopState(ctx context.Context, state types.DesktopState) error {
+	windowsJSON, err := json.Marshal(state.Windows)
+	if err != nil {
+		return fmt.Errorf("marshal desktop windows: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO desktop_state (owner_id, windows_json, active_window, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(owner_id) DO UPDATE SET
+		   windows_json = excluded.windows_json,
+		   active_window = excluded.active_window,
+		   updated_at = excluded.updated_at`,
+		state.OwnerID,
+		string(windowsJSON),
+		state.ActiveWindowID,
+		state.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("save desktop state: %w", err)
+	}
+
+	return nil
 }
 
 

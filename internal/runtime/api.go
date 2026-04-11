@@ -326,4 +326,5 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
 	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
 	s.HandleFunc("/api/events", h.HandleEvents)
+	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
 }

@@ -269,6 +269,13 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// VAL-RUNTIME-006).
 		h.HandleProtectedAPI(w, r)
 		return
+	case path == "/api/desktop/state":
+		// Desktop state API: auth-gated at the proxy level and forwarded
+		// to the sandbox with the authenticated user context injected.
+		// Desktop state is persisted server-side for cross-context
+		// restore (VAL-DESKTOP-007).
+		h.HandleProtectedAPI(w, r)
+		return
 	case strings.HasPrefix(path, "/api/"):
 		// All /api/* routes require auth by default. Check auth before
 		// returning 404 so signed-out callers consistently receive 401

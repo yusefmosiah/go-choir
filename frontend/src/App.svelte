@@ -22,7 +22,7 @@
 -->
 <script>
   import AuthEntry from './lib/AuthEntry.svelte';
-  import Shell from './lib/Shell.svelte';
+  import Desktop from './lib/Desktop.svelte';
   import { registerPasskey, loginPasskey, passkeyErrorMessage } from './lib/auth.js';
 
   /** @type {'checking' | 'signed_out' | 'signed_in'} */
@@ -164,7 +164,7 @@
     on:clearpasskeyerror={handleClearPasskeyError}
   />
 {:else if authState === 'signed_in'}
-  <Shell {currentUser} on:logout={handleLogout} on:authexpired={handleAuthExpired} />
+  <Desktop {currentUser} on:logout={handleLogout} on:authexpired={handleAuthExpired} />
 {/if}
 
 <style>
