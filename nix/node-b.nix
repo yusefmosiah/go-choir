@@ -121,8 +121,8 @@ in
   # In production, sandbox workloads run inside Firecracker microVMs
   # managed by vmctl, and the host-process sandbox is a fallback only.
   #
-  # Firecracker guest images are repo-built (VAL-VM-010):
-  #   nix build .#guest-image  →  kernel (vmlinux) + rootfs (ext4)
+  # Guest images are repo-built (VAL-VM-010):
+  #   nix build .#guest-image  →  kernel (vmlinux) + rootfs (ext4) + initrd
   # The guest contains ONLY the sandbox binary — no provider credentials,
   # no auth signing keys, no gateway secrets (VAL-VM-011).
   #
@@ -216,6 +216,7 @@ in
         # Guest images are built from the repo via `nix build .#guest-image`.
         "VM_FIRECRACKER_BIN=${pkgs.firecracker}/bin/firecracker"
         "VM_KERNEL_IMAGE=/var/lib/go-choir/guest/vmlinux"
+        "VM_INITRD_IMAGE=/var/lib/go-choir/guest/initrd.cpio.gz"
         "VM_ROOTFS_IMAGE=/var/lib/go-choir/guest/rootfs.ext4"
         "VM_STATE_DIR=/var/lib/go-choir/vm-state"
         "VM_HOST_BASE_PORT=9000"

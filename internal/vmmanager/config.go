@@ -23,6 +23,10 @@ func LoadConfigFromEnv() ManagerConfig {
 		cfg.KernelImagePath = v
 	}
 
+	if v := os.Getenv("VM_INITRD_IMAGE"); v != "" {
+		cfg.InitrdPath = v
+	}
+
 	if v := os.Getenv("VM_ROOTFS_IMAGE"); v != "" {
 		cfg.RootfsPath = v
 	}

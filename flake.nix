@@ -113,7 +113,7 @@
         default = self.packages.${system}.auth;
         # Expose the guest image as a top-level package for easy building:
         #   nix build .#guest-image
-        inherit (guestImage) guest-image guestRootfs guestKernel;
+        inherit (guestImage) guest-image guestRootfs guestKernel guestInitrd;
       };
 
       nixosConfigurations.go-choir-b = nixpkgs.lib.nixosSystem {

@@ -2,6 +2,7 @@
 #
 # This Nix expression builds the guest VM artifacts:
 #   - A Linux kernel suitable for Firecracker
+#   - An initramfs that loads ext4 and mounts the root filesystem
 #   - A root filesystem (ext4) containing the sandbox runtime
 #
 # The guest image includes ONLY the sandbox runtime binary and its
@@ -13,6 +14,10 @@
 { pkgs, goChoirPackages }:
 
 let
+  # The nixpkgs kernel to use for the guest. We use linux_6_1 because
+  # it is well-tested with Firecracker.
+  guestKernelPackage = pkgs.linuxKernel.kernels.linux_6_1;
+
   # Minimal guest root filesystem containing only the sandbox runtime.
   # This is the set of files that will be packed into the ext4 rootfs image.
   guestRoot = pkgs.runCommand "go-choir-guest-root" {
@@ -112,10 +117,86 @@ let
     debugfs -w -f /tmp/debugfs-chmod.cmds $out
   '';
 
+  # Minimal initramfs that loads the ext4 kernel module and mounts
+  # the root filesystem. The nixpkgs kernel builds ext4 as a module,
+  # so we need an initrd to load it before mounting root.
+  #
+  # The initramfs init script:
+  # 1. Mounts /proc and /sys
+  # 2. Loads the ext4 module from the kernel modules directory
+  # 3. Mounts /dev/vda (the Firecracker rootfs drive) to /root
+  # 4. Switches root to /root and execs /bin/init
+  #
+  # No provider credentials are included (VAL-VM-011).
+  guestInitrd = pkgs.runCommand "go-choir-guest-initrd.cpio.gz" {
+    buildInputs = [ pkgs.cpio pkgs.gzip guestKernelPackage ];
+  } ''
+    mkdir -p $out_dir
+    outdir=$TMPDIR/initrd
+
+    mkdir -p $outdir/{bin,proc,sys,dev,root,lib/modules}
+
+    # Copy the ext4 kernel module and its dependencies.
+    # The kernel modules are in the kernel package's /lib/modules/ directory.
+    KMOD_DIR=$(find ${guestKernelPackage}/lib/modules -mindepth 1 -maxdepth 1 -type d | head -1)
+
+    # Copy ext4 module and its dependencies (jbd2, crc16, mbcache, etc.)
+    for mod in ext4 jbd2 mbcache crc16 crc32_generic; do
+      find "$KMOD_DIR" -name "$mod.ko*" -exec cp --parents {} $outdir \; 2>/dev/null || true
+    done
+    # Copy all of kernel/lib/modules to ensure dependencies are available
+    cp -r "$KMOD_DIR"/* $outdir/lib/modules/$(basename "$KMOD_DIR")/ 2>/dev/null || true
+
+    # Create a minimal init for the initramfs.
+    cat > $outdir/init << 'INITEOF'
+    #!/bin/sh
+    export PATH=/bin
+
+    # Mount essential filesystems.
+    mount -t proc proc /proc
+    mount -t sysfs sysfs /sys
+    mount -t devtmpfs devtmpfs /dev
+
+    # Load kernel modules needed for ext4 root.
+    KVER=$(uname -r)
+    MODDIR=/lib/modules/$KVER
+    if [ -d "$MODDIR" ]; then
+      for mod in crc16 crc32_generic mbcache jbd2 ext4; do
+        mod=$(find "$MODDIR" -name "$mod.ko*" 2>/dev/null | head -1)
+        if [ -n "$mod" ]; then
+          insmod "$mod" 2>/dev/null || true
+        fi
+      done
+    fi
+
+    # Wait briefly for the block device to appear.
+    for i in 1 2 3 4 5; do
+      if [ -b /dev/vda ]; then
+        break
+      fi
+      sleep 0.1
+    done
+
+    # Mount the root filesystem.
+    mount -t ext4 /dev/vda /root
+
+    # Unmount initramfs filesystems before switch_root.
+    umount /proc /sys /dev 2>/dev/null || true
+
+    # Switch to the real root and exec init.
+    exec switch_root /root /bin/init
+    INITEOF
+    chmod +x $outdir/init
+
+    # Create the cpio archive.
+    cd $outdir
+    find . | cpio -o -H newc 2>/dev/null | gzip > $out
+  '';
+
   # Firecracker-compatible Linux kernel.
   # Firecracker requires an uncompressed ELF kernel (vmlinux).
   # The nixpkgs kernel dev output contains vmlinux.
-  guestKernel = pkgs.linuxKernel.kernels.linux_6_1.dev;
+  guestKernel = guestKernelPackage.dev;
 
 in
 {
@@ -125,10 +206,14 @@ in
   # The kernel vmlinux ELF binary for Firecracker.
   inherit guestKernel;
 
-  # Convenience attribute that provides both artifacts together.
+  # The initramfs for loading ext4 module before root mount.
+  inherit guestInitrd;
+
+  # Convenience attribute that provides all artifacts together.
   guest-image = pkgs.runCommand "go-choir-guest-image" { } ''
     mkdir -p $out
     cp ${guestRootfs} $out/rootfs.ext4
     cp ${guestKernel}/vmlinux $out/vmlinux
+    cp ${guestInitrd} $out/initrd.cpio.gz
   '';
 }

@@ -64,6 +64,11 @@ type VMConfig struct {
 	// KernelImagePath is the path to the repo-built guest kernel image.
 	KernelImagePath string
 
+	// InitrdPath is the path to the guest initramfs (optional).
+	// If set, the initrd is passed to Firecracker for loading ext4
+	// and other modules before mounting the root filesystem.
+	InitrdPath string
+
 	// RootfsPath is the path to the repo-built guest root filesystem image.
 	RootfsPath string
 
@@ -133,6 +138,10 @@ type ManagerConfig struct {
 
 	// KernelImagePath is the default kernel image for all VMs.
 	KernelImagePath string
+
+	// InitrdPath is the path to the guest initramfs (optional).
+	// If set, the initrd is passed to Firecracker for module loading.
+	InitrdPath string
 
 	// RootfsPath is the default rootfs image for all VMs.
 	// The manager creates per-VM copies for writable guest filesystems.
@@ -299,6 +308,9 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	// Apply defaults from manager config.
 	if cfg.KernelImagePath == "" {
 		cfg.KernelImagePath = m.cfg.KernelImagePath
+	}
+	if cfg.InitrdPath == "" {
+		cfg.InitrdPath = m.cfg.InitrdPath
 	}
 	if cfg.RootfsPath == "" {
 		cfg.RootfsPath = m.cfg.RootfsPath
@@ -604,6 +616,8 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// These contain NO provider credentials (VAL-VM-011).
 	// Network config is passed via ip= kernel parameter so the guest
 	// can configure its network interface at boot time.
+	// The init= parameter tells the kernel to run the initramfs init
+	// which loads ext4 and then switch_roots to the real rootfs.
 	bootArgs := fmt.Sprintf(
 		"console=ttyS0 reboot=k panic=1 pci=off "+
 			"guest_port=%d persistent=/mnt/persistent "+
@@ -613,13 +627,20 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 		guestIP, hostIP,
 	)
 
+	// Build boot-source config. If an initrd is available, include it
+	// so the kernel can load ext4 module before mounting rootfs.
+	bootSource := map[string]interface{}{
+		"kernel_image_path": cfg.KernelImagePath,
+		"boot_args":         bootArgs,
+	}
+	if cfg.InitrdPath != "" {
+		bootSource["initrd_path"] = cfg.InitrdPath
+	}
+
 	// Firecracker VM configuration.
 	// No secrets, no provider credentials, no host paths (VAL-VM-011).
 	fcConfig := map[string]interface{}{
-		"boot-source": map[string]interface{}{
-			"kernel_image_path": cfg.KernelImagePath,
-			"boot_args":         bootArgs,
-		},
+		"boot-source": bootSource,
 		"drives": []map[string]interface{}{
 			{
 				"drive_id":      "rootfs",
@@ -841,20 +862,22 @@ func (m *Manager) copyFile(src, dst string) error {
 // masquerading is set up so the guest can reach the host's localhost
 // services (gateway, etc.).
 func (m *Manager) createTapDevice(name string) error {
+	ipBin := findBinary("ip", "/run/current-system/sw/bin/ip")
+
 	// Check if the tap device already exists.
-	checkCmd := exec.Command("ip", "link", "show", name)
+	checkCmd := exec.Command(ipBin, "link", "show", name)
 	if err := checkCmd.Run(); err == nil {
 		return nil // already exists
 	}
 
 	// Create the tap device.
-	createCmd := exec.Command("ip", "tuntap", "add", "dev", name, "mode", "tap")
+	createCmd := exec.Command(ipBin, "tuntap", "add", "dev", name, "mode", "tap")
 	if err := createCmd.Run(); err != nil {
 		return fmt.Errorf("create tap device %s: %w", name, err)
 	}
 
 	// Bring the interface up.
-	upCmd := exec.Command("ip", "link", "set", name, "up")
+	upCmd := exec.Command(ipBin, "link", "set", name, "up")
 	if err := upCmd.Run(); err != nil {
 		return fmt.Errorf("bring up tap device %s: %w", name, err)
 	}
@@ -864,16 +887,19 @@ func (m *Manager) createTapDevice(name string) error {
 }
 
 // deleteTapDevice removes a TAP network device and its associated
+// deleteTapDevice removes a TAP network device and its associated
 // iptables rules after a VM stops.
 func (m *Manager) deleteTapDevice(name string) {
-	// Remove iptables DNAT rules associated with this tap device.
-	// We identify them by comment matching the tap device name.
-	_ = exec.Command("sh", "-c",
-		fmt.Sprintf("iptables -t nat -S PREROUTING | grep '%s' | cut -d' ' -f2- | while read rule; do iptables -t nat -D PREROUTING $rule 2>/dev/null; done", name)).Run()
-	_ = exec.Command("sh", "-c",
-		fmt.Sprintf("iptables -t nat -S OUTPUT | grep '%s' | cut -d' ' -f2- | while read rule; do iptables -t nat -D OUTPUT $rule 2>/dev/null; done", name)).Run()
+	ipBin := findBinary("ip", "/run/current-system/sw/bin/ip")
+	iptBin := findBinary("iptables", "/run/current-system/sw/bin/iptables")
 
-	cmd := exec.Command("ip", "link", "del", name)
+	// Remove iptables DNAT rules associated with this tap device.
+	_ = exec.Command("sh", "-c",
+		fmt.Sprintf("%s -t nat -S PREROUTING | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D PREROUTING $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
+	_ = exec.Command("sh", "-c",
+		fmt.Sprintf("%s -t nat -S OUTPUT | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D OUTPUT $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
+
+	cmd := exec.Command(ipBin, "link", "del", name)
 	if err := cmd.Run(); err != nil {
 		log.Printf("vmmanager: warning: could not delete tap device %s: %v", name, err)
 	}
@@ -884,23 +910,21 @@ func (m *Manager) deleteTapDevice(name string) {
 // sets up iptables DNAT rules to forward traffic from the assigned
 // host port to the guest's IP:port.
 func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, guestIP string, guestPort int) error {
+	ipBin := findBinary("ip", "/run/current-system/sw/bin/ip")
+	iptBin := findBinary("iptables", "/run/current-system/sw/bin/iptables")
+
 	// Assign the host IP to the tap device.
-	addrCmd := exec.Command("ip", "addr", "add", hostIP+"/30", "dev", tapName)
+	addrCmd := exec.Command(ipBin, "addr", "add", hostIP+"/30", "dev", tapName)
 	if err := addrCmd.Run(); err != nil {
-		// Ignore "file exists" errors (IP already assigned).
-		if addrCmd.ProcessState.ExitCode() != 0 {
-			log.Printf("vmmanager: note: ip addr add %s/30 on %s: %v (may already be set)", hostIP, tapName, err)
-		}
+		log.Printf("vmmanager: note: ip addr add %s/30 on %s: %v (may already be set)", hostIP, tapName, err)
 	}
 
 	// Enable IP forwarding.
 	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644)
 
 	// Set up DNAT: traffic to 127.0.0.1:hostPort → guestIP:guestPort.
-	// This allows host services (proxy, gateway) to reach the VM sandbox
-	// via localhost on the assigned host port.
 	comment := fmt.Sprintf("go-choir-vm-%s", tapName)
-	dnatCmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT",
+	dnatCmd := exec.Command(iptBin, "-t", "nat", "-A", "OUTPUT",
 		"-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort),
 		"-d", "127.0.0.1",
 		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIP, guestPort),
@@ -908,6 +932,27 @@ func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, gues
 	_ = dnatCmd.Run() // best effort
 
 	return nil
+}
+
+// findBinary locates a binary by name, falling back to common NixOS paths.
+func findBinary(name string, fallback string) string {
+	// Try PATH lookup first.
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	// Try the fallback path.
+	if _, err := os.Stat(fallback); err == nil {
+		return fallback
+	}
+	// Try common NixOS system paths.
+	for _, dir := range []string{"/run/current-system/sw/bin", "/usr/bin", "/bin"} {
+		candidate := dir + "/" + name
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	// Last resort: just use the name and hope for the best.
+	return name
 }
 
 // healthCheckLoop periodically checks the health of all running VMs.
