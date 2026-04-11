@@ -1543,5 +1543,211 @@ func TestWSDeniesWrongSigningKey(t *testing.T) {
 	}
 }
 
+// ======================================================================
+// VAL-DEPLOY-005: Protected shell routes fail closed when signed out
+// ======================================================================
+
+// TestProtectedBootstrapDeniesSignedOut verifies that the shell bootstrap
+// route returns a machine-readable 401 JSON denial to signed-out callers
+// and does not expose any sandbox payload.
+//
+// VAL-DEPLOY-005: "Protected shell routes deny signed-out callers before
+// shell data or live state are exposed"
+func TestProtectedBootstrapDeniesSignedOut(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	w := httptest.NewRecorder()
+	h.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("signed-out bootstrap: got status %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	// Response must be machine-readable JSON.
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode denial: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("denial should have a non-empty error message")
+	}
+
+	// Must not contain sandbox payload data.
+	body := w.Body.String()
+	for _, field := range []string{"sandbox_id", "bootstrap", "user"} {
+		if strings.Contains(body, field) {
+			t.Errorf("denial response should not contain sandbox field %q", field)
+		}
+	}
+}
+
+// TestProtectedLiveChannelDeniesSignedOut verifies that the live channel
+// route returns a machine-readable 401 JSON denial to signed-out callers
+// without upgrading the connection.
+//
+// VAL-DEPLOY-005: "Protected shell routes deny signed-out callers before
+// shell data or live state are exposed"
+func TestProtectedLiveChannelDeniesSignedOut(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ws", nil)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+
+	w := httptest.NewRecorder()
+	h.HandleWS(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("signed-out WS: got status %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	// No WS upgrade should occur.
+	if upgrade := w.Header().Get("Upgrade"); upgrade == "websocket" {
+		t.Error("Upgrade header should not be set on auth denial — no WS upgrade")
+	}
+
+	// Response must be machine-readable JSON.
+	var resp errorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode WS denial: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("WS denial should have a non-empty error message")
+	}
+}
+
+// TestAllAPIRoutesDenySignedOutCallers verifies that every /api/* route
+// denies signed-out callers with 401. This covers both explicitly-handled
+// protected routes (bootstrap, ws) and the default catch-all for unknown
+// /api/* paths. No /api/* route should ever return 200 or expose data
+// without valid auth.
+//
+// VAL-DEPLOY-005: "Protected shell routes deny signed-out callers before
+// shell data or live state are exposed"
+func TestAllAPIRoutesDenySignedOutCallers(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
+
+	// Test a variety of /api/* paths — both known protected routes and
+	// unknown future routes. All must deny without auth.
+	paths := []struct {
+		path       string
+		method     string
+		wantStatus int
+	}{
+		{"/api/shell/bootstrap", http.MethodGet, http.StatusUnauthorized},
+		{"/api/ws", http.MethodGet, http.StatusUnauthorized},
+		{"/api/agent/task", http.MethodPost, http.StatusUnauthorized},
+		{"/api/agent/status", http.MethodGet, http.StatusUnauthorized},
+		{"/api/events", http.MethodGet, http.StatusUnauthorized},
+		{"/api/unknown", http.MethodGet, http.StatusUnauthorized},
+		{"/api/shell/some-future-route", http.MethodGet, http.StatusUnauthorized},
+	}
+
+	for _, tt := range paths {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			w := httptest.NewRecorder()
+			h.HandleAPI(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("signed-out %s %s: got status %d, want %d", tt.method, tt.path, w.Code, tt.wantStatus)
+			}
+
+			// All denials must be machine-readable JSON.
+			ct := w.Header().Get("Content-Type")
+			if ct != "application/json" {
+				t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+			}
+
+			var resp errorResponse
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode denial for %s: %v", tt.path, err)
+			}
+			if resp.Error == "" {
+				t.Errorf("denial for %s should have a non-empty error message", tt.path)
+			}
+
+			// Must not contain sandbox data.
+			body := w.Body.String()
+			if strings.Contains(body, "sandbox_id") {
+				t.Errorf("denial for %s should not contain sandbox_id", tt.path)
+			}
+		})
+	}
+}
+
+// TestUnknownAPIRouteReturns404ForAuthenticatedCaller verifies that unknown
+// /api/* routes return 404 (not found) for authenticated callers, confirming
+// that the proxy doesn't blindly forward everything to the sandbox.
+func TestUnknownAPIRouteReturns404ForAuthenticatedCaller(t *testing.T) {
+	h, priv, _ := testProxyEnv(t)
+
+	accessToken := issueTestAccessJWT(priv, "user-authenticated")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/nonexistent/route", nil)
+	req.AddCookie(&http.Cookie{Name: "choir_access", Value: accessToken})
+	w := httptest.NewRecorder()
+	h.HandleAPI(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("authenticated unknown route: got status %d, want %d", w.Code, http.StatusNotFound)
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == "" {
+		t.Error("404 response should have a non-empty error message")
+	}
+}
+
+// TestSignedOutCallersNeverSeeSandboxData is a comprehensive test verifying
+// that no proxy response to a signed-out caller ever contains sandbox-origin
+// data (sandbox_id, bootstrap payloads, user context from the upstream).
+//
+// VAL-DEPLOY-005: "Protected shell routes deny signed-out callers before
+// shell data or live state are exposed"
+func TestSignedOutCallersNeverSeeSandboxData(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
+
+	paths := []string{
+		"/api/shell/bootstrap",
+		"/api/ws",
+		"/api/agent/task",
+		"/api/anything",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			h.HandleAPI(w, req)
+
+			body := w.Body.String()
+
+			// Must not contain any sandbox-origin data.
+			for _, field := range []string{"sandbox_id", "placeholder-shell", "websocket channel"} {
+				if strings.Contains(body, field) {
+					t.Errorf("signed-out response for %s contains sandbox data field %q", path, field)
+				}
+			}
+
+			// Response must be a denial (401 or 404), never 200.
+			if w.Code == http.StatusOK {
+				t.Errorf("signed-out caller got 200 for %s — this is a fail-open bug", path)
+			}
+		})
+	}
+}
+
 
 

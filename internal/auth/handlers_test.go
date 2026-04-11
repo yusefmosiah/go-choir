@@ -2574,6 +2574,457 @@ func TestLogoutThenSessionReportsSignedOut(t *testing.T) {
 	}
 }
 
+// ======================================================================
+// VAL-DEPLOY-003: Public auth API reachable with deployed-origin config
+// VAL-DEPLOY-004: Cookie security attributes correct for deployed HTTPS
+// ======================================================================
+
+// deployedHandlerEnv sets up a Handler configured for the deployed public
+// origin (draft.choir-ip.com, HTTPS, CookieSecure=true). This mirrors the
+// production NixOS service configuration in nix/node-b.nix.
+func deployedHandlerEnv(t *testing.T) (*Handler, ed25519.PrivateKey) {
+	t.Helper()
+
+	store := TestStore(t)
+	cfg := &Config{
+		Port:              "0",
+		DBPath:            filepath.Join(t.TempDir(), "auth.db"),
+		RPID:              "draft.choir-ip.com",
+		RPOrigins:         []string{"https://draft.choir-ip.com"},
+		JWTPrivateKeyPath: filepath.Join(t.TempDir(), "key"),
+		AccessTokenTTL:    5 * time.Minute,
+		RefreshTokenTTL:   720 * time.Hour,
+		CookieSecure:      true,
+	}
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	wa, err := webauthn.New(&webauthn.Config{
+		RPID:          cfg.RPID,
+		RPDisplayName: "go-choir",
+		RPOrigins:     cfg.RPOrigins,
+	})
+	if err != nil {
+		t.Fatalf("create webauthn: %v", err)
+	}
+
+	return NewHandler(store, wa, cfg, priv), priv
+}
+
+// assertDeployedCookieAttributes checks that a cookie has the expected
+// deployed-origin security attributes: Secure, HttpOnly, SameSite=Lax,
+// and no Domain attribute (host-only cookie bound to the exact host).
+func assertDeployedCookieAttributes(t *testing.T, c *http.Cookie, expectedPath string) {
+	t.Helper()
+
+	if !c.Secure {
+		t.Errorf("cookie %q: Secure flag should be true for deployed HTTPS origin", c.Name)
+	}
+	if !c.HttpOnly {
+		t.Errorf("cookie %q: HttpOnly flag should be true", c.Name)
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("cookie %q: SameSite should be Lax, got %v", c.Name, c.SameSite)
+	}
+	if c.Domain != "" {
+		t.Errorf("cookie %q: Domain should be empty (host-only), got %q", c.Name, c.Domain)
+	}
+	if c.Path != expectedPath {
+		t.Errorf("cookie %q: Path should be %q, got %q", c.Name, expectedPath, c.Path)
+	}
+}
+
+// TestDeployedCookieContractOnSessionIssuance verifies that login (and by
+// extension register finish) sets auth cookies with production-correct
+// security attributes for the deployed HTTPS origin: Secure, HttpOnly,
+// SameSite=Lax, host-only (no Domain), correct Path, and a positive MaxAge.
+//
+// VAL-DEPLOY-004: "Login ... set or clear Secure/HttpOnly/same-origin
+// cookies correctly"
+func TestDeployedCookieContractOnSessionIssuance(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	user, err := h.store.CreateUser("deployed-cookie-user", "deployedcookie")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	_, err = h.issueSession(rec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	cookies := rec.Result().Cookies()
+	var accessCookie, refreshCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName {
+			accessCookie = c
+		}
+		if c.Name == RefreshTokenCookieName {
+			refreshCookie = c
+		}
+	}
+
+	if accessCookie == nil {
+		t.Fatal("access token cookie not set")
+	}
+	if refreshCookie == nil {
+		t.Fatal("refresh token cookie not set")
+	}
+
+	// Access cookie: Secure, HttpOnly, SameSite=Lax, host-only, Path=/
+	assertDeployedCookieAttributes(t, accessCookie, "/")
+	if accessCookie.MaxAge <= 0 {
+		t.Errorf("access cookie MaxAge should be positive, got %d", accessCookie.MaxAge)
+	}
+
+	// Refresh cookie: Secure, HttpOnly, SameSite=Lax, host-only, Path=/auth
+	assertDeployedCookieAttributes(t, refreshCookie, "/auth")
+	if refreshCookie.MaxAge <= 0 {
+		t.Errorf("refresh cookie MaxAge should be positive, got %d", refreshCookie.MaxAge)
+	}
+}
+
+// TestDeployedCookieContractOnRefreshRotation verifies that silent renewal
+// (refresh rotation via GET /auth/session with expired access + valid refresh)
+// reissues cookies with the same deployed-origin security attributes.
+//
+// VAL-DEPLOY-004: "renewal ... set or clear Secure/HttpOnly/same-origin
+// cookies correctly"
+func TestDeployedCookieContractOnRefreshRotation(t *testing.T) {
+	h, priv := deployedHandlerEnv(t)
+
+	user, err := h.store.CreateUser("deployed-rotation-user", "deployedrot")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue initial session.
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	// Extract the refresh cookie.
+	var refreshCookie *http.Cookie
+	for _, c := range issueRec.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			refreshCookie = c
+		}
+	}
+	if refreshCookie == nil {
+		t.Fatal("refresh cookie not set in initial session")
+	}
+
+	// Create an expired access JWT.
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, err := expiredToken.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+
+	// Request /auth/session with expired access + valid refresh.
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	req.AddCookie(refreshCookie)
+	rec := httptest.NewRecorder()
+	h.HandleSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rotation status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rotation response: %v", err)
+	}
+	if !resp.Authenticated {
+		t.Fatal("should be authenticated after refresh rotation")
+	}
+
+	// Verify the rotated cookies maintain deployed-origin security attributes.
+	cookies := rec.Result().Cookies()
+	var newAccessCookie, newRefreshCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName {
+			newAccessCookie = c
+		}
+		if c.Name == RefreshTokenCookieName {
+			newRefreshCookie = c
+		}
+	}
+
+	if newAccessCookie == nil {
+		t.Fatal("new access cookie not set after rotation")
+	}
+	if newRefreshCookie == nil {
+		t.Fatal("new refresh cookie not set after rotation")
+	}
+
+	// Rotated access cookie: same deployed-origin attributes.
+	assertDeployedCookieAttributes(t, newAccessCookie, "/")
+	if newAccessCookie.MaxAge <= 0 {
+		t.Errorf("rotated access cookie MaxAge should be positive, got %d", newAccessCookie.MaxAge)
+	}
+
+	// Rotated refresh cookie: same deployed-origin attributes.
+	assertDeployedCookieAttributes(t, newRefreshCookie, "/auth")
+	if newRefreshCookie.MaxAge <= 0 {
+		t.Errorf("rotated refresh cookie MaxAge should be positive, got %d", newRefreshCookie.MaxAge)
+	}
+}
+
+// TestDeployedCookieContractOnLogout verifies that POST /auth/logout clears
+// auth cookies with the same deployed-origin security attributes (Secure,
+// HttpOnly, SameSite=Lax, host-only) so that the clearing Set-Cookie
+// headers are accepted by the browser on the deployed HTTPS origin.
+//
+// VAL-DEPLOY-004: "logout ... set or clear Secure/HttpOnly/same-origin
+// cookies correctly"
+func TestDeployedCookieContractOnLogout(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	user, err := h.store.CreateUser("deployed-logout-user", "deployedlogout")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue a session.
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issueSession: %v", err)
+	}
+
+	// Logout with the session cookies.
+	logoutReq := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	for _, c := range issueRec.Result().Cookies() {
+		logoutReq.AddCookie(c)
+	}
+	logoutRec := httptest.NewRecorder()
+	h.HandleLogout(logoutRec, logoutReq)
+
+	if logoutRec.Code >= 500 {
+		t.Fatalf("logout status: got %d, want non-5xx", logoutRec.Code)
+	}
+
+	// Verify the clearing cookies maintain deployed-origin security attributes.
+	// Clearing cookies use MaxAge=-1 to instruct the browser to delete them.
+	cookies := logoutRec.Result().Cookies()
+	var accessCleared, refreshCleared bool
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName {
+			accessCleared = true
+			assertDeployedCookieAttributes(t, c, "/")
+			if c.MaxAge != -1 {
+				t.Errorf("access clearing cookie MaxAge should be -1, got %d", c.MaxAge)
+			}
+			if c.Value != "" {
+				t.Error("access clearing cookie Value should be empty")
+			}
+		}
+		if c.Name == RefreshTokenCookieName {
+			refreshCleared = true
+			assertDeployedCookieAttributes(t, c, "/auth")
+			if c.MaxAge != -1 {
+				t.Errorf("refresh clearing cookie MaxAge should be -1, got %d", c.MaxAge)
+			}
+			if c.Value != "" {
+				t.Error("refresh clearing cookie Value should be empty")
+			}
+		}
+	}
+
+	if !accessCleared {
+		t.Error("access cookie should be cleared on logout")
+	}
+	if !refreshCleared {
+		t.Error("refresh cookie should be cleared on logout")
+	}
+}
+
+// TestDeployedOriginSessionEndpointReachable verifies that the /auth/session
+// endpoint responds correctly with deployed-origin configuration (RP ID =
+// draft.choir-ip.com, HTTPS origins, CookieSecure=true). A signed-out
+// request should return {authenticated: false} with no 5xx error.
+//
+// VAL-DEPLOY-003: "Public auth API is reachable on the draft host"
+func TestDeployedOriginSessionEndpointReachable(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	// Signed-out request.
+	req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	rec := httptest.NewRecorder()
+	h.HandleSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("session status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("should not be authenticated without cookies")
+	}
+}
+
+// TestDeployedOriginLogoutEndpointReachable verifies that the /auth/logout
+// endpoint responds safely with deployed-origin configuration. A signed-out
+// logout should be idempotent and return a non-5xx JSON response.
+//
+// VAL-DEPLOY-003: "Public auth API is reachable on the draft host"
+func TestDeployedOriginLogoutEndpointReachable(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	rec := httptest.NewRecorder()
+	h.HandleLogout(rec, req)
+
+	if rec.Code >= 500 {
+		t.Errorf("logout status: got %d, want non-5xx", rec.Code)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Authenticated {
+		t.Error("should not be authenticated after logout")
+	}
+}
+
+// TestDeployedOriginRegisterBeginReachable verifies that the register/begin
+// endpoint responds correctly with deployed-origin configuration, binding
+// the WebAuthn challenge to the deployed RP ID.
+//
+// VAL-DEPLOY-003: "Public auth API is reachable on the draft host"
+func TestDeployedOriginRegisterBeginReachable(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	body := `{"username": "deployed-reachability-user"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register begin status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	pk, ok := resp["publicKey"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing publicKey field")
+	}
+
+	rp, ok := pk["rp"].(map[string]interface{})
+	if !ok {
+		t.Fatal("publicKey.rp missing or not an object")
+	}
+
+	rpID, _ := rp["id"].(string)
+	if rpID != "draft.choir-ip.com" {
+		t.Errorf("RP ID: got %q, want %q", rpID, "draft.choir-ip.com")
+	}
+
+	challenge, _ := pk["challenge"].(string)
+	if challenge == "" {
+		t.Error("challenge should be non-empty")
+	}
+}
+
+// TestDeployedOriginLoginBeginReachableForKnownUser verifies that the
+// login/begin endpoint responds correctly for a registered user with
+// deployed-origin configuration.
+//
+// VAL-DEPLOY-003: "Public auth API is reachable on the draft host"
+func TestDeployedOriginLoginBeginReachableForKnownUser(t *testing.T) {
+	h, _ := deployedHandlerEnv(t)
+
+	// Create a user with a credential so login/begin can succeed.
+	user, err := h.store.CreateUser("deployed-login-user", "deployedlogin")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "deployed-cred-1",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	body := `{"username": "deployedlogin"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleLoginBegin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login begin status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	pk, ok := resp["publicKey"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing publicKey field")
+	}
+
+	challenge, _ := pk["challenge"].(string)
+	if challenge == "" {
+		t.Error("challenge should be non-empty")
+	}
+}
+
 // --- Helper functions for tests ---
 
 // base64RawURLEncode encodes bytes to base64url without padding.

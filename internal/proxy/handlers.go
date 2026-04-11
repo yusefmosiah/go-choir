@@ -226,8 +226,12 @@ func (h *Handler) HandleProtectedAPI(w http.ResponseWriter, r *http.Request) {
 	h.reverseProxy.ServeHTTP(w, r)
 }
 
-// HandleAPI routes /api/* traffic. It applies auth gating for protected
-// routes and returns 404 for unknown /api/* paths.
+// HandleAPI routes /api/* traffic. It applies auth gating for all /api/*
+// routes and dispatches to specific handlers where they exist. Unknown /api/*
+// paths are denied with 401 for unauthenticated callers and 404 for
+// authenticated callers, so the proxy is consistently fail-closed: no /api/*
+// route ever exposes data without auth, and signed-out callers always see a
+// 401 denial rather than a 404 that might suggest the route doesn't exist.
 func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -240,8 +244,13 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		h.HandleWS(w, r)
 		return
 	case strings.HasPrefix(path, "/api/"):
-		// For Milestone 1, other /api/* routes are not yet protected through
-		// specific handlers. Return 404 for unknown API routes.
+		// All /api/* routes require auth by default. Check auth before
+		// returning 404 so signed-out callers consistently receive 401
+		// instead of accidentally learning which routes exist.
+		if _, err := h.validateAccessJWT(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+			return
+		}
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
 		return
 	default:
