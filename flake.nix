@@ -31,8 +31,10 @@
       # Frontend package — built Svelte SPA via buildNpmPackage.
       # Local development uses pnpm (pnpm-lock.yaml); the Nix build uses npm
       # with a checked-in package-lock.json for reproducibility in the sandbox.
-      # npmDepsHash will be updated on first Nix build on Node B (the error
-      # message provides the correct hash, just like Go's vendorHash).
+      # npmDepsHash was computed with `nix run nixpkgs#prefetch-npm-deps --
+      # frontend/package-lock.json`. If dependencies change, re-run the
+      # prefetch command (or set npmDepsHash to "" and read the correct hash
+      # from the first Nix build error, just like Go's vendorHash).
       frontendPkg = pkgs.buildNpmPackage {
         pname = "go-choir-frontend";
         version = goModuleVersion;
@@ -54,7 +56,7 @@
               base == "svelte.config.js" ||
               base == "vite.config.js";
         };
-        npmDepsHash = "";
+        npmDepsHash = "sha256-UXHDem8sfIX42Aylef0AxtVWVjOI5gjIh5q0T41Qe5E=";
         npmBuildScript = "build";
         # Playwright downloads browsers during postinstall, which fails in the
         # Nix sandbox.  We only need it for e2e tests (not the build), so skip.

@@ -19,7 +19,7 @@ Set to `sha256-2Rg6bOMu4Ypi7C0NmwmG1Gv2h1/2oTn4z75yTwS3B6Q=`. When Go dependenci
 Uses `pkgs.buildNpmPackage` to build the Svelte SPA with Vite. Local development uses pnpm (`pnpm-lock.yaml`); the Nix build uses npm with a checked-in `package-lock.json` for reproducibility in the Nix sandbox.
 
 Key configuration:
-- `npmDepsHash` — Hash of npm dependencies. Initially empty (`""`); on first Nix build the error message provides the correct hash (same pattern as Go's `vendorHash`). Update the hash and rebuild.
+- `npmDepsHash` — Hash of npm dependencies. Computed with `nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json`. If dependencies change, re-run the prefetch command or set to `""` and read the correct hash from the first Nix build error (same pattern as Go's `vendorHash`).
 - `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"` — Prevents Playwright from downloading browser binaries during `npm install` (not needed for the build step, only for e2e tests).
 - Source filter excludes `node_modules/`, `test-results/`, and `.cache/`.
 - `installPhase` copies `dist/` to `$out` so Caddy's `file_server` can serve the built SPA assets.
