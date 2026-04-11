@@ -203,7 +203,17 @@ in
       # We must allow KVM device access while keeping other hardening.
       PrivateDevices = lib.mkForce false;
       # Allow Firecracker to create tap devices and access networking.
+      # CAP_NET_ADMIN is required for: ip tuntap, ip addr, ip link,
+      # iptables (DNAT, MASQUERADE, FORWARD rules), and ip route.
       CapabilityBoundingSet = [ "CAP_NET_ADMIN" "CAP_SYS_PTRACE" ];
+      # IP forwarding must be enabled for guest↔host communication.
+      # ProtectKernelTunables blocks /proc/sys writes, so we override it
+      # and use ExecStartPre to set ip_forward before the service starts.
+      ProtectKernelTunables = lib.mkForce false;
+      ExecStartPre = [
+        ""  # Reset the ExecStartPre list
+        "${pkgs.bash}/bin/bash -c '${pkgs.procps}/bin/sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true'"
+      ];
       # VM state directory for Firecracker VM persistence and epoch tracking.
       # Persistent user data in VMs is stored here and survives stop/resume
       # cycles (VAL-CROSS-116). Provider credentials are NEVER written here
@@ -225,6 +235,11 @@ in
         "VM_HEALTH_CHECK_TIMEOUT=3s"
         # Idle timeout: VMs idle for 30 minutes are hibernated (VAL-VM-008).
         "VMCTL_IDLE_TIMEOUT=30m"
+        # Gateway URL for issuing sandbox credentials to VM guests.
+        # vmctl calls this endpoint to get a token before booting each VM.
+        "VMCTL_GATEWAY_URL=http://127.0.0.1:8084"
+        # Path to system binaries (ip, iptables) for network setup.
+        "PATH=/run/current-system/sw/bin:/bin:/usr/bin"
       ];
     };
   };

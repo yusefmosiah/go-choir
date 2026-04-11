@@ -17,10 +17,14 @@
 package vmctl
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -135,6 +139,10 @@ type VMManagerConfig struct {
 	MachineCPUCount   int
 	MachineMemSizeMib int
 	PersistentDir     string
+	// GatewayToken is the credential token for the sandbox to authenticate
+	// to the host-side gateway. Written to the persistent directory so the
+	// guest init script can read it and set RUNTIME_GATEWAY_TOKEN.
+	GatewayToken string
 }
 
 // VMInstanceInfo holds the information returned by the VM manager
@@ -190,6 +198,11 @@ type OwnershipRegistry struct {
 	// all VMs share the same sandbox URL. When set, the registry delegates
 	// VM lifecycle operations to this manager for real Firecracker VMs.
 	vmManager VMManager
+
+	// gatewayURL is the URL of the host-side gateway service. When set,
+	// the registry issues gateway tokens for VM sandboxes before booting
+	// so the guest sandbox can authenticate to the gateway.
+	gatewayURL string
 }
 
 // NewOwnershipRegistry creates a new ownership registry.
@@ -219,6 +232,15 @@ func (r *OwnershipRegistry) SetVMManager(mgr VMManager) {
 	r.vmManager = mgr
 }
 
+// SetGatewayURL configures the gateway URL for issuing sandbox tokens.
+// When set, the registry will issue a gateway token for each VM before
+// booting so the guest sandbox can authenticate to the gateway.
+func (r *OwnershipRegistry) SetGatewayURL(url string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gatewayURL = url
+}
+
 // SetIdleTimeout configures the idle timeout for automatic VM lifecycle
 // management. After this duration of inactivity, VMs are eligible for
 // stop/hibernate (VAL-VM-008, VAL-CROSS-116).
@@ -234,6 +256,58 @@ func (r *OwnershipRegistry) SetIdleTimeout(d time.Duration) {
 func (r *OwnershipRegistry) nextEpoch() int64 {
 	r.epochCounter++
 	return r.epochCounter
+}
+
+// issueGatewayToken requests a gateway credential token for the given
+// sandbox ID by calling the gateway's credential issuance endpoint.
+// Returns the raw token string or an empty string on failure.
+// Failures are logged but not fatal — the VM will still boot but
+// won't be able to authenticate to the gateway until a token is provided.
+func (r *OwnershipRegistry) issueGatewayToken(sandboxID string) string {
+	r.mu.RLock()
+	gwURL := r.gatewayURL
+	r.mu.RUnlock()
+
+	if gwURL == "" {
+		return ""
+	}
+
+	// Call the gateway's credential issuance endpoint.
+	// This is the same endpoint used by the host sandbox's ExecStartPre.
+	body := fmt.Sprintf(`{"sandbox_id":"%s"}`, sandboxID)
+	url := strings.TrimRight(gwURL, "/") + "/provider/v1/credentials/issue"
+
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		log.Printf("vmctl: gateway token request creation failed for %s: %v", sandboxID, err)
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("vmctl: gateway token request failed for %s: %v", sandboxID, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("vmctl: gateway token issue returned %d for %s", resp.StatusCode, sandboxID)
+		return ""
+	}
+
+	var result struct {
+		SandboxID string `json:"sandbox_id"`
+		RawToken  string `json:"raw_token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("vmctl: gateway token response decode failed: %v", err)
+		return ""
+	}
+
+	return result.RawToken
 }
 
 // ResolveOrAssign resolves the VM ownership for the given user. If the user
@@ -332,11 +406,17 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 
 	// Boot the real Firecracker VM if a manager is configured.
 	if mgr != nil {
+		// Issue a gateway token for the VM sandbox before booting.
+		// The token is written to the persistent directory by the vmmanager
+		// and read by the guest init script to authenticate to the gateway.
+		gwToken := r.issueGatewayToken(vmID)
+
 		info, err := mgr.BootVM(VMManagerConfig{
 			VMID:              vmID,
 			GuestPort:         8085,
 			MachineCPUCount:   2,
 			MachineMemSizeMib: 512,
+			GatewayToken:      gwToken,
 		})
 		if err != nil {
 			log.Printf("vmctl: Firecracker boot failed for VM %s: %v", vmID, err)

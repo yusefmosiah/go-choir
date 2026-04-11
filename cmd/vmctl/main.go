@@ -20,6 +20,14 @@ func main() {
 
 	registry := vmctl.NewOwnershipRegistry(sandboxURLBase)
 
+	// Configure the gateway URL for issuing sandbox credentials to VM guests.
+	// When Firecracker VMs are active, each guest sandbox needs a token to
+	// authenticate to the host-side gateway for provider access.
+	if gwURL := os.Getenv("VMCTL_GATEWAY_URL"); gwURL != "" {
+		registry.SetGatewayURL(gwURL)
+		log.Printf("vmctl: gateway URL configured for VM token issuance")
+	}
+
 	// Configure idle timeout for automatic VM lifecycle management.
 	// After this duration of inactivity, VMs transition to hibernated
 	// state (VAL-VM-008, VAL-CROSS-116).
@@ -79,6 +87,7 @@ func (a *vmManagerAdapter) BootVM(cfg vmctl.VMManagerConfig) (*vmctl.VMInstanceI
 		MachineCPUCount:   cfg.MachineCPUCount,
 		MachineMemSizeMib: cfg.MachineMemSizeMib,
 		PersistentDir:     cfg.PersistentDir,
+		GatewayToken:      cfg.GatewayToken,
 	})
 	if err != nil {
 		return nil, err

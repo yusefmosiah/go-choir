@@ -91,6 +91,14 @@ type VMConfig struct {
 	// the guest and survives stop/resume cycles (VAL-CROSS-116).
 	PersistentDir string
 
+	// GatewayToken is the sandbox credential token for authenticating to
+	// the host-side gateway. Written to a file in the persistent directory
+	// so the guest init script can read and set RUNTIME_GATEWAY_TOKEN.
+	// This is NOT a provider credential — it's a sandbox identity token
+	// that allows the guest sandbox to call the gateway (VAL-VM-011
+	// still holds: no provider credentials in the guest).
+	GatewayToken string
+
 	// Epoch is the monotonically increasing boot counter for this VM.
 	// On fresh boot, the epoch increments. On resume from hibernate,
 	// the epoch stays the same. Callers can use epoch to detect whether
@@ -290,6 +298,19 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	}
 	if err := os.MkdirAll(cfg.PersistentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create persistent dir %s: %w", cfg.PersistentDir, err)
+	}
+
+	// Write the gateway token to the persistent directory if provided.
+	// The guest init script reads this file and sets RUNTIME_GATEWAY_TOKEN.
+	// This is a sandbox identity token (not a provider credential) so
+	// VAL-VM-011 is not violated — the token only authenticates the
+	// sandbox to the host-side gateway, which holds the actual provider
+	// credentials (VAL-GATEWAY-004).
+	if cfg.GatewayToken != "" {
+		tokenPath := filepath.Join(cfg.PersistentDir, "gateway-token")
+		if err := os.WriteFile(tokenPath, []byte(cfg.GatewayToken), 0o600); err != nil {
+			log.Printf("vmmanager: warning: could not write gateway token for VM %s: %v", cfg.VMID, err)
+		}
 	}
 
 	// Load or initialize the epoch counter for this VM.
@@ -615,11 +636,14 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// Build the guest kernel boot arguments.
 	// These contain NO provider credentials (VAL-VM-011).
 	// Network config is passed via ip= kernel parameter so the guest
-	// can configure its network interface at boot time.
-	// The init= parameter tells the kernel to run the initramfs init
-	// which loads ext4 and then switch_roots to the real rootfs.
+	// can configure its network interface at boot time. The kernel must
+	// be compiled with CONFIG_IP_PNP=y for the ip= parameter to take effect.
+	// init=/bin/init tells the kernel to run our custom init script
+	// instead of searching for /sbin/init.
+	// root=/dev/vda points to the Firecracker virtio-block root drive.
 	bootArgs := fmt.Sprintf(
 		"console=ttyS0 reboot=k panic=1 pci=off "+
+			"root=/dev/vda rw init=/bin/init "+
 			"guest_port=%d persistent=/mnt/persistent "+
 			"vm_id=%s epoch=%d "+
 			"ip=%s::%s:255.255.255.252::eth0:off",
@@ -893,11 +917,27 @@ func (m *Manager) deleteTapDevice(name string) {
 	ipBin := findBinary("ip", "/run/current-system/sw/bin/ip")
 	iptBin := findBinary("iptables", "/run/current-system/sw/bin/iptables")
 
-	// Remove iptables DNAT rules associated with this tap device.
+	comment := fmt.Sprintf("go-choir-vm-%s", name)
+
+	// Remove all iptables rules associated with this VM's comment tag.
+	// We clean up PREROUTING, OUTPUT, POSTROUTING, and FORWARD chains
+	// to ensure no stale rules leak between VM lifecycles.
+	for _, chain := range []string{"PREROUTING", "OUTPUT", "POSTROUTING"} {
+		_ = exec.Command("sh", "-c",
+			fmt.Sprintf("%s -t nat -S %s | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D %s $rule 2>/dev/null; done", iptBin, chain, comment, iptBin, chain)).Run()
+	}
+	for _, chain := range []string{"FORWARD"} {
+		_ = exec.Command("sh", "-c",
+			fmt.Sprintf("%s -S %s | grep '%s' | cut -d' ' -f2- | while read rule; do %s -D %s $rule 2>/dev/null; done", iptBin, chain, comment, iptBin, chain)).Run()
+	}
+	// Also remove rules by tap device name for older rules that may not
+	// have the comment tag.
+	for _, chain := range []string{"PREROUTING", "OUTPUT", "POSTROUTING"} {
+		_ = exec.Command("sh", "-c",
+			fmt.Sprintf("%s -t nat -S %s | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D %s $rule 2>/dev/null; done", iptBin, chain, name, iptBin, chain)).Run()
+	}
 	_ = exec.Command("sh", "-c",
-		fmt.Sprintf("%s -t nat -S PREROUTING | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D PREROUTING $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
-	_ = exec.Command("sh", "-c",
-		fmt.Sprintf("%s -t nat -S OUTPUT | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D OUTPUT $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
+		fmt.Sprintf("%s -S FORWARD | grep '%s' | cut -d' ' -f2- | while read rule; do %s -D FORWARD $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
 
 	cmd := exec.Command(ipBin, "link", "del", name)
 	if err := cmd.Run(); err != nil {
@@ -907,8 +947,15 @@ func (m *Manager) deleteTapDevice(name string) {
 
 // setupHostNetworking configures the host-side networking for a VM's
 // tap device. It assigns the host IP address to the tap interface and
-// sets up iptables DNAT rules to forward traffic from the assigned
-// host port to the guest's IP:port.
+// sets up iptables rules to:
+//   - Forward traffic from the assigned host port to the guest (DNAT)
+//   - Masquerade guest traffic so the guest can reach host services
+//     like the gateway at 127.0.0.1:8084 (SNAT/MASQUERADE)
+//   - Allow forwarding between the tap device and the host
+//
+// Without masquerading, the guest can send packets to the host but the
+// host's reply packets don't route back to the guest's /30 subnet.
+// The MASQUERADE rule makes host replies go back through the tap device.
 func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, guestIP string, guestPort int) error {
 	ipBin := findBinary("ip", "/run/current-system/sw/bin/ip")
 	iptBin := findBinary("iptables", "/run/current-system/sw/bin/iptables")
@@ -919,17 +966,73 @@ func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, gues
 		log.Printf("vmmanager: note: ip addr add %s/30 on %s: %v (may already be set)", hostIP, tapName, err)
 	}
 
-	// Enable IP forwarding.
+	// Enable IP forwarding globally.
 	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644)
 
-	// Set up DNAT: traffic to 127.0.0.1:hostPort → guestIP:guestPort.
+	// Enable route_localnet on the tap device. This allows the host to
+	// route packets between the guest's subnet and 127.0.0.1 (localhost).
+	// Without this, the DNAT rules that redirect guest→gateway traffic
+	// (172.X.0.1:8084 → 127.0.0.1:8084) would be silently dropped because
+	// the kernel treats 127.0.0.0/8 as a martian source on non-loopback
+	// interfaces. This is critical for the guest to reach the gateway.
+	routeLocalnet := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", tapName)
+	if err := os.WriteFile(routeLocalnet, []byte("1"), 0o644); err != nil {
+		log.Printf("vmmanager: warning: could not enable route_localnet on %s: %v", tapName, err)
+	}
+
+	// Also enable accept_local so the host accepts packets from local
+	// subnets on the tap interface.
+	acceptLocal := fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/accept_local", tapName)
+	_ = os.WriteFile(acceptLocal, []byte("1"), 0o644)
+
+	// Allow forwarding to/from the tap device.
+	// These ACCEPT rules ensure packets can flow between the tap device
+	// and the rest of the host networking stack.
+	_ = exec.Command(iptBin, "-A", "FORWARD",
+		"-i", tapName, "-j", "ACCEPT").Run()
+	_ = exec.Command(iptBin, "-A", "FORWARD",
+		"-o", tapName, "-j", "ACCEPT").Run()
+
+	// Set up MASQUERADE (SNAT) for outbound guest traffic.
+	// This is critical: without it, the guest can send packets to the
+	// host (e.g., to 127.0.0.1:8084 for gateway) but the host's reply
+	// packets don't route back to the guest. MASQUERADE rewrites the
+	// source IP to the host's IP so replies come back through the tap.
 	comment := fmt.Sprintf("go-choir-vm-%s", tapName)
-	dnatCmd := exec.Command(iptBin, "-t", "nat", "-A", "OUTPUT",
+	_ = exec.Command(iptBin, "-t", "nat", "-A", "POSTROUTING",
+		"-s", guestIP+"/30",
+		"-o", "lo",
+		"-j", "MASQUERADE",
+		"-m", "comment", "--comment", comment).Run()
+
+	// Also masquerade traffic going out through the default interface
+	// (in case the guest needs internet access for any reason).
+	_ = exec.Command(iptBin, "-t", "nat", "-A", "POSTROUTING",
+		"-s", guestIP+"/30",
+		"!", "-d", guestIP+"/30",
+		"-j", "MASQUERADE",
+		"-m", "comment", "--comment", comment).Run()
+
+	// Set up DNAT: traffic to 127.0.0.1:hostPort → guestIP:guestPort.
+	// This lets vmctl and other host processes reach the guest sandbox
+	// via localhost on the assigned host port.
+	_ = exec.Command(iptBin, "-t", "nat", "-A", "OUTPUT",
 		"-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort),
 		"-d", "127.0.0.1",
 		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIP, guestPort),
-		"-m", "comment", "--comment", comment)
-	_ = dnatCmd.Run() // best effort
+		"-m", "comment", "--comment", comment).Run()
+
+	// Set up DNAT: guest→host traffic for the gateway port.
+	// The guest sends packets to hostIP:8084 (the gateway port) but the
+	// gateway only listens on 127.0.0.1:8084. This PREROUTING rule
+	// rewrites the destination so the guest can reach the gateway.
+	// Without this, the guest cannot route LLM calls through the host-side
+	// gateway, and provider-backed responses would be impossible.
+	_ = exec.Command(iptBin, "-t", "nat", "-A", "PREROUTING",
+		"-p", "tcp", "--dport", "8084",
+		"-d", hostIP,
+		"-j", "DNAT", "--to-destination", "127.0.0.1:8084",
+		"-m", "comment", "--comment", comment).Run()
 
 	return nil
 }

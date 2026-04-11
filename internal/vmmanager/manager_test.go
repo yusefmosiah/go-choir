@@ -559,7 +559,12 @@ func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
 	bootArgs := bootSource["boot_args"].(string)
 
 	// Verify the boot args contain the expected guest parameters.
-	expectedArgs := []string{"guest_port=8085", "vm_id=vm-bootargs-test", "epoch=1", "persistent=/mnt/persistent"}
+	expectedArgs := []string{
+		"guest_port=8085", "vm_id=vm-bootargs-test", "epoch=1",
+		"persistent=/mnt/persistent",
+		// init= and root= are required for the guest to boot correctly.
+		"init=/bin/init", "root=/dev/vda",
+	}
 	for _, arg := range expectedArgs {
 		if !containsStr(bootArgs, arg) {
 			t.Errorf("expected boot arg %s in: %s", arg, bootArgs)
@@ -660,4 +665,139 @@ func findSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// --- Gateway Token Tests ---
+
+func TestBootVM_WritesGatewayToken(t *testing.T) {
+	// Verify that when a gateway token is provided, it is written to the
+	// persistent directory so the guest init script can read it.
+	tmpDir := t.TempDir()
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = tmpDir
+	cfg.KernelImagePath = "/nonexistent/kernel"
+	cfg.RootfsPath = "/nonexistent/rootfs"
+
+	mgr := NewManager(cfg)
+
+	persistDir := filepath.Join(tmpDir, "test-vm-gw", "persist")
+	token := "test-vm-gw:abcdef1234567890"
+
+	_, err := mgr.BootVM(VMConfig{
+		VMID:          "test-vm-gw",
+		PersistentDir: persistDir,
+		GatewayToken:  token,
+	})
+	// BootVM will fail because Firecracker is not available, but the
+	// token should still be written before the launch attempt.
+	if err == nil {
+		t.Log("BootVM succeeded unexpectedly (no Firecracker)")
+	}
+
+	tokenPath := filepath.Join(persistDir, "gateway-token")
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("expected gateway token file at %s: %v", tokenPath, err)
+	}
+	if string(data) != token {
+		t.Errorf("expected token %q, got %q", token, string(data))
+	}
+}
+
+func TestBootVM_NoGatewayToken(t *testing.T) {
+	// Verify that when no gateway token is provided, no token file is created.
+	tmpDir := t.TempDir()
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = tmpDir
+	cfg.KernelImagePath = "/nonexistent/kernel"
+	cfg.RootfsPath = "/nonexistent/rootfs"
+
+	mgr := NewManager(cfg)
+
+	persistDir := filepath.Join(tmpDir, "test-vm-nogw", "persist")
+
+	_, _ = mgr.BootVM(VMConfig{
+		VMID:          "test-vm-nogw",
+		PersistentDir: persistDir,
+		// GatewayToken intentionally empty
+	})
+
+	tokenPath := filepath.Join(persistDir, "gateway-token")
+	if _, err := os.Stat(tokenPath); err == nil {
+		t.Error("expected no gateway token file when token is empty")
+	}
+}
+
+func TestBuildFirecrackerConfig_IPConfigInBootArgs(t *testing.T) {
+	// Verify the ip= kernel parameter is correctly formatted with guest
+	// and host IPs from the /30 subnet allocation.
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:             "vm-ip-test",
+		KernelImagePath:  cfg.KernelImagePath,
+		RootfsPath:       cfg.RootfsPath,
+		GuestPort:        8085,
+		MachineCPUCount:  2,
+		MachineMemSizeMib: 512,
+		Epoch:            1,
+	}
+
+	// hostPort 9001 → subnetIndex = 9001-9000+1 = 2
+	// guest IP = 172.2.0.2, host IP = 172.2.0.1
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
+
+	bootSource := fcConfig["boot-source"].(map[string]interface{})
+	bootArgs := bootSource["boot_args"].(string)
+
+	// Verify the ip= parameter contains the expected guest/host IPs.
+	if !containsStr(bootArgs, "ip=172.2.0.2::172.2.0.1:255.255.255.252::eth0:off") {
+		t.Errorf("expected ip= parameter with correct subnet in boot args: %s", bootArgs)
+	}
+}
+
+func TestBuildFirecrackerConfig_SubnetIsolation(t *testing.T) {
+	// Verify that different host ports get different /30 subnets,
+	// ensuring VM network isolation (VAL-VM-005).
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:             "vm-subnet-test",
+		KernelImagePath:  cfg.KernelImagePath,
+		RootfsPath:       cfg.RootfsPath,
+		GuestPort:        8085,
+		MachineCPUCount:  2,
+		MachineMemSizeMib: 512,
+		Epoch:            1,
+	}
+
+	// VM on port 9000 → subnetIndex=1 → 172.1.0.0/30
+	fcConfig1 := mgr.buildFirecrackerConfig(vmCfg, 9000)
+	// VM on port 9001 → subnetIndex=2 → 172.2.0.0/30
+	fcConfig2 := mgr.buildFirecrackerConfig(vmCfg, 9001)
+
+	bootArgs1 := fcConfig1["boot-source"].(map[string]interface{})["boot_args"].(string)
+	bootArgs2 := fcConfig2["boot-source"].(map[string]interface{})["boot_args"].(string)
+
+	// Verify different subnets.
+	if containsStr(bootArgs1, "172.1.0.2") && containsStr(bootArgs2, "172.2.0.2") {
+		// Expected: different subnets
+	} else {
+		t.Errorf("expected different subnets for different host ports:\n  port 9000: %s\n  port 9001: %s", bootArgs1, bootArgs2)
+	}
+
+	// Verify the subnets are actually different.
+	if bootArgs1 == bootArgs2 {
+		t.Error("expected different boot args for different host ports")
+	}
 }

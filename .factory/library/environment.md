@@ -70,6 +70,7 @@ Environment variables, external dependencies, and setup notes.
 - `VM_MEM_MIB` — memory per VM in MiB (default: `512`)
 - `VM_HEALTH_CHECK_INTERVAL` — health check interval (default: `15s`)
 - `VM_HEALTH_CHECK_TIMEOUT` — per-check HTTP timeout (default: `3s`)
+- `VMCTL_GATEWAY_URL` — gateway URL used by vmctl to issue sandbox credentials for VM guests before booting. The issued token is written to the VM's persistent directory and read by the guest init script (default: empty = no gateway token issuance)
 - Guest images are built via `nix build .#guest-image` and contain only the sandbox binary — no provider credentials (VAL-VM-010, VAL-VM-011)
 
 ### VM activation (Node B)

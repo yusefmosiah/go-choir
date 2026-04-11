@@ -1696,3 +1696,79 @@ func TestOwnershipRegistry_ResumeOnResolveWithVMManager(t *testing.T) {
 		t.Fatalf("expected 1 ResumeVM call, got %d", len(mock.resumes))
 	}
 }
+
+// --- Gateway Token Issuance Tests ---
+
+func TestIssueGatewayToken_Success(t *testing.T) {
+	// Verify that issueGatewayToken calls the gateway's credential endpoint
+	// and returns the credential value.
+	credValue := "vm-test-123:changedplaceholder"
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/provider/v1/credentials/issue" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Mirror the gateway credential issuance response structure.
+		resp := map[string]string{
+			"sandbox_id": "vm-test-123",
+			"raw_token":  credValue,
+			"expires_at": "2025-01-01T00:00:00Z",
+		}
+		jsonData, _ := json.Marshal(resp)
+		w.Write(jsonData)
+	}))
+	defer gateway.Close()
+
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetGatewayURL(gateway.URL)
+
+	token := reg.issueGatewayToken("vm-test-123")
+	if token != credValue {
+		t.Errorf("expected credential value %q, got %q", credValue, token)
+	}
+}
+
+func TestIssueGatewayToken_NoGatewayURL(t *testing.T) {
+	// When no gateway URL is configured, issueGatewayToken returns empty string.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	// Don't call SetGatewayURL
+
+	token := reg.issueGatewayToken("vm-test-123")
+	if token != "" {
+		t.Errorf("expected empty token when no gateway URL, got %q", token)
+	}
+}
+
+func TestIssueGatewayToken_GatewayFailure(t *testing.T) {
+	// When the gateway returns an error, issueGatewayToken returns empty string.
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer gateway.Close()
+
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetGatewayURL(gateway.URL)
+
+	token := reg.issueGatewayToken("vm-test-123")
+	if token != "" {
+		t.Errorf("expected empty token on gateway failure, got %q", token)
+	}
+}
+
+func TestSetGatewayURL(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetGatewayURL("http://gateway.test:8084")
+
+	reg.mu.RLock()
+	gwURL := reg.gatewayURL
+	reg.mu.RUnlock()
+
+	if gwURL != "http://gateway.test:8084" {
+		t.Errorf("expected gateway URL http://gateway.test:8084, got %s", gwURL)
+	}
+}
