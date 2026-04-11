@@ -510,11 +510,7 @@ func TestSetHealthTransitionsVisible(t *testing.T) {
 	}
 
 	// The health events should also be persisted for post-restart visibility.
-	evts, err := rt.Store().ListEvents(ctx, "", 20)
-	if err != nil {
-		// ListEvents with empty taskID may return nothing; check by owner instead
-		// or by a different method. This is OK - the key test is the bus event.
-	}
+	evts, _ := rt.Store().ListEvents(ctx, "", 20)
 	_ = evts // not critical for this test
 }
 
@@ -581,7 +577,7 @@ func TestEventPayloadContent(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	evts, err := s.ListEvents(ctx, "", 20)
+	evts, _ := s.ListEvents(ctx, "", 20)
 	_ = evts // Events are per-task, may need to query by task ID
 }
 

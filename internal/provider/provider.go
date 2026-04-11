@@ -244,7 +244,7 @@ func (p *BedrockProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespons
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: http call: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return parseBedrockResponse(resp, p.modelID)
 }
@@ -351,7 +351,7 @@ func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, e
 	if err != nil {
 		return nil, fmt.Errorf("zai: http call: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return parseAnthropicResponse(resp, p.modelID, "zai")
 }
@@ -476,11 +476,7 @@ func convertToolDefs(tools []ToolDef) []anthropicTool {
 	}
 	out := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		out = append(out, anthropicTool{
-			Name:        tool.Name,
-			Description: tool.Description,
-			InputSchema: tool.InputSchema,
-		})
+		out = append(out, anthropicTool(tool))
 	}
 	return out
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +77,7 @@ func TestBedrockProviderCallSuccess(t *testing.T) {
 			Usage:      anthropicUsage{InputTokens: 10, OutputTokens: 5},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -123,7 +122,7 @@ func TestBedrockProviderCallSuccess(t *testing.T) {
 func TestBedrockProviderCallError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"message":"Service unavailable"}`))
+		_, _ = w.Write([]byte(`{"message":"Service unavailable"}`))
 	}))
 	defer server.Close()
 
@@ -214,7 +213,7 @@ func TestZAIProviderCallSuccess(t *testing.T) {
 			Usage:      anthropicUsage{InputTokens: 8, OutputTokens: 4},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -250,7 +249,7 @@ func TestZAIProviderCallSuccess(t *testing.T) {
 func TestZAIProviderCallError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"invalid api key"}`))
+		_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
 	}))
 	defer server.Close()
 
@@ -300,14 +299,9 @@ func TestZAIProviderDefaultBaseURL(t *testing.T) {
 // --- Resolve Provider Tests ---
 
 func TestResolveProviderPrefersBedrock(t *testing.T) {
-	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-token")
-	os.Setenv("AWS_REGION", "us-east-1")
-	os.Setenv("ZAI_API_KEY", "test-zai-key")
-	defer func() {
-		os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
-		os.Unsetenv("AWS_REGION")
-		os.Unsetenv("ZAI_API_KEY")
-	}()
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-token")
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
 	p, err := ResolveProvider()
 	if err != nil {
@@ -322,9 +316,7 @@ func TestResolveProviderPrefersBedrock(t *testing.T) {
 }
 
 func TestResolveProviderFallsBackToZAI(t *testing.T) {
-	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
-	os.Setenv("ZAI_API_KEY", "test-zai-key")
-	defer os.Unsetenv("ZAI_API_KEY")
+	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
 	p, err := ResolveProvider()
 	if err != nil {
@@ -339,8 +331,8 @@ func TestResolveProviderFallsBackToZAI(t *testing.T) {
 }
 
 func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
-	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
-	os.Unsetenv("ZAI_API_KEY")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ZAI_API_KEY", "")
 
 	p, err := ResolveProvider()
 	if err != nil {
@@ -527,7 +519,7 @@ func TestBridgeProviderEventsDistinguishRealFromStub(t *testing.T) {
 	var collected []map[string]string
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		var m map[string]string
-		json.Unmarshal(payload, &m)
+		_ = json.Unmarshal(payload, &m)
 		collected = append(collected, m)
 	}
 
@@ -572,9 +564,8 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // --- Bedrock from Env Tests ---
 
 func TestBedrockProviderFromEnvMissingRegion(t *testing.T) {
-	os.Unsetenv("AWS_REGION")
-	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
-	defer os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
 
 	_, err := NewBedrockProviderFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "region") {
@@ -583,9 +574,8 @@ func TestBedrockProviderFromEnvMissingRegion(t *testing.T) {
 }
 
 func TestBedrockProviderFromEnvMissingToken(t *testing.T) {
-	os.Setenv("AWS_REGION", "us-east-1")
-	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
-	defer os.Unsetenv("AWS_REGION")
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
 
 	_, err := NewBedrockProviderFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "auth token") {
@@ -594,13 +584,9 @@ func TestBedrockProviderFromEnvMissingToken(t *testing.T) {
 }
 
 func TestBedrockProviderFromEnvDefaultsModel(t *testing.T) {
-	os.Setenv("AWS_REGION", "us-east-1")
-	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
-	os.Unsetenv("RUNTIME_BEDROCK_MODEL")
-	defer func() {
-		os.Unsetenv("AWS_REGION")
-		os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
-	}()
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
+	t.Setenv("RUNTIME_BEDROCK_MODEL", "")
 
 	p, err := NewBedrockProviderFromEnv()
 	if err != nil {
@@ -614,7 +600,7 @@ func TestBedrockProviderFromEnvDefaultsModel(t *testing.T) {
 // --- Z.AI from Env Tests ---
 
 func TestZAIProviderFromEnvMissingKey(t *testing.T) {
-	os.Unsetenv("ZAI_API_KEY")
+	t.Setenv("ZAI_API_KEY", "")
 
 	_, err := NewZAIProviderFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "api key") {
@@ -623,9 +609,8 @@ func TestZAIProviderFromEnvMissingKey(t *testing.T) {
 }
 
 func TestZAIProviderFromEnvDefaultsModel(t *testing.T) {
-	os.Setenv("ZAI_API_KEY", "test-key")
-	os.Unsetenv("RUNTIME_ZAI_MODEL")
-	defer os.Unsetenv("ZAI_API_KEY")
+	t.Setenv("ZAI_API_KEY", "test-key")
+	t.Setenv("RUNTIME_ZAI_MODEL", "")
 
 	p, err := NewZAIProviderFromEnv()
 	if err != nil {
@@ -681,7 +666,7 @@ func TestErrorSanitization(t *testing.T) {
 	// Verify that HTTP errors from providers do not include raw response bodies.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"internal server error with secret=abc123"}`))
+		_, _ = w.Write([]byte(`{"error":"internal server error with secret=abc123"}`))
 	}))
 	defer server.Close()
 
@@ -716,7 +701,7 @@ func TestBedrockProviderCallWithToolUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify the request includes tools if present.
 		var body map[string]json.RawMessage
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		// Not strictly required for this test, but verify we can parse it.
 
 		resp := anthropicResponse{
@@ -729,7 +714,7 @@ func TestBedrockProviderCallWithToolUse(t *testing.T) {
 			Usage:      anthropicUsage{InputTokens: 50, OutputTokens: 30},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -791,7 +776,7 @@ func TestZAIProviderCallWithToolUse(t *testing.T) {
 			Usage:      anthropicUsage{InputTokens: 40, OutputTokens: 20},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -838,7 +823,7 @@ func TestBedrockProviderCallWithMultipleToolUse(t *testing.T) {
 			Usage:      anthropicUsage{InputTokens: 30, OutputTokens: 60},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 

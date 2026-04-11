@@ -254,7 +254,7 @@ func (h *APIHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 				log.Printf("runtime api: marshal event: %v", err)
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -276,7 +276,7 @@ func (h *APIHandler) sendHistoricalEvents(ctx context.Context, w http.ResponseWr
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(w, "data: %s\n\n", data)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 	}
 	if len(events) > 0 {
 		if f, ok := w.(http.Flusher); ok {
@@ -299,9 +299,10 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Map runtime health to HTTP status code.
 	httpStatus := http.StatusOK
-	if health == types.HealthFailed {
+	switch health {
+	case types.HealthFailed:
 		httpStatus = http.StatusServiceUnavailable
-	} else if health == types.HealthDegraded {
+	case types.HealthDegraded:
 		httpStatus = http.StatusOK // degraded is still serving, just observable
 	}
 

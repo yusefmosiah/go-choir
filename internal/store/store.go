@@ -539,11 +539,4 @@ func formatTimePtr(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// nullIfEmpty returns nil for empty strings (SQL NULL) and the string
-// otherwise.
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
+
