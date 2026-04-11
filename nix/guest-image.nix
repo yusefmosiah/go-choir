@@ -131,7 +131,6 @@ let
   guestInitrd = pkgs.runCommand "go-choir-guest-initrd.cpio.gz" {
     buildInputs = [ pkgs.cpio pkgs.gzip guestKernelPackage ];
   } ''
-    mkdir -p $out_dir
     outdir=$TMPDIR/initrd
 
     mkdir -p $outdir/{bin,proc,sys,dev,root,lib/modules}
