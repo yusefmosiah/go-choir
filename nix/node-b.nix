@@ -272,7 +272,26 @@ in
       # The gateway's credential issuance endpoint is localhost-only
       # (VAL-GATEWAY-004). We retry with backoff because the gateway
       # may still be initializing when this ExecStartPre runs.
-      ExecStartPre = "${pkgs.bash}/bin/bash -c 'for i in 1 2 3 4 5; do token=$${curl -sf -X POST http://127.0.0.1:8084/provider/v1/credentials/issue -H \"Content-Type: application/json\" -d \"{\\\"sandbox_id\\\": \\\"sandbox-m1\\\"}\" 2>/dev/null | ${pkgs.jq}/bin/jq -r .RawToken 2>/dev/null) && test -n \"$$token\" && echo \"RUNTIME_GATEWAY_TOKEN=$$token\" > /var/lib/go-choir/sandbox-gateway-token.env && exit 0; sleep $$((i * 2)); done; exit 1'";
+      # Uses a wrapper script to avoid NixOS systemd dollar-sign escaping
+      # conflicts with JSON in the curl body.
+      ExecStartPre = let
+        bootstrapScript = pkgs.writeShellScript "sandbox-gateway-bootstrap" ''
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            token=$(${pkgs.curl}/bin/curl -sf -X POST \
+              http://127.0.0.1:8084/provider/v1/credentials/issue \
+              -H "Content-Type: application/json" \
+              -d '{"sandbox_id":"sandbox-m1"}' 2>/dev/null \
+              | ${pkgs.jq}/bin/jq -r .RawToken 2>/dev/null) || true
+            if [ -n "$token" ] && [ "$token" != "null" ]; then
+              echo "RUNTIME_GATEWAY_TOKEN=$token" > /var/lib/go-choir/sandbox-gateway-token.env
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          exit 1
+        '';
+      in "${bootstrapScript}";
       ExecStart = "${goChoirPackages.sandbox}/bin/sandbox";
       Restart = "on-failure";
       RestartSec = 3;
