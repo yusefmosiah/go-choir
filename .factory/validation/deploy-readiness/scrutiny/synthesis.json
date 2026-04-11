@@ -1,0 +1,111 @@
+{
+  "milestone": "deploy-readiness",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "go test ./... -count=1 -p 4",
+      "exitCode": 0,
+      "observation": "All 4 internal packages passed (auth, proxy, sandbox, server). Cmd packages have no test files."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "go vet ./...",
+      "exitCode": 0,
+      "observation": "No vet issues found."
+    },
+    "lint": {
+      "passed": true,
+      "command": "golangci-lint run ./...",
+      "exitCode": 0,
+      "observation": "0 issues reported after deploy-go-lint-hygiene feature."
+    },
+    "frontend-build": {
+      "passed": true,
+      "command": "cd frontend && pnpm build",
+      "exitCode": 0,
+      "observation": "Vite build successful with hashed assets (index-4UYezCQ3.js, index-D-d1h17n.css)."
+    }
+  },
+  "reviewsSummary": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "Node B deployment commands (ssh, nixos-rebuild) should be added to services.yaml",
+      "reason": "Node B deployment commands are production-specific operations that differ from local development commands. The services.yaml is designed for local development operations. Production deployment commands belong in deployment documentation, not services.yaml.",
+      "evidence": "Worker transcripts showed ssh node-b commands for nixos-rebuild switch"
+    }
+  ],
+  "reviewDetails": [
+    {
+      "featureId": "deploy-built-frontend-artifact",
+      "status": "pass",
+      "commitId": "af169669c6be64bf91c60d82c9d380b0af1b115c",
+      "summary": "Successfully replaced placeholder deploy artifact with real built Svelte frontend. flake.nix correctly uses buildNpmPackage with proper source filtering and Caddy routing preserved prefix-stable routing. npmDepsHash placeholder correctly set for Node B resolution. VAL-DEPLOY-001 and VAL-DEPLOY-006 satisfied."
+    },
+    {
+      "featureId": "deploy-resolve-frontend-npmdepshash-and-nodeb-proof",
+      "status": "pass",
+      "commitId": "032ae6c",
+      "summary": "npmDepsHash resolved correctly on first attempt using prefetch-npm-deps. x86_64-linux build on Node B succeeded without hash adjustments. Public verification at https://draft.choir-ip.com/ serves built SPA with real hashed assets. All 5 services healthy post-deploy. Library documentation updated with npmDepsHash workflow."
+    },
+    {
+      "featureId": "deploy-auth-proxy-cookie-contract",
+      "status": "pass",
+      "commitId": "4a68ab2",
+      "summary": "Proxy /api/* catch-all hardened to auth-gate all routes, returning 401 for signed-out callers on unknown paths. 12 comprehensive tests added (7 auth cookie contract, 5 proxy fail-closed). All three validation assertions fulfilled: VAL-DEPLOY-003, VAL-DEPLOY-004, VAL-DEPLOY-005. Library documentation added for cookie contract and proxy routing."
+    },
+    {
+      "featureId": "deploy-public-auth-shell-browser-contract",
+      "status": "pass",
+      "commitId": "f12d49b",
+      "summary": "32 Playwright tests added covering all 9 validation assertions (VAL-DEPLOY-002, VAL-CROSS-101–108). Two test files: deploy-readiness-browser-contract.spec.js (22 tests local) and deployed-origin-auth-shell.spec.js (10 tests deployed origin). Virtual-authenticator harness used for passkey ceremonies. Library documentation added with comprehensive verification state."
+    },
+    {
+      "featureId": "deploy-nodeb-exposure-and-restart-readiness",
+      "status": "pass",
+      "commitId": "48cc483",
+      "summary": "Comprehensive hardening of Node B production safety. VAL-DEPLOY-007: Localhost-only binding (127.0.0.1) as defense-in-depth. VAL-DEPLOY-008: Proxy health endpoint reporting upstream sandbox reachability. VAL-CROSS-118: Session persistence across auth restarts via SQLite + refresh token rotation. 11 new tests covering restart scenarios, health transitions, binding behavior. Systemd hardening in nix/node-b.nix with ProtectSystem, PrivateTmp, WatchdogSec."
+    },
+    {
+      "featureId": "deploy-go-lint-hygiene",
+      "status": "pass",
+      "commitId": "e5a5192",
+      "summary": "All 70 golangci-lint blockers cleared. 70 errcheck issues fixed with explicit _ = error handling for Close, Setenv, Unsetenv, SetReadDeadline, json.Encode/Decode, Signal, Write, httpServer.Shutdown. 2 unused functions removed: getAndValidateChallenge, pemEncodeBlock. All validators pass with 0 issues."
+    }
+  ],
+  "sharedStateSummary": {
+    "services": [],
+    "library": [
+      "nixos-config.md - Documents npmDepsHash resolution, Node B verification",
+      "deploy-cookie-contract.md - Documents cookie contract and proxy fail-closed routing",
+      "deploy-readiness-browser-contract.md - Documents 9 validation assertions and test mappings",
+      "restart-readiness.md - Documents exposure control, health checking, recovery paths"
+    ],
+    "conventions": [
+      "Dual-lockfile approach: pnpm-lock.yaml for local, package-lock.json for Nix reproducibility",
+      "Data attributes (data-auth-entry, data-shell, etc.) for Playwright test selectors",
+      "Virtual-authenticator harness for WebAuthn/passkey ceremonies in tests"
+    ]
+  },
+  "validationContractAssertionsFulfilled": [
+    "VAL-DEPLOY-001: Node B serves Mission 2 SPA at public root",
+    "VAL-DEPLOY-002: Browser contract tests pass (all 22 local tests)",
+    "VAL-DEPLOY-003: Auth APIs reachable on public origin",
+    "VAL-DEPLOY-004: Cookie security attributes correct for HTTPS",
+    "VAL-DEPLOY-005: Protected shell routes fail closed when signed out",
+    "VAL-DEPLOY-006: Public root serves built frontend assets",
+    "VAL-DEPLOY-007: Node B internal services bound to localhost",
+    "VAL-DEPLOY-008: Proxy health endpoint reports upstream sandbox status",
+    "VAL-CROSS-101-108: All browser auth/shell journey behaviors verified"
+  ],
+  "previousRound": null
+}
