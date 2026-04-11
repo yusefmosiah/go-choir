@@ -870,3 +870,198 @@ func TestTestStoreIsUsable(t *testing.T) {
 		t.Errorf("ID: got %q, want %q", user.ID, "test-user")
 	}
 }
+
+// ======================================================================
+// VAL-CROSS-118: Auth restart preserves session data
+// ======================================================================
+
+// TestSessionDataSurvivesAuthRestart verifies that auth session data
+// persists across a simulated auth service restart. This is the key
+// invariant for VAL-CROSS-118: after auth restarts, browser users can
+// rehydrate via refresh-token rotation because their session data is
+// persisted in SQLite rather than held only in memory.
+//
+// The test simulates a restart by closing the store and re-opening it
+// against the same database file, then verifying that the previously
+// created user, credential, and refresh session are still present and
+// usable.
+func TestSessionDataSurvivesAuthRestart(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "auth-restart-test.db")
+
+	// --- Phase 1: First "run" of auth — create user, credential, refresh session.
+	store1, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("first OpenStore: %v", err)
+	}
+
+	// Create a user.
+	user, err := store1.CreateUser("user-restart-001", "restart-tester")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	// Create a credential for the user.
+	cred := &Credential{
+		ID:              "cred-restart-001",
+		UserID:          user.ID,
+		PublicKey:       []byte("fake-pub-key-for-restart-test"),
+		AttestationType: "none",
+		Transport:       "[]",
+		SignCount:       0,
+		AAGUID:          []byte{},
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store1.CreateCredential(cred); err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+
+	// Create a refresh session for the user.
+	rs := &RefreshSession{
+		ID:        "rs-restart-001",
+		UserID:    user.ID,
+		TokenHash: "abc123restart",
+		CreatedAt: time.Now().UTC(),
+		ExpiresAt: time.Now().UTC().Add(720 * time.Hour),
+	}
+	if err := store1.CreateRefreshSession(rs); err != nil {
+		t.Fatalf("CreateRefreshSession: %v", err)
+	}
+
+	// Close the store (simulate auth shutdown).
+	store1.Close()
+
+	// --- Phase 2: Second "run" of auth — reopen the same DB, verify data persists.
+	store2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("second OpenStore (after restart): %v", err)
+	}
+	defer store2.Close()
+
+	// Verify the user still exists.
+	foundUser, err := store2.GetUserByID(user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID after restart: %v", err)
+	}
+	if foundUser.Username != "restart-tester" {
+		t.Errorf("user after restart: got username %q, want %q", foundUser.Username, "restart-tester")
+	}
+
+	// Verify the credential still exists.
+	creds, err := store2.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("GetCredentialsByUserID after restart: %v", err)
+	}
+	if len(creds) != 1 {
+		t.Fatalf("credentials after restart: got %d, want 1", len(creds))
+	}
+	if creds[0].ID != "cred-restart-001" {
+		t.Errorf("credential ID after restart: got %q, want %q", creds[0].ID, "cred-restart-001")
+	}
+
+	// Verify the refresh session still exists and is usable.
+	foundRS, err := store2.GetRefreshSessionByTokenHash("abc123restart")
+	if err != nil {
+		t.Fatalf("GetRefreshSessionByTokenHash after restart: %v", err)
+	}
+	if foundRS.ID != "rs-restart-001" {
+		t.Errorf("refresh session ID after restart: got %q, want %q", foundRS.ID, "rs-restart-001")
+	}
+	if foundRS.UserID != user.ID {
+		t.Errorf("refresh session user after restart: got %q, want %q", foundRS.UserID, user.ID)
+	}
+
+	// Verify the refresh session is not expired.
+	if time.Now().UTC().After(foundRS.ExpiresAt) {
+		t.Error("refresh session expired after restart — should still be valid")
+	}
+}
+
+// TestRefreshRotationWorksAfterAuthRestart verifies that refresh token
+// rotation (the mechanism used for browser rehydration) works correctly
+// after a simulated auth restart. This directly exercises the
+// VAL-CROSS-118 recovery path: after auth restarts, a browser user's
+// expired access JWT is renewed by rotating their refresh token.
+func TestRefreshRotationWorksAfterAuthRestart(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "auth-rotation-test.db")
+
+	// --- Phase 1: Create user and initial refresh session.
+	store1, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("first OpenStore: %v", err)
+	}
+
+	user, err := store1.CreateUser("user-rotation-001", "rotation-tester")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	rs := &RefreshSession{
+		ID:        "rs-rotation-001",
+		UserID:    user.ID,
+		TokenHash: "initial-token-hash",
+		CreatedAt: time.Now().UTC(),
+		ExpiresAt: time.Now().UTC().Add(720 * time.Hour),
+	}
+	if err := store1.CreateRefreshSession(rs); err != nil {
+		t.Fatalf("CreateRefreshSession: %v", err)
+	}
+
+	store1.Close()
+
+	// --- Phase 2: After restart, rotate the refresh session.
+	store2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("second OpenStore (after restart): %v", err)
+	}
+	defer store2.Close()
+
+	// Look up the existing refresh session (simulating the browser's
+	// refresh cookie being presented for renewal).
+	foundRS, err := store2.GetRefreshSessionByTokenHash("initial-token-hash")
+	if err != nil {
+		t.Fatalf("GetRefreshSessionByTokenHash after restart: %v", err)
+	}
+
+	// Delete the old session (rotation).
+	if err := store2.DeleteRefreshSessionByID(foundRS.ID); err != nil {
+		t.Fatalf("DeleteRefreshSessionByID (rotation): %v", err)
+	}
+
+	// Create a new rotated session.
+	newRS := &RefreshSession{
+		ID:        "rs-rotation-002",
+		UserID:    user.ID,
+		TokenHash: "rotated-token-hash",
+		CreatedAt: time.Now().UTC(),
+		ExpiresAt: time.Now().UTC().Add(720 * time.Hour),
+	}
+	if err := store2.CreateRefreshSession(newRS); err != nil {
+		t.Fatalf("CreateRefreshSession (rotated): %v", err)
+	}
+
+	// Verify the old session is gone.
+	_, err = store2.GetRefreshSessionByTokenHash("initial-token-hash")
+	if err == nil {
+		t.Error("old refresh session should be deleted after rotation")
+	}
+
+	// Verify the new session is usable.
+	foundNewRS, err := store2.GetRefreshSessionByTokenHash("rotated-token-hash")
+	if err != nil {
+		t.Fatalf("GetRefreshSessionByTokenHash (rotated): %v", err)
+	}
+	if foundNewRS.UserID != user.ID {
+		t.Errorf("rotated session user: got %q, want %q", foundNewRS.UserID, user.ID)
+	}
+
+	// Verify user data is still accessible.
+	foundUser, err := store2.GetUserByID(user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID after rotation: %v", err)
+	}
+	if foundUser.Username != "rotation-tester" {
+		t.Errorf("user after rotation: got username %q, want %q", foundUser.Username, "rotation-tester")
+	}
+}

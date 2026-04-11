@@ -11,9 +11,11 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/yusefmosiah/go-choir/internal/server"
 )
 
 // clientIdentityHeaders is the list of HTTP headers that must be stripped from
@@ -32,6 +34,16 @@ var clientIdentityHeaders = []string{
 // errorResponse is a generic JSON error envelope.
 type errorResponse struct {
 	Error string `json:"error"`
+}
+
+// proxyHealthResponse is the JSON structure returned by the proxy /health
+// endpoint. It includes the proxy status and the upstream sandbox
+// reachability status, making the protected-request backend health
+// observable for VAL-DEPLOY-008.
+type proxyHealthResponse struct {
+	Status   string `json:"status"`
+	Service  string `json:"service"`
+	Upstream string `json:"upstream"`
 }
 
 // AuthResult holds the result of access JWT validation.
@@ -368,8 +380,59 @@ func (h *Handler) relayFrames(src, dst *websocket.Conn, direction string) {
 	}
 }
 
+// HandleHealth handles GET /health for the proxy service. It checks the
+// upstream sandbox reachability in addition to the proxy's own health,
+// making the protected-request backend health observable (VAL-DEPLOY-008).
+// The response includes:
+//   - status: "ok" when the proxy and upstream are healthy, "degraded" when
+//     the proxy is up but the upstream is unreachable
+//   - upstream: "ok" or "unreachable"
+func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	// Check upstream sandbox health.
+	upstreamStatus := "ok"
+	upstreamHealthy := h.checkUpstreamHealth()
+	if !upstreamHealthy {
+		upstreamStatus = "unreachable"
+	}
+
+	status := "ok"
+	if !upstreamHealthy {
+		status = "degraded"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(proxyHealthResponse{
+		Status:   status,
+		Service:  "proxy",
+		Upstream: upstreamStatus,
+	})
+}
+
+// checkUpstreamHealth probes the upstream sandbox's /health endpoint
+// with a short timeout. Returns true if the upstream responds with a
+// 2xx status within 2 seconds, false otherwise.
+func (h *Handler) checkUpstreamHealth() bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	url := h.sandboxURL.String() + "/health"
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
 // RegisterRoutes registers all proxy routes on the given server.
-func RegisterRoutes(s interface{ HandleFunc(string, http.HandlerFunc) }, h *Handler) {
+// The proxy /health handler is registered via SetHealthHandler to
+// override the default server health handler with one that reports
+// upstream sandbox reachability.
+func RegisterRoutes(s *server.Server, h *Handler) {
+	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/api/shell/bootstrap", h.HandleBootstrap)
 	s.HandleFunc("/api/ws", h.HandleWS)
 	s.HandleFunc("/api/", h.HandleAPI)

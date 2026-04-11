@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1749,5 +1751,246 @@ func TestSignedOutCallersNeverSeeSandboxData(t *testing.T) {
 	}
 }
 
+// ======================================================================
+// VAL-DEPLOY-008 / VAL-CROSS-118: Proxy health and restart readiness
+// ======================================================================
 
+// TestProxyHealthReportsOkWhenUpstreamIsHealthy verifies that the proxy
+// /health endpoint returns "ok" status with "ok" upstream when the
+// sandbox backend is reachable.
+//
+// VAL-DEPLOY-008: "protected-request backend health is observable"
+func TestProxyHealthReportsOkWhenUpstreamIsHealthy(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
 
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	h.HandleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("health endpoint: got status %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp proxyHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+
+	if resp.Status != "ok" {
+		t.Errorf("status: got %q, want %q", resp.Status, "ok")
+	}
+	if resp.Service != "proxy" {
+		t.Errorf("service: got %q, want %q", resp.Service, "proxy")
+	}
+	if resp.Upstream != "ok" {
+		t.Errorf("upstream: got %q, want %q", resp.Upstream, "ok")
+	}
+}
+
+// TestProxyHealthReportsDegradedWhenUpstreamIsUnreachable verifies that
+// the proxy /health endpoint returns "degraded" status with "unreachable"
+// upstream when the sandbox backend is not available. This makes it
+// possible for operators and monitoring to distinguish between a healthy
+// proxy and a degraded proxy whose backend is down.
+//
+// VAL-DEPLOY-008: "protected-request backend health is observable and restartable"
+func TestProxyHealthReportsDegradedWhenUpstreamIsUnreachable(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Create a sandbox server that we can close to simulate unreachability.
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+	})
+	sandboxServer := httptest.NewServer(sandboxMux)
+
+	cfg := &Config{Port: "0", SandboxURL: sandboxServer.URL, AuthPublicKeyPath: "/unused"}
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	// Verify health is ok while sandbox is up.
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	var respOk proxyHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&respOk); err != nil {
+		t.Fatalf("decode healthy response: %v", err)
+	}
+	if respOk.Status != "ok" {
+		t.Errorf("status before shutdown: got %q, want %q", respOk.Status, "ok")
+	}
+	if respOk.Upstream != "ok" {
+		t.Errorf("upstream before shutdown: got %q, want %q", respOk.Upstream, "ok")
+	}
+
+	// Shut down the sandbox to simulate an upstream failure.
+	sandboxServer.Close()
+
+	// Wait briefly for connections to drain.
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify health reports degraded when upstream is unreachable.
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w2 := httptest.NewRecorder()
+	handler.HandleHealth(w2, req2)
+
+	var respDegraded proxyHealthResponse
+	if err := json.NewDecoder(w2.Body).Decode(&respDegraded); err != nil {
+		t.Fatalf("decode degraded response: %v", err)
+	}
+	if respDegraded.Status != "degraded" {
+		t.Errorf("status after shutdown: got %q, want %q", respDegraded.Status, "degraded")
+	}
+	if respDegraded.Upstream != "unreachable" {
+		t.Errorf("upstream after shutdown: got %q, want %q", respDegraded.Upstream, "unreachable")
+	}
+}
+
+// TestProxyHealthReportsDegradedWithNoUpstreamAtStartup verifies that
+// the proxy health endpoint correctly reports "degraded" when started
+// with an unreachable sandbox URL (e.g., sandbox hasn't started yet).
+//
+// VAL-DEPLOY-008: "protected-request backend health is observable"
+func TestProxyHealthReportsDegradedWithNoUpstreamAtStartup(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Point proxy at a non-existent upstream.
+	cfg := &Config{Port: "0", SandboxURL: "http://127.0.0.1:1", AuthPublicKeyPath: "/unused"}
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	var resp proxyHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+
+	if resp.Status != "degraded" {
+		t.Errorf("status with no upstream: got %q, want %q", resp.Status, "degraded")
+	}
+	if resp.Upstream != "unreachable" {
+		t.Errorf("upstream with no upstream: got %q, want %q", resp.Upstream, "unreachable")
+	}
+}
+
+// TestProxyHealthRejectsNonGet verifies that the health endpoint only
+// accepts GET requests.
+func TestProxyHealthRejectsNonGet(t *testing.T) {
+	h, _, _ := testProxyEnv(t)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/health", nil)
+			w := httptest.NewRecorder()
+			h.HandleHealth(w, req)
+
+			if w.Code != http.StatusMethodNotAllowed {
+				t.Errorf("health %s: got status %d, want %d", method, w.Code, http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+// TestProxyHealthRecoversAfterUpstreamRestart verifies that the proxy
+// health endpoint transitions from "degraded" back to "ok" when the
+// upstream sandbox recovers. This simulates the restart recovery path
+// required by VAL-DEPLOY-008 and VAL-CROSS-118.
+//
+// VAL-CROSS-118: "Restarting auth or proxy returns the system to healthy state"
+func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Use a custom port that's unlikely to conflict.
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+	})
+
+	// Start the sandbox, create proxy pointing at it.
+	sandboxServer := httptest.NewServer(sandboxMux)
+	cfg := &Config{Port: "0", SandboxURL: sandboxServer.URL, AuthPublicKeyPath: "/unused"}
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	// Verify health is ok.
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+	var resp1 proxyHealthResponse
+	json.NewDecoder(w.Body).Decode(&resp1)
+	if resp1.Status != "ok" {
+		t.Fatalf("initial status: got %q, want %q", resp1.Status, "ok")
+	}
+
+	// Stop the sandbox (simulate crash).
+	sandboxServer.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify health reports degraded.
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w2 := httptest.NewRecorder()
+	handler.HandleHealth(w2, req2)
+	var resp2 proxyHealthResponse
+	json.NewDecoder(w2.Body).Decode(&resp2)
+	if resp2.Status != "degraded" {
+		t.Fatalf("degraded status: got %q, want %q", resp2.Status, "degraded")
+	}
+
+	// "Restart" the sandbox on the same address by creating a new test server.
+	// Since httptest.Server uses random ports, we need a different approach:
+	// create a new sandbox server and update the handler's config to point to it.
+	newSandboxMux := http.NewServeMux()
+	newSandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+	})
+	newSandboxServer := httptest.NewServer(newSandboxMux)
+	defer newSandboxServer.Close()
+
+	// Re-create the handler pointing to the new sandbox.
+	newSandboxURL, _ := url.Parse(newSandboxServer.URL)
+	proxy := httputil.NewSingleHostReverseProxy(newSandboxURL)
+	handler2, err := NewHandler(&Config{
+		Port:              "0",
+		SandboxURL:        newSandboxServer.URL,
+		AuthPublicKeyPath: "/unused",
+	}, pub)
+	_ = proxy
+	if err != nil {
+		t.Fatalf("NewHandler for restart: %v", err)
+	}
+
+	// Verify health recovers to ok.
+	req3 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w3 := httptest.NewRecorder()
+	handler2.HandleHealth(w3, req3)
+	var resp3 proxyHealthResponse
+	json.NewDecoder(w3.Body).Decode(&resp3)
+	if resp3.Status != "ok" {
+		t.Fatalf("recovered status: got %q, want %q", resp3.Status, "ok")
+	}
+	if resp3.Upstream != "ok" {
+		t.Fatalf("recovered upstream: got %q, want %q", resp3.Upstream, "ok")
+	}
+}

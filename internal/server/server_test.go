@@ -17,7 +17,7 @@ func TestHealthHandler(t *testing.T) {
 	s := NewServer("test-service", "8099")
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
-	s.handler(w, req)
+	s.defaultHealthHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -41,6 +41,40 @@ func TestHealthHandler(t *testing.T) {
 	}
 }
 
+func TestHealthHandlerIncludesAddrAfterStart(t *testing.T) {
+	s := NewServer("test-addr-service", "0")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.Start()
+	}()
+	defer func() {
+		s.Shutdown()
+		wg.Wait()
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	s.defaultHealthHandler(w, req)
+
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	// After the server starts, the Addr field should be populated.
+	if body["addr"] == "" {
+		t.Error("expected non-empty addr in health response after server start")
+	}
+	if !strings.HasPrefix(body["addr"], "127.0.0.1:") {
+		t.Errorf("expected addr to start with 127.0.0.1:, got %q", body["addr"])
+	}
+}
+
 func TestHealthHandlerServiceName(t *testing.T) {
 	names := []string{"auth", "proxy", "vmctl", "gateway", "sandbox"}
 	for _, name := range names {
@@ -48,7 +82,7 @@ func TestHealthHandlerServiceName(t *testing.T) {
 			s := NewServer(name, "8099")
 			req := httptest.NewRequest(http.MethodGet, "/health", nil)
 			w := httptest.NewRecorder()
-			s.handler(w, req)
+			s.defaultHealthHandler(w, req)
 
 			var body map[string]string
 			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
@@ -67,7 +101,7 @@ func TestHealthHandlerMethodNotAllowed(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			req := httptest.NewRequest(method, "/health", nil)
 			w := httptest.NewRecorder()
-			s.handler(w, req)
+			s.defaultHealthHandler(w, req)
 
 			if w.Code != http.StatusMethodNotAllowed {
 				t.Errorf("expected status 405 for %s, got %d", method, w.Code)
@@ -94,6 +128,60 @@ func TestPortDefault(t *testing.T) {
 	port := PortFromEnv(envVar, "8081")
 	if port != "8081" {
 		t.Errorf("expected default port 8081, got %q", port)
+	}
+}
+
+func TestBindHostDefault(t *testing.T) {
+	os.Unsetenv("SERVER_HOST")
+
+	host := BindHostFromEnv()
+	if host != "127.0.0.1" {
+		t.Errorf("expected default bind host 127.0.0.1, got %q", host)
+	}
+}
+
+func TestBindHostFromEnv(t *testing.T) {
+	os.Setenv("SERVER_HOST", "0.0.0.0")
+	defer os.Unsetenv("SERVER_HOST")
+
+	host := BindHostFromEnv()
+	if host != "0.0.0.0" {
+		t.Errorf("expected bind host 0.0.0.0, got %q", host)
+	}
+}
+
+func TestNewServerBindsToLocalhostByDefault(t *testing.T) {
+	os.Unsetenv("SERVER_HOST")
+
+	s := NewServer("test-localhost", "0")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.Start()
+	}()
+	defer func() {
+		s.Shutdown()
+		wg.Wait()
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	addr := s.Addr()
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Errorf("expected server to bind to 127.0.0.1, got addr %q", addr)
+	}
+
+	// Verify the server is reachable on localhost.
+	resp, err := http.Get("http://" + addr + "/health")
+	if err != nil {
+		t.Fatalf("failed to reach /health on localhost: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 }
 

@@ -48,5 +48,34 @@ This preserves the runtime value while avoiding the raw literal pattern. Always 
 ## Firewall
 Only ports 22, 80, 443 are open. Service ports 8081-8085 are localhost-only.
 
+## Service Hardening (VAL-DEPLOY-007 / VAL-DEPLOY-008 / VAL-CROSS-118)
+
+### Localhost-only binding
+All Go services bind to `127.0.0.1` only (not `0.0.0.0`) by default. This is
+defense in depth for VAL-DEPLOY-007: even if the firewall is misconfigured,
+internal service ports are not externally reachable. The bind host is
+controlled by `SERVER_HOST` env var (default: `127.0.0.1`).
+
+### Systemd hardening
+All services share `commonServiceHardening` options in `nix/node-b.nix`:
+- `ProtectSystem = "strict"` — can't modify Nix store
+- `PrivateTmp = true` — own /tmp namespace
+- `NoNewPrivileges = true` — no setuid/setgid
+- `ProtectKernelModules`, `ProtectKernelTunables`, `ProtectControlGroups`
+- `PrivateDevices = true` — minimal /dev
+- `SystemCallFilter = ["@system-service" "~@mount" "@privileged"]`
+- `WatchdogSec = 30` — systemd kills stuck services
+- `Restart = "on-failure"`, `RestartSec = 3`
+
+### Proxy upstream health
+The proxy `/health` endpoint reports upstream sandbox reachability:
+- `{status: "ok", upstream: "ok"}` — proxy and sandbox both healthy
+- `{status: "degraded", upstream: "unreachable"}` — sandbox is down
+
+### Service ordering
+- Proxy `after` auth and sandbox; `requires` auth; `wants` sandbox
+- This means proxy can start before sandbox is fully up, and reports
+  "degraded" until sandbox recovers
+
 ## SSH Keys
 Both the human operator key and the GitHub Actions deploy key are configured from choiros-rs patterns.
