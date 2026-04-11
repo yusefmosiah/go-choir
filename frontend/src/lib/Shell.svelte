@@ -10,6 +10,14 @@
   Does not render or boot any protected traffic until the shell
   component is mounted in the authenticated state.
 
+  Renewal and fallback behaviour (VAL-CROSS-004 / VAL-CROSS-008):
+    - Protected bootstrap fetch uses fetchWithRenewal: on 401 the shell
+      silently renews via GET /auth/session (refresh rotation) and retries.
+    - If renewal fails, the shell dispatches an "authexpired" event so
+      the root App transitions to the guest auth state.
+    - The live channel reconnects after successful renewal. If renewal
+      fails during reconnection, the shell also dispatches "authexpired".
+
   Data attributes for test targeting:
     data-shell               — root container
     data-shell-header        — top bar with app name, user, logout
@@ -20,6 +28,7 @@
 -->
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
 
   export let currentUser = null;
 
@@ -40,19 +49,39 @@
   /** WebSocket reference. */
   let ws = null;
 
+  // ----- WS reconnection state -----
+  /** Whether the WS was closed intentionally (logout). */
+  let wsClosedByLogout = false;
+
+  /** Current WS reconnection attempt number. */
+  let wsReconnectAttempt = 0;
+
+  /** Whether a WS reconnection is already in progress. */
+  let wsReconnecting = false;
+
+  /** Maximum number of WS reconnection attempts before giving up. */
+  const MAX_WS_RECONNECT_ATTEMPTS = 5;
+
+  /** Base delay in ms between WS reconnection attempts. */
+  const WS_RECONNECT_BASE_DELAY = 1000;
+
   async function fetchBootstrap() {
     bootstrapError = '';
     try {
-      const res = await fetch('/api/shell/bootstrap', {
+      const res = await fetchWithRenewal('/api/shell/bootstrap', {
         method: 'GET',
-        credentials: 'include',
       });
       if (!res.ok) {
         bootstrapError = `Bootstrap failed (${res.status})`;
         return;
       }
       bootstrapData = await res.json();
-    } catch (_err) {
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        // Renewal failed — fall back to guest auth state.
+        dispatch('authexpired');
+        return;
+      }
       bootstrapError = 'Bootstrap request failed';
     }
   }
@@ -68,6 +97,7 @@
 
       ws.onopen = () => {
         liveStatus = 'connected';
+        wsReconnectAttempt = 0; // Reset on successful connection.
       };
 
       ws.onmessage = (_event) => {
@@ -80,9 +110,18 @@
       };
 
       ws.onclose = () => {
+        if (wsClosedByLogout) {
+          // Logout triggered close — don't reconnect.
+          liveStatus = 'disconnected';
+          return;
+        }
+
         if (liveStatus !== 'error') {
           liveStatus = 'disconnected';
         }
+
+        // Attempt reconnection with renewal (VAL-CROSS-004).
+        attemptWsReconnection();
       };
     } catch (_err) {
       liveStatus = 'error';
@@ -90,7 +129,48 @@
     }
   }
 
+  /**
+   * Attempts to reconnect the live channel after it closes.
+   * Before reconnecting, checks/refreshes the session via GET /auth/session.
+   * If renewal fails, dispatches "authexpired" so the app falls back to
+   * guest auth state (VAL-CROSS-008).
+   */
+  async function attemptWsReconnection() {
+    if (wsReconnecting) return; // Already reconnecting.
+    if (wsClosedByLogout) return; // Logout triggered close.
+    if (wsReconnectAttempt >= MAX_WS_RECONNECT_ATTEMPTS) {
+      liveStatus = 'error';
+      liveError = 'Could not reconnect after multiple attempts';
+      return;
+    }
+
+    wsReconnecting = true;
+    wsReconnectAttempt++;
+    const delay = WS_RECONNECT_BASE_DELAY * wsReconnectAttempt;
+
+    try {
+      // Wait before attempting reconnection (exponential backoff).
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Check/renew session before reconnecting.
+      const { renewed } = await renewSession();
+
+      if (!renewed) {
+        // Session renewal failed — fall back to guest auth state.
+        dispatch('authexpired');
+        return;
+      }
+
+      // Session is valid (possibly renewed) — attempt reconnection.
+      connectLiveChannel();
+    } finally {
+      wsReconnecting = false;
+    }
+  }
+
   function handleLogout() {
+    // Mark as intentional close so reconnection is not attempted.
+    wsClosedByLogout = true;
     // Close the live channel before logging out.
     if (ws) {
       ws.close();

@@ -245,6 +245,83 @@ export async function logout() {
 }
 
 // ---------------------------------------------------------------------------
+// Session renewal
+// ---------------------------------------------------------------------------
+
+/**
+ * Error thrown when a protected request fails with 401 and session
+ * renewal cannot restore authenticated state. This signals that the
+ * browser should fall back to the guest auth state (VAL-CROSS-008).
+ */
+export class AuthRequiredError extends Error {
+  constructor(message = 'Authentication required') {
+    super(message);
+    this.name = 'AuthRequiredError';
+  }
+}
+
+/**
+ * Attempts to renew the session via GET /auth/session.
+ *
+ * The auth server automatically rotates the refresh token and issues a
+ * new access JWT when the access state is expired but the refresh state
+ * is still valid. If both are invalid or expired, the server returns
+ * signed-out state (VAL-CROSS-004 / VAL-CROSS-008).
+ *
+ * @returns {Promise<{renewed: boolean, user?: object}>}
+ */
+export async function renewSession() {
+  try {
+    const res = await fetch('/auth/session', {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      return { renewed: false };
+    }
+    const data = await res.json();
+    if (data.authenticated && data.user) {
+      return { renewed: true, user: data.user };
+    }
+    return { renewed: false };
+  } catch (_err) {
+    return { renewed: false };
+  }
+}
+
+/**
+ * Makes a fetch request to a protected route with automatic session renewal.
+ *
+ * If the request returns 401 (access JWT expired), this function attempts
+ * silent renewal via GET /auth/session. If renewal succeeds (refresh rotation
+ * mints new cookies), the original request is retried. If renewal fails,
+ * an AuthRequiredError is thrown so the caller can fall back to the guest
+ * auth state (VAL-CROSS-004 / VAL-CROSS-008).
+ *
+ * @param {string} url - The URL to fetch.
+ * @param {object} [options] - Fetch options (credentials: 'include' is added automatically).
+ * @returns {Promise<Response>}
+ * @throws {AuthRequiredError} If the session cannot be renewed.
+ */
+export async function fetchWithRenewal(url, options = {}) {
+  const res = await fetch(url, { ...options, credentials: 'include' });
+
+  if (res.status !== 401) {
+    return res;
+  }
+
+  // Access JWT expired — attempt silent renewal through refresh rotation.
+  const { renewed } = await renewSession();
+
+  if (!renewed) {
+    throw new AuthRequiredError('Session expired and renewal failed');
+  }
+
+  // Renewal succeeded — retry the original request with the new cookies.
+  return fetch(url, { ...options, credentials: 'include' });
+}
+
+// ---------------------------------------------------------------------------
 // Error classification
 // ---------------------------------------------------------------------------
 

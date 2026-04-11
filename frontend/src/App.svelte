@@ -5,6 +5,15 @@
   auth entry UI when signed out and the placeholder desktop shell when
   signed in.
 
+  Rehydration and renewal behaviour (VAL-CROSS-004 / VAL-CROSS-005):
+    - On mount (including hard reload / new tab), checkSession() calls
+      GET /auth/session which automatically does refresh rotation if the
+      access JWT is expired but the refresh cookie is valid.
+    - If the session is valid, the shell is rendered and bootstraps its
+      protected routes (bootstrap + WS) using cookie-backed auth.
+    - If both access and refresh state are invalid, the app falls back
+      to the guest auth UI (VAL-CROSS-008).
+
   Does NOT eagerly call protected routes (/api/shell/bootstrap, /api/ws)
   while the user is signed out.
 
@@ -95,6 +104,18 @@
     currentUser = null;
   }
 
+  /**
+   * Handles the authexpired event from the Shell component.
+   * When a protected request fails with 401 and renewal cannot restore
+   * the session, the Shell dispatches this event. The app transitions
+   * cleanly to the guest auth state (VAL-CROSS-008).
+   */
+  function handleAuthExpired() {
+    authState = 'signed_out';
+    currentUser = null;
+    passkeyError = '';
+  }
+
   import { onMount } from 'svelte';
   onMount(() => {
     checkSession();
@@ -113,7 +134,7 @@
     on:clearpasskeyerror={handleClearPasskeyError}
   />
 {:else if authState === 'signed_in'}
-  <Shell {currentUser} on:logout={handleLogout} />
+  <Shell {currentUser} on:logout={handleLogout} on:authexpired={handleAuthExpired} />
 {/if}
 
 <style>
