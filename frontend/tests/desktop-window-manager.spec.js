@@ -100,7 +100,8 @@ test('app launcher opens E-Text inside the desktop', async ({
   // The window should contain E-Text content.
   const windowContent = page.locator('[data-window-content]');
   await expect(windowContent).toBeVisible();
-  await expect(windowContent).toContainText('E-Text');
+  // The e-text editor component renders the document list UI.
+  await expect(windowContent).toContainText('Documents');
 });
 
 // ---------------------------------------------------------------

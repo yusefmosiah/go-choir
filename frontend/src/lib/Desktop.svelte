@@ -37,6 +37,7 @@
   import TaskRunner from './TaskRunner.svelte';
   import Launcher from './Launcher.svelte';
   import Window from './Window.svelte';
+  import ETextEditor from './ETextEditor.svelte';
 
   export let currentUser = null;
 
@@ -525,12 +526,8 @@
           on:resize={handleWindowResize}
         >
           {#if win.appId === 'etext'}
-            <div class="app-content etext-content">
-              <div class="app-header">
-                <span class="app-icon">📝</span>
-                <span class="app-label">E-Text Editor</span>
-                <span class="app-hint">Document editing will be available in a later feature</span>
-              </div>
+            <div class="app-content etext-content" data-etext-app>
+              <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
             </div>
           {:else}
             <div class="app-content">
@@ -742,20 +739,10 @@
     flex-wrap: wrap;
   }
 
-  .app-icon {
-    font-size: 1.2rem;
-  }
-
   .app-label {
     font-size: 0.95rem;
     font-weight: 600;
     color: #c0c0d0;
-  }
-
-  .app-hint {
-    font-size: 0.75rem;
-    color: #666;
-    margin-left: 0.5rem;
   }
 
   /* ---- Taskbar ---- */

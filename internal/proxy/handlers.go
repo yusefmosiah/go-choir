@@ -276,6 +276,15 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// restore (VAL-DESKTOP-007).
 		h.HandleProtectedAPI(w, r)
 		return
+	case strings.HasPrefix(path, "/api/etext/"):
+		// E-text document/revision/history/diff/blame API: auth-gated
+		// at the proxy level and forwarded to the sandbox with the
+		// authenticated user context injected. E-text state is
+		// persisted server-side per user for document authoring,
+		// history, and attribution (VAL-ETEXT-001 through
+		// VAL-ETEXT-010).
+		h.HandleProtectedAPI(w, r)
+		return
 	case strings.HasPrefix(path, "/api/"):
 		// All /api/* routes require auth by default. Check auth before
 		// returning 404 so signed-out callers consistently receive 401
