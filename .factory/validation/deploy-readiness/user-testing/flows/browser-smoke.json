@@ -1,0 +1,54 @@
+{
+  "groupId": "browser-smoke",
+  "testedAt": "2026-04-11T00:00:00Z",
+  "isolation": {
+    "testingSurface": "deployed HTTPS origin",
+    "url": "https://draft.choir-ip.com/",
+    "authentication": "none - smoke test of auth entry page"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-DEPLOY-002",
+      "title": "Browser contract tests pass (smoke verification)",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Navigate to https://draft.choir-ip.com/",
+          "expected": "Page loads without errors (no 500, no blank page)",
+          "observed": "Page loaded successfully - title 'go-choir' displayed"
+        },
+        {
+          "action": "Verify auth entry UI is visible",
+          "expected": "Guest auth UI with Register/Sign In toggles visible",
+          "observed": "Auth entry UI visible: 'Welcome to go-choir' heading, Register/Sign In buttons, Username field, 'Register with Passkey' button. data-auth-entry attribute present (confirmed via JS eval)."
+        },
+        {
+          "action": "Verify no console errors on initial load",
+          "expected": "No console errors",
+          "observed": "No console errors detected"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "deploy-readiness/browser-smoke/browser-smoke-evidence/VAL-DEPLOY-002-homepage.png"
+        ],
+        "consoleErrors": "none",
+        "elementChecks": {
+          "data-auth-entry": "present (eval returned true)",
+          "authElements": [
+            "button 'Register'",
+            "button 'Sign In'",
+            "textbox 'Username'",
+            "button 'Register with Passkey'"
+          ]
+        },
+        "pageTitle": "go-choir"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: 1 passed. The deployed HTTPS origin https://draft.choir-ip.com/ successfully serves the guest auth UI with all expected elements. No console errors on initial load. This is a smoke test only - full passkey ceremony testing requires Playwright with virtual authenticator."
+}

@@ -1,0 +1,7 @@
+HTTP/2 200 
+alt-svc: h3=":443"; ma=2592000
+content-type: application/json
+date: Sat, 11 Apr 2026 06:07:08 GMT
+via: 1.1 Caddy
+content-length: 24
+
