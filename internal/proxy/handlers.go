@@ -457,6 +457,16 @@ func (h *Handler) checkUpstreamHealth() bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
+// HandleProviderDeny denies all browser requests to /provider/* routes.
+// Provider routes are only reachable via internal service-to-service
+// communication (gateway). Browser callers must never use /provider/*
+// as a raw inference bypass (VAL-GATEWAY-002).
+func (h *Handler) HandleProviderDeny(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusForbidden, errorResponse{
+		Error: "provider routes are not available to browser callers",
+	})
+}
+
 // RegisterRoutes registers all proxy routes on the given server.
 // The proxy /health handler is registered via SetHealthHandler to
 // override the default server health handler with one that reports
@@ -466,4 +476,9 @@ func RegisterRoutes(s *server.Server, h *Handler) {
 	s.HandleFunc("/api/shell/bootstrap", h.HandleBootstrap)
 	s.HandleFunc("/api/ws", h.HandleWS)
 	s.HandleFunc("/api/", h.HandleAPI)
+	// VAL-GATEWAY-002: Deny all browser access to /provider/* routes.
+	// The gateway is the only component authorized to call upstream
+	// providers; browser callers must never bypass the runtime/proxy
+	// boundary to invoke inference directly.
+	s.HandleFunc("/provider/", h.HandleProviderDeny)
 }

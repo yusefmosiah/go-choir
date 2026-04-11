@@ -1994,3 +1994,59 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 		t.Fatalf("recovered upstream: got %q, want %q", resp3.Upstream, "ok")
 	}
 }
+
+// TestProviderRoutesDenied verifies that the proxy denies all browser access
+// to /provider/* routes (VAL-GATEWAY-002). Browser callers must never use
+// /provider/* as a raw inference bypass around the runtime/proxy boundary.
+func TestProviderRoutesDenied(t *testing.T) {
+	handler, _, _ := testProxyEnv(t)
+
+	providerPaths := []string{
+		"/provider/v1/inference",
+		"/provider/v1/credentials/issue",
+		"/provider/v1/credentials/revoke",
+		"/provider/v1/credentials/rotate",
+		"/provider/anything",
+	}
+
+	for _, path := range providerPaths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"messages":[]}`))
+			req.Header.Set("Content-Type", "application/json")
+
+			w := httptest.NewRecorder()
+			handler.HandleProviderDeny(w, req)
+
+			if w.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want %d for path %s", w.Code, http.StatusForbidden, path)
+			}
+
+			var errResp errorResponse
+			if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if !strings.Contains(errResp.Error, "provider routes") {
+				t.Errorf("error = %q, want provider routes denial message", errResp.Error)
+			}
+		})
+	}
+}
+
+// TestProviderRouteDeniedWithAuth verifies that even authenticated users
+// cannot access /provider/* routes through the proxy (VAL-GATEWAY-002).
+func TestProviderRouteDeniedWithAuth(t *testing.T) {
+	handler, priv, _ := testProxyEnv(t)
+
+	// Create a valid access JWT.
+	token := issueTestAccessJWTWithTTL(priv, "user-1", 5*time.Minute)
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(`{"messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "choir_access", Value: token})
+
+	w := httptest.NewRecorder()
+	handler.HandleProviderDeny(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (even with auth)", w.Code, http.StatusForbidden)
+	}
+}
