@@ -1,11 +1,17 @@
 package main
 
 import (
+	"github.com/yusefmosiah/go-choir/internal/sandbox"
 	"github.com/yusefmosiah/go-choir/internal/server"
 )
 
 func main() {
-	port := server.PortFromEnv("SANDBOX_PORT", "8085")
-	s := server.NewServer("sandbox", port)
+	cfg := sandbox.LoadConfig()
+
+	s := server.NewServer("sandbox", cfg.Port)
+
+	h := sandbox.NewHandler(cfg)
+	sandbox.RegisterRoutes(s, h)
+
 	s.Start()
 }
