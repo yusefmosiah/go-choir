@@ -45,6 +45,112 @@ let
     };
   };
 
+  # Guest init script — extracted into its own derivation to avoid
+  # Nix parser ambiguity with '' indented strings containing bash
+  # parameter-expansion patterns like ${param#vm_id=}.
+  guestInitScript = pkgs.writeShellScript "guest-init" ''
+    export PATH=/bin:/usr/bin
+
+    # Mount essential virtual filesystems.
+    mount -t proc proc /proc
+    mount -t sysfs sysfs /sys
+    mount -t devtmpfs devtmpfs /dev
+    mount -t tmpfs tmpfs /tmp
+
+    # Parse kernel cmdline to extract guest parameters.
+    # Firecracker passes configuration via /proc/cmdline using the format:
+    #   guest_port=8085 vm_id=vm-abc epoch=1 ip=172.X.0.2::172.X.0.1:...
+    CMDLINE=""
+    if [ -f /proc/cmdline ]; then
+        CMDLINE=$(cat /proc/cmdline)
+    fi
+
+    # Extract individual parameters from cmdline.
+    GUEST_PORT=""
+    VM_ID=""
+    EPOCH=""
+    for param in $CMDLINE; do
+        case "$param" in
+            guest_port=*) GUEST_PORT="''${param#guest_port=}" ;;
+            vm_id=*)      VM_ID="''${param#vm_id=}" ;;
+            epoch=*)      EPOCH="''${param#epoch=}" ;;
+        esac
+    done
+
+    # Apply defaults for missing parameters.
+    : "''${GUEST_PORT:=8085}"
+    : "''${VM_ID:=sandbox-guest}"
+    : "''${EPOCH:=0}"
+
+    # Configure guest networking from the ip= kernel parameter.
+    # The kernel's ip= parameter configures the interface automatically
+    # when CONFIG_IP_PNP is enabled. However, we still need to bring
+    # the interface up manually as a fallback in case ip= was not
+    # processed by the kernel (e.g., missing CONFIG_IP_PNP).
+    #
+    # Parse the ip= parameter to extract guest IP, gateway, and mask.
+    IP_PARAM=""
+    for param in $CMDLINE; do
+        case "$param" in
+            ip=*) IP_PARAM="''${param#ip=}" ;;
+        esac
+    done
+
+    if [ -n "$IP_PARAM" ]; then
+        # ip= format: <client-ip>::<server-ip>:<netmask>::<device>:<autoconf>
+        # Extract client IP (first field).
+        GUEST_IP=$(echo "$IP_PARAM" | cut -d: -f1)
+        # Extract server/gateway IP (third field).
+        HOST_IP=$(echo "$IP_PARAM" | cut -d: -f3)
+
+        # Bring up the network interface if the kernel didn't already.
+        if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
+            ip link set eth0 up
+            if [ -n "$GUEST_IP" ]; then
+                ip addr add "$GUEST_IP/30" dev eth0
+            fi
+            if [ -n "$HOST_IP" ]; then
+                ip route add default via "$HOST_IP" dev eth0 2>/dev/null || true
+            fi
+        fi
+
+        # Set gateway URL so the sandbox can reach the host-side gateway.
+        # The gateway listens on the host at 127.0.0.1:8084, which is
+        # reachable from the guest via the host tap IP (172.X.0.1).
+        # Provider credentials stay host-side (VAL-VM-011).
+        if [ -n "$HOST_IP" ]; then
+            export RUNTIME_GATEWAY_URL="http://''${HOST_IP}:8084"
+        fi
+    else
+        # No ip= parameter — try to bring up eth0 anyway.
+        ip link set eth0 up 2>/dev/null || true
+    fi
+
+    # Set sandbox environment variables.
+    export SANDBOX_PORT="$GUEST_PORT"
+    export SANDBOX_ID="$VM_ID"
+    export RUNTIME_STORE_PATH=/mnt/persistent/state
+
+    # Ensure the persistent state directory exists.
+    mkdir -p /mnt/persistent/state
+
+    # Read the gateway token from the persistent directory.
+    # The vmctl service writes this token before booting the VM.
+    # It authenticates the sandbox to the host-side gateway.
+    if [ -f /mnt/persistent/gateway-token ]; then
+        export RUNTIME_GATEWAY_TOKEN=$(cat /mnt/persistent/gateway-token)
+    fi
+
+    echo "go-choir guest: starting sandbox (port=$SANDBOX_PORT vm=$SANDBOX_ID epoch=$EPOCH)"
+    echo "go-choir guest: network configured (ip=$GUEST_IP gateway=$HOST_IP)"
+    if [ -n "$RUNTIME_GATEWAY_URL" ]; then
+        echo "go-choir guest: gateway=$RUNTIME_GATEWAY_URL"
+    fi
+
+    # Execute the sandbox binary (replaces init process).
+    exec /bin/sandbox
+  '';
+
   # Minimal guest root filesystem containing only the sandbox runtime.
   # This is the set of files that will be packed into the ext4 rootfs image.
   #
@@ -91,119 +197,11 @@ let
     cp ${pkgs.gnugrep}/bin/grep $out/bin/grep
     chmod +x $out/bin/mount $out/bin/mkdir $out/bin/cat $out/bin/echo $out/bin/cut $out/bin/grep
 
-    # Create the guest init script that:
-    #   1. Parses kernel cmdline parameters (guest_port, vm_id, epoch, ip)
-    #   2. Configures guest networking from the ip= kernel parameter
-    #   3. Sets environment variables for the sandbox binary
-    #   4. Starts the sandbox runtime
-    #
-    # No provider credentials are passed via environment or arguments (VAL-VM-011).
-    # The guest reaches the host-side gateway via the host IP in the /30 subnet,
-    # never via localhost (which would be the guest's own loopback).
-    cat > $out/bin/init << 'INITEOF'
-    #!/bin/sh
-    export PATH=/bin:/usr/bin
-
-    # Mount essential virtual filesystems.
-    mount -t proc proc /proc
-    mount -t sysfs sysfs /sys
-    mount -t devtmpfs devtmpfs /dev
-    mount -t tmpfs tmpfs /tmp
-
-    # Parse kernel cmdline to extract guest parameters.
-    # Firecracker passes configuration via /proc/cmdline using the format:
-    #   guest_port=8085 vm_id=vm-abc epoch=1 ip=172.X.0.2::172.X.0.1:...
-    CMDLINE=""
-    if [ -f /proc/cmdline ]; then
-        CMDLINE=$(cat /proc/cmdline)
-    fi
-
-    # Extract individual parameters from cmdline.
-    GUEST_PORT=""
-    VM_ID=""
-    EPOCH=""
-    for param in $CMDLINE; do
-        case "$param" in
-            guest_port=*) GUEST_PORT="${param#guest_port=}" ;;
-            vm_id=*)      VM_ID="${param#vm_id=}" ;;
-            epoch=*)      EPOCH="${param#epoch=}" ;;
-        esac
-    done
-
-    # Apply defaults for missing parameters.
-    : "${GUEST_PORT:=8085}"
-    : "${VM_ID:=sandbox-guest}"
-    : "${EPOCH:=0}"
-
-    # Configure guest networking from the ip= kernel parameter.
-    # The kernel's ip= parameter configures the interface automatically
-    # when CONFIG_IP_PNP is enabled. However, we still need to bring
-    # the interface up manually as a fallback in case ip= was not
-    # processed by the kernel (e.g., missing CONFIG_IP_PNP).
-    #
-    # Parse the ip= parameter to extract guest IP, gateway, and mask.
-    IP_PARAM=""
-    for param in $CMDLINE; do
-        case "$param" in
-            ip=*) IP_PARAM="${param#ip=}" ;;
-        esac
-    done
-
-    if [ -n "$IP_PARAM" ]; then
-        # ip= format: <client-ip>::<server-ip>:<netmask>::<device>:<autoconf>
-        # Extract client IP (first field).
-        GUEST_IP=$(echo "$IP_PARAM" | cut -d: -f1)
-        # Extract server/gateway IP (third field).
-        HOST_IP=$(echo "$IP_PARAM" | cut -d: -f3)
-
-        # Bring up the network interface if the kernel didn't already.
-        if ! ip addr show eth0 2>/dev/null | grep -q "inet "; then
-            ip link set eth0 up
-            if [ -n "$GUEST_IP" ]; then
-                ip addr add "$GUEST_IP/30" dev eth0
-            fi
-            if [ -n "$HOST_IP" ]; then
-                ip route add default via "$HOST_IP" dev eth0 2>/dev/null || true
-            fi
-        fi
-
-        # Set gateway URL so the sandbox can reach the host-side gateway.
-        # The gateway listens on the host at 127.0.0.1:8084, which is
-        # reachable from the guest via the host tap IP (172.X.0.1).
-        # Provider credentials stay host-side (VAL-VM-011).
-        if [ -n "$HOST_IP" ]; then
-            export RUNTIME_GATEWAY_URL="http://${HOST_IP}:8084"
-        fi
-    else
-        # No ip= parameter — try to bring up eth0 anyway.
-        ip link set eth0 up 2>/dev/null || true
-    fi
-
-    # Set sandbox environment variables.
-    export SANDBOX_PORT="$GUEST_PORT"
-    export SANDBOX_ID="$VM_ID"
-    export RUNTIME_STORE_PATH=/mnt/persistent/state
-
-    # Ensure the persistent state directory exists.
-    mkdir -p /mnt/persistent/state
-
-    # Read the gateway token from the persistent directory.
-    # The vmctl service writes this token before booting the VM.
-    # It authenticates the sandbox to the host-side gateway.
-    if [ -f /mnt/persistent/gateway-token ]; then
-        export RUNTIME_GATEWAY_TOKEN=$(cat /mnt/persistent/gateway-token)
-    fi
-
-    echo "go-choir guest: starting sandbox (port=$SANDBOX_PORT vm=$SANDBOX_ID epoch=$EPOCH)"
-    echo "go-choir guest: network configured (ip=$GUEST_IP gateway=$HOST_IP)"
-    if [ -n "$RUNTIME_GATEWAY_URL" ]; then
-        echo "go-choir guest: gateway=$RUNTIME_GATEWAY_URL"
-    fi
-
-    # Execute the sandbox binary (replaces init process).
-    exec /bin/sandbox
-    INITEOF
-    chmod +x $out/bin/init
+    # Copy the pre-built guest init script.
+    # The init script is defined as a separate writeShellScript derivation
+    # (guestInitScript) to avoid Nix parser ambiguity with bash parameter
+    # expansion patterns like ${param#vm_id=} inside '' indented strings.
+    cp ${guestInitScript}/bin/guest-init $out/bin/init
 
     # Create a simple /etc/resolv.conf for DNS inside the guest.
     mkdir -p $out/etc
