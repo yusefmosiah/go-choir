@@ -248,26 +248,44 @@ in
     };
   };
 
-  # Placeholder sandbox — host-process upstream for dev/fallback.
+  # Host-process sandbox — routes LLM calls through the gateway.
   # NOT exposed through Caddy or the firewall; reachable only via the
   # proxy on 127.0.0.1:8085. When Firecracker VMs are active, vmctl
   # routes per-user requests to VM-backed sandboxes and this host
   # process is only a fallback (VAL-VM-002).
   # The proxy's /health endpoint reports upstream reachability, making
   # sandbox health observable through the proxy (VAL-DEPLOY-008).
+  #
+  # Gateway integration (VAL-GATEWAY-001):
+  # - RUNTIME_GATEWAY_URL tells the sandbox to route LLM calls through
+  #   the host-side gateway instead of resolving providers directly.
+  # - A sandbox credential token is obtained from the gateway at startup
+  #   via ExecStartPre and written to an EnvironmentFile.
+  # - This ensures provider credentials stay host-side (VAL-GATEWAY-004).
   systemd.services.go-choir-sandbox = {
-    description = "go-choir Placeholder Sandbox (Milestone 1)";
+    description = "go-choir Sandbox Runtime (gateway-routed)";
     wantedBy = [ "multi-user.target" ];
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
+    after = [ "network-online.target" "go-choir-gateway.service" ];
+    wants = [ "network-online.target" "go-choir-gateway.service" ];
     serviceConfig = commonServiceHardening // {
+      # Obtain a gateway credential token before starting the sandbox.
+      # The gateway's credential issuance endpoint is localhost-only
+      # (VAL-GATEWAY-004). We retry with backoff because the gateway
+      # may still be initializing when this ExecStartPre runs.
+      ExecStartPre = "${pkgs.bash}/bin/bash -c 'for i in 1 2 3 4 5; do token=$${curl -sf -X POST http://127.0.0.1:8084/provider/v1/credentials/issue -H \"Content-Type: application/json\" -d \"{\\\"sandbox_id\\\": \\\"sandbox-m1\\\"}\" 2>/dev/null | ${pkgs.jq}/bin/jq -r .raw_token 2>/dev/null) && test -n \"$$token\" && echo \"RUNTIME_GATEWAY_TOKEN=$$token\" > /var/lib/go-choir/sandbox-gateway-token.env && exit 0; sleep $$((i * 2)); done; exit 1'";
       ExecStart = "${goChoirPackages.sandbox}/bin/sandbox";
       Restart = "on-failure";
       RestartSec = 3;
       WatchdogSec = 30;
+      # Read the gateway token obtained by ExecStartPre.
+      EnvironmentFile = "-/var/lib/go-choir/sandbox-gateway-token.env";
+      ReadWritePaths = [ "/var/lib/go-choir" ];
       Environment = [
         "SANDBOX_PORT=8085"
         "SANDBOX_ID=sandbox-m1"
+        # Route LLM calls through the host-side gateway instead of
+        # resolving providers directly (VAL-GATEWAY-001).
+        "RUNTIME_GATEWAY_URL=http://127.0.0.1:8084"
       ];
     };
   };
