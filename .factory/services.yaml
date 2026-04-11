@@ -6,6 +6,8 @@ commands:
   frontend-build: cd frontend && pnpm build
   playwright-install: cd frontend && pnpm exec playwright install chromium
   frontend-e2e: cd frontend && pnpm exec playwright test --workers=1
+  nix-eval: nix flake show .
+  public-smoke: curl -sf https://draft.choir-ip.com
 
 services:
   auth:

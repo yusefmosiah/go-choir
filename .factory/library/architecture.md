@@ -1,179 +1,276 @@
 # Architecture
 
-This file captures how Mission 2 Milestone 1 is expected to work at a high level.
+Mission 3 extends the stable Mission 2 auth/proxy/shell slice into the full Node B system. This document describes the intended high-level system behavior workers should preserve while building the remaining milestones.
 
-## Mission 2 Milestone 1 Scope
+## Scope and sequencing
 
-This mission delivers the first end-to-end vertical slice on `https://draft.choir-ip.com`:
+Mission 3 starts with a **deploy-readiness prerequisite**:
 
-- WebAuthn registration and login
-- cookie-backed auth/session lifecycle
-- protected proxy routing to a single hardcoded placeholder sandbox
-- a minimal Svelte desktop shell
+1. restore `https://draft.choir-ip.com` so it serves the real auth/shell SPA again
+2. keep the public auth/proxy/session contract healthy on Node B
 
-Out of scope here: provider/gateway behavior, real VM routing, recovery flows, and later desktop applications.
+Only after that prerequisite is stable do the four core Mission 3 milestones land:
 
-## Runtime Topology
+1. sandbox runtime on the host
+2. e-text + real desktop
+3. gateway + VM isolation
+4. polish on Node B
 
-### Public edge
+## Public topology
 
-**Caddy on Node B** terminates TLS and serves one public origin: `https://draft.choir-ip.com`.
+### Public origin
 
-For this mission, public routes are:
+There is one public browser origin for this mission:
 
-- `/auth/*` → auth service on `127.0.0.1:8081`
-- `/api/*` → proxy service on `127.0.0.1:8082`
-- `/provider/*` → gateway service on `127.0.0.1:8084` (not a Milestone 1 acceptance surface)
+- `https://draft.choir-ip.com`
+
+The browser talks only to this origin. No browser-visible flow should depend on direct service ports or alternate hosts.
+
+### Edge routing
+
+On Node B, Caddy terminates TLS and preserves public prefixes:
+
+- `/auth/*` → auth service
+- `/api/*` → proxy service
+- `/provider/*` → gateway service when that milestone is active
 - `/` → built Svelte frontend
 
-Use `handle`, not `handle_path`, so services receive the full public prefix.
+Prefix preservation matters. Services should receive the same public path prefix that the browser uses.
 
-### Host services
+## Service responsibilities
 
-| Service | Binary | Port | Mission 2 Milestone 1 role |
-| --- | --- | --- | --- |
-| auth | `cmd/auth` | 8081 | WebAuthn ceremonies, session inspection, logout, access+refresh issuance/rotation |
-| proxy | `cmd/proxy` | 8082 | Validates auth state and forwards protected HTTP/WS traffic |
-| vmctl | `cmd/vmctl` | 8083 | Out of scope for this mission; remains non-user-facing |
-| gateway | `cmd/gateway` | 8084 | Out of scope for this mission; route stays configured but behavior is not part of acceptance |
-| sandbox | `cmd/sandbox` | 8085 | Placeholder upstream used by proxy for Milestone 1 bootstrap + WebSocket flows |
+| Service | Port | High-level role in Mission 3 |
+| --- | --- | --- |
+| auth | 8081 | WebAuthn, cookie-backed session lifecycle, access/refresh renewal, logout |
+| proxy | 8082 | Same-origin authenticated ingress for shell, runtime, live streams, and VM-backed routing |
+| vmctl | 8083 | Internal VM ownership registry and Firecracker lifecycle control |
+| gateway | 8084 | Host-side provider access, credential injection, per-sandbox rate limiting |
+| sandbox runtime | 8085 locally first, then inside VMs | Runtime loop, events, app execution, per-user state |
 
-## Component Responsibilities
+## Stable external contract from Mission 2
 
-### Auth service
+These behaviors remain the browser-facing foundation for Mission 3:
 
-Auth owns identity and auth-state truth for this mission.
+- passkey registration and login on `draft.choir-ip.com`
+- cookie-backed auth only
+- `GET /auth/session` as the rehydration and silent-renewal checkpoint
+- protected shell access through proxy-owned same-origin routes
+- logout and renewal failure tear down protected state cleanly
 
-Expected public routes:
+Mission 3 builds on this contract; it does not replace it with bearer tokens, direct service ports, or alternate browser origins.
 
-- `POST /auth/register/begin`
-- `POST /auth/register/finish`
-- `POST /auth/login/begin`
-- `POST /auth/login/finish`
-- `GET /auth/session`
-- `POST /auth/logout`
+## Runtime architecture
 
-High-level responsibilities:
+### Sandbox runtime
 
-- store users and WebAuthn credentials in SQLite
-- persist WebAuthn challenge/session data, refresh/session records, and replay-protection state needed by the finish routes
-- bind WebAuthn flows to RP ID `draft.choir-ip.com` for deployed validation
-- issue short-lived access JWTs plus rotating refresh state
-- expose current signed-in/signed-out session state to the frontend
-- invalidate access/refresh state on logout
+The sandbox evolves from a placeholder process into the first real runtime surface. During the first Mission 3 milestone it still runs as a **host process**, not yet inside a VM.
 
-Renewal model for this mission:
+The runtime owns:
 
-- `GET /auth/session` is the canonical session-rehydration and silent-renewal route
-- if access state is expired but refresh state is still valid, `/auth/session` rotates refresh state and sets renewed auth cookies
-- the frontend then proceeds with `GET /api/shell/bootstrap` and `GET /api/ws`
+- task submission
+- task status
+- live event streaming
+- app/runtime execution loops
+- per-user persisted state
 
-Cookie invariants for this mission:
+The runtime loop should be **direct goroutines**, not a subprocess CLI loop and not an external adapter-wrapper process.
 
-- auth cookies are same-origin and cookie-backed
-- auth cookies are `Secure` and `HttpOnly`
-- auth cookies must use `SameSite` or an equivalent CSRF/origin defense
-- auth tokens never appear in the URL or browser web storage
+### Runtime APIs
 
-### Proxy service
+The browser-visible runtime surface is reached through proxy-routed same-origin endpoints:
 
-Proxy owns protected public shell traffic.
+- `POST /api/agent/task`
+- `GET /api/agent/status`
+- `GET /api/events`
 
-Deterministic protected routes for this mission:
+Runtime health remains an internal/service health surface used for service and operator checks:
 
-- `GET /api/shell/bootstrap`
-- `GET /api/ws`
+- `GET /health`
 
-High-level responsibilities:
+The runtime should return stable task or run identifiers so later status/event lookups correlate to the same accepted work.
 
-- deny missing, invalid, expired, or tampered auth state
-- verify auth-issued access JWTs locally with auth-owned verification material
-- forward protected traffic to the single hardcoded placeholder sandbox
-- forward the public `/api/*` path unchanged for Milestone 1 placeholder routes
-- strip or ignore client-supplied identity headers
-- inject the current authenticated user context for the placeholder sandbox
-- reject reconnects when auth is no longer valid
-- treat live channels as invalid after logout/user-switch teardown and after auth renewal failure
+### Supervision and durability
 
-### Placeholder sandbox
+The runtime must not rely on one long fragile goroutine. Health, restart behavior, and degraded state need to be externally visible.
 
-The placeholder sandbox exists only to make the Milestone 1 shell real and testable.
+Workers should assume:
 
-High-level responsibilities:
+- supervised runtime components can fail independently
+- a degraded runtime must be observable through health/status/events
+- accepted work must not disappear silently across restart
 
-- serve the protected bootstrap payload used by the shell
-- expose a protected WebSocket endpoint that can prove live connectivity
-- surface sandbox identity and current-user context for validation
+## Persistence model
 
-Every authenticated user reaches the same placeholder sandbox instance in this mission.
+### Per-user state
 
-### Frontend
+Mission 3 moves toward **one Dolt database per sandbox/user workspace**. That database becomes the durable source for:
 
-The Svelte frontend serves two states:
+- desktop session state
+- app state
+- e-text documents and revision history
+- scheduler/work graph data
+- event or runtime state that must survive restart
 
-- **guest auth UI** when no valid same-origin auth cookies exist
-- **placeholder desktop shell** when a valid session exists
+### Canonical editing model
 
-High-level responsibilities:
+Users and appagents are peer canonical editors.
 
-- expose clear register/login flows
-- use same-origin `/auth/*` and `/api/*` routes only
-- never store auth tokens in the URL or web storage
-- bootstrap the shell from cookie-backed state
-- rehydrate the shell on hard reload/new tab while the session is still valid
-- fall back cleanly to the guest auth UI when renewal can no longer succeed
+- direct user edits create canonical user-authored revisions
+- appagent actions create canonical appagent-authored revisions
+- subordinate workers may help produce changes, but they do not become canonical authors
 
-## Primary User/Data Flows
+This is a core system invariant and must remain visible in history/blame/provenance surfaces.
 
-### Registration flow
+## Desktop and app model
+
+### Real desktop shell
+
+The placeholder authenticated shell is replaced by a real desktop that owns:
+
+- launcher
+- window lifecycle
+- focus/z-order
+- drag/resize
+- minimize/maximize/restore
+- restore of desktop state from persisted sandbox data
+
+Desktop state is not meant to be browser-only ephemeral UI state. It should restore from persisted user state strongly enough to survive page reloads and fresh browser contexts.
+
+### E-Text app
+
+E-text is the first real app and the reference application model for Mission 3.
+
+It spans:
+
+- document creation/open
+- direct editing
+- appagent-driven revision requests
+- revision history
+- historical snapshot viewing
+- diff
+- blame / user-vs-agent attribution
+
+The underlying schema includes:
+
+- `documents`
+- `content`
+- `citations`
+- `metadata`
+
+## Conductor and scheduler
+
+These stay separate.
+
+### Conductor
+
+The conductor owns routing user-facing input to the correct app/runtime destination.
+
+### Scheduler
+
+The scheduler owns background work tracking and graph state:
+
+- queued/running/blocked/completed work
+- relationships between work items
+- operator/debug visibility into current system activity
+
+Do not collapse conductor and scheduler into one component just because they are both inside the sandbox runtime boundary.
+
+## Gateway and provider access
+
+Provider credentials are a host-side concern.
+
+The architecture goal is:
+
+- browser never sees provider credentials
+- guest VM never holds provider credentials
+- gateway authenticates sandbox callers
+- gateway injects host-side Bedrock/Z.AI credentials first
+- gateway later expands to the wider provider matrix
+- `/provider/*` is not intended to become a raw browser inference bypass around runtime/proxy boundaries
+
+Mission 3’s staged validation only requires **Bedrock and/or Z.AI first**. The rest of the provider matrix is later gateway work, not an excuse to skip real-provider proof entirely.
+
+## VM architecture
+
+### Ownership
+
+By the VM milestone, each authenticated user routes to their own VM-backed sandbox workspace.
+
+vmctl owns:
+
+- user → VM assignment
+- boot/resume
+- idle stop or hibernate
+- unhealthy guest detection
+- recovery / replacement
+
+### Routing
+
+Once VM routing is active, protected shell/runtime surfaces should resolve through vm ownership rather than a static host sandbox fallback.
+
+The sandbox listener on `8085` is a local/internal runtime listener during host-process milestones, not a browser-facing contract surface.
+
+### Isolation
+
+The VM boundary exists to preserve:
+
+- per-user state isolation
+- provider credential isolation
+- host control-plane isolation
+
+Guest workloads should not be able to reach host-only control-plane surfaces, sensitive sockets, or host secret paths.
+
+## Operations and admin surfaces
+
+Mission 3 polish adds operator-facing HTTP surfaces for:
+
+- cross-service status
+- per-user sandbox/VM ownership
+- work/debug visibility
+- bounded lifecycle actions
+
+These surfaces are operator-only. They are not part of the ordinary browser-user contract.
+
+Monitoring/alerting/load-testing should describe the full Node B system, not just static asset health.
+
+## Core flows
+
+### Auth to useful work
 
 1. Guest opens `/`
-2. Frontend shows register UI
-3. Frontend calls `POST /auth/register/begin`
-4. Browser completes WebAuthn ceremony on `draft.choir-ip.com`
-5. Frontend calls `POST /auth/register/finish`
-6. Auth sets same-origin auth cookies
-7. Frontend loads the placeholder shell
-8. Shell calls `GET /api/shell/bootstrap` and opens `GET /api/ws`
+2. User authenticates with WebAuthn
+3. Browser receives same-origin cookies
+4. Shell rehydrates through `GET /auth/session`
+5. Browser accesses protected shell/runtime surfaces through proxy
+6. Runtime accepts work and emits status/events
+7. A real provider-backed result returns to the UI
 
-### Login flow
+### E-text authoring
 
-1. Guest opens `/`
-2. Frontend shows login UI
-3. Frontend calls `POST /auth/login/begin`
-4. Browser completes WebAuthn login
-5. Frontend calls `POST /auth/login/finish`
-6. Auth sets same-origin auth cookies
-7. Shell bootstraps through proxy routes
+1. User opens E-text from the desktop
+2. User creates or opens a document
+3. User edits directly or prompts the appagent
+4. Canonical revisions land with correct authorship
+5. History/diff/blame expose the provenance
 
-### Session lifecycle flow
+### VM-backed execution
 
-1. Shell is reloaded or reopened at `/`
-2. Frontend calls `GET /auth/session` to rehydrate cookie-backed auth state
-3. If access state is expired but refresh is still valid, auth renews access and rotates refresh state on that request
-4. Frontend continues with `GET /api/shell/bootstrap` and `GET /api/ws`
-5. Shell remains usable and live connectivity is restored or reconnected
-6. If refresh can no longer renew, the frontend falls back to guest auth state
-
-### Logout and user-switch flow
-
-1. Authenticated user clicks logout in the shell
-2. Frontend calls `POST /auth/logout`
-3. Auth invalidates refresh/session state and returns signed-out cookie state
-4. Frontend tears down any open live channel
-5. Existing protected shell HTTP/WS access stops working and reconnects are denied
-6. Browser returns to guest auth UI
-7. A second user can authenticate without inheriting stale state from the first
+1. Authenticated request reaches proxy
+2. Proxy resolves the user’s VM through vmctl
+3. Sandbox runtime in that VM handles work
+4. Gateway injects host-side provider credentials
+5. Result returns through the same browser origin
 
 ## Invariants
 
-- The deployed acceptance surface is `https://draft.choir-ip.com`
-- No local auth bypass mode is allowed
-- No browser-visible flow may depend on direct service ports, `localhost`, or stripped internal paths
-- Auth state is cookie-backed and same-origin; tokens are not exposed in URLs or web storage
-- `GET /auth/session` is the rehydration and silent-renewal checkpoint for the frontend
-- The proxy, not the browser, is the trust boundary for sandbox user context
-- The proxy validates access JWTs locally; refresh renewal remains auth-owned
-- Milestone 1 placeholder routes stay public-path-stable as `GET /api/shell/bootstrap` and `GET /api/ws`
-- Prefix-preserving routing matters at the public edge
-- Milestone 1 uses one hardcoded placeholder sandbox for all users
+- `draft.choir-ip.com` is the only public acceptance host in this mission
+- Node A / `choir-ip.com` is out of scope
+- cookie-backed same-origin auth remains the browser trust model
+- no browser-visible auth tokens in URL, localStorage, or sessionStorage
+- no CLI subprocess loop inside the sandbox runtime
+- no adapter-wrapper process around the main runtime loop
+- one Dolt-backed user workspace per sandbox
+- conductor and scheduler remain separate concerns
+- users and appagents are peer canonical editors
+- subordinate workers do not directly author canonical state
+- provider credentials stay outside the guest VM and outside git/Nix store

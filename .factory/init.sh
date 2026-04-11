@@ -12,6 +12,8 @@ if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
 fi
 
 mkdir -p /tmp/go-choir-m2/auth
+mkdir -p /tmp/go-choir-m3/runtime
+mkdir -p /tmp/go-choir-m3/dolt
 
 if [ ! -f /tmp/go-choir-m2/auth-signing-key ]; then
   ssh-keygen -q -t ed25519 -N "" -f /tmp/go-choir-m2/auth-signing-key >/dev/null

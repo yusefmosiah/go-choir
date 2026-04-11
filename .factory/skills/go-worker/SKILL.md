@@ -1,6 +1,6 @@
 ---
 name: go-worker
-description: Builds Go auth/proxy/sandbox services, internal packages, and tests for Mission 2 Milestone 1
+description: Builds Go services, runtime/store packages, gateway/vmctl logic, and backend APIs for Mission 3
 ---
 
 # Go Worker
@@ -9,11 +9,14 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use for Go features in Mission 2 Milestone 1:
-- auth handlers, WebAuthn flows, session/refresh logic, SQLite-backed storage
-- proxy auth gating, HTTP/WS forwarding, user-context injection
-- placeholder sandbox HTTP/WS endpoints used by the shell
-- shared internal packages, config loading, and Go tests
+Use for Mission 3 backend features such as:
+- Node B deploy-readiness fixes that require Go service changes
+- proxy/auth contract changes that preserve the public browser surface
+- sandbox runtime APIs, supervision, events, and persistence
+- Dolt-backed store/types/scheduler/appagent backend work
+- gateway provider access and caller authentication
+- vmctl ownership registry and VM lifecycle APIs
+- admin/status APIs exposed by Go services
 
 ## Required Skills
 
@@ -22,58 +25,64 @@ None
 ## Work Procedure
 
 1. **Read the feature and contract first**
-   - Read the feature description, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, and `.factory/services.yaml`.
+   - Read the feature description, `mission.md`, `AGENTS.md`, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, `.factory/library/user-testing.md`, `.factory/library/mission-3-references.md`, and `.factory/services.yaml`.
    - Identify exactly which contract assertions this feature fulfills.
+   - If the current top milestone is still `deploy-readiness`, treat restoring `https://draft.choir-ip.com` as a hard execution gate for later work rather than optional cleanup.
 
 2. **Read the existing Go surface before editing**
-   - Inspect the relevant `cmd/*`, `internal/*`, and `go.mod` files.
-   - Reuse the shared `internal/server` patterns where sensible.
-   - Keep route names aligned with the mission contract: `/auth/*`, `GET /api/shell/bootstrap`, `GET /api/ws`.
+   - Inspect the relevant `cmd/*`, `internal/*`, `go.mod`, and Nix/runtime config touched by the feature.
+   - Reuse existing `internal/server` patterns where sensible.
+   - Preserve browser-facing route invariants unless the feature explicitly owns a validated contract change.
+   - For runtime/gateway/vmctl work, keep boundaries explicit: proxy is the browser ingress, gateway owns provider credential use, vmctl owns VM lifecycle, and appagents own canonical writes.
 
 3. **Write failing tests first**
    - Add or extend `_test.go` coverage before implementation.
-   - Cover happy path plus the contract-critical failure cases for the feature.
+   - Cover the happy path plus the contract-critical denial, recovery, and boundary cases for the feature.
    - Confirm the new tests fail first before writing production code.
 
 4. **Implement the smallest correct slice**
    - Write the minimum production code to make the tests pass.
-   - Match Mission 2 decisions:
-     - WebAuthn bound to `draft.choir-ip.com` for deployed acceptance
-     - no local auth bypass
-     - cookie-backed auth state
-     - short-lived access + rotating refresh state
-     - proxy trusts its own verified auth context, not client-supplied identity headers
-   - Use the current planned stack when needed: stdlib `net/http`, `github.com/go-webauthn/webauthn`, `github.com/golang-jwt/jwt/v5`, and `modernc.org/sqlite`.
+   - Match Mission 3 decisions:
+     - no CLI subprocess loop inside sandbox
+     - no adapter-wrapper process around the runtime loop
+     - cookie-backed same-origin auth remains the browser trust model
+     - users and appagents are peer canonical editors
+     - subordinate workers never become canonical authors
+     - Bedrock and/or Z.AI are the first required real-provider paths
+   - Reuse already-adopted libraries and patterns where possible; add new dependencies only when the feature requires them and after confirming they are appropriate for the repo.
 
 5. **Verify the contract surface directly**
-   - For auth routes, use `curl` to check JSON shape, cookies, and status codes.
-   - For proxy/bootstrap routes, verify the concrete public paths in the contract.
-   - For WebSocket features, prove the live channel opens/closes as required and record the observed behavior.
+   - Use `curl` for HTTP/API contracts, including auth denial, same-origin proxy paths, status/event surfaces, and operator APIs.
+   - If the feature changes a browser-visible contract, run an `agent-browser` smoke check against the affected public flow and add focused Playwright coverage when the behavior is stateful or regression-prone.
+   - When the feature changes runtime/gateway/vmctl behavior, capture evidence that proves the expected boundary: no auth bypass, no client-supplied identity trust, no direct-browser provider calls, no guest-side secret leakage.
+   - When the feature touches persisted state, prove the resulting state survives the restart/reload scope named in the feature.
+   - When the feature affects task submission or canonical mutation, explicitly check that renewal/retry/recovery does not duplicate the effect.
    - Do not leave long-running processes behind; if you start a service, you must stop it.
 
 6. **Run validators before handoff**
    - `go test ./... -count=1 -p 4`
    - `go vet ./...`
    - `go build ./cmd/...`
-   - If the feature changes public route contracts consumed by the frontend, also run `cd frontend && pnpm build`
+   - `cd frontend && pnpm build` when the feature changes routes or payloads consumed by the frontend
+   - run any focused additional command required by the feature (for example `nix flake show .` for Nix-coupled backend changes)
 
 7. **Return a concrete handoff**
-   - Record the exact failing tests you added, the focused verification commands you ran, and the interactive or curl checks that prove the contract behavior.
+   - Record the exact tests you added, the focused verification commands you ran, and the curl/log/browser evidence that proves the contract behavior.
    - If anything remained partial, say exactly what and why.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Implemented auth register/login begin routes plus signed-out and signed-in `/auth/session` behavior. Added SQLite-backed challenge/session storage scaffolding and wired WebAuthn option generation for the configured RP. Verified malformed begin payloads return JSON 4xx and valid begin payloads return challenge data bound to the expected RP.",
-  "whatWasImplemented": "Added `internal/auth` configuration and storage primitives, auth HTTP handlers for `/auth/register/begin`, `/auth/login/begin`, and `/auth/session`, and tests covering malformed payload rejection, RP-bound WebAuthn option generation, and signed-out vs signed-in session inspection behavior. Kept route names aligned with the public `/auth/*` contract and matched the cookie-backed session model expected by the frontend.",
-  "whatWasLeftUndone": "Register/login finish handlers and logout/refresh rotation are not part of this feature and remain for later features.",
+  "salientSummary": "Implemented authenticated runtime task/status/event APIs with stable task handles and Dolt-backed task recovery. Verified signed-out requests fail closed, signed-in requests receive stable handles, and status remains recoverable after restarting the sandbox process.",
+  "whatWasImplemented": "Added the runtime task submission, status lookup, and event-stream backend for the Mission 3 host-process runtime, including stable task IDs, persisted task state, and restart-safe recovery behavior. Wired the proxy-facing same-origin contract so `/api/agent/task`, `/api/agent/status`, and `/api/events` all stay behind cookie-backed auth instead of exposing direct sandbox ports or alternate hosts.",
+  "whatWasLeftUndone": "Browser prompt UI and agent-browser verification of the shell prompt surface belong to the frontend feature that consumes these APIs.",
   "verification": {
     "commandsRun": [
       {
         "command": "go test ./... -count=1 -p 4",
         "exitCode": 0,
-        "observation": "New auth handler and store tests pass; begin-route negative cases fail closed."
+        "observation": "Runtime API, persistence, and restart-recovery tests pass."
       },
       {
         "command": "go vet ./...",
@@ -88,31 +97,31 @@ None
     ],
     "interactiveChecks": [
       {
-        "action": "Started local auth service with `.factory/services.yaml` auth command and POSTed malformed JSON to `/auth/register/begin` and `/auth/login/begin`",
-        "observed": "Both endpoints returned JSON 4xx responses instead of HTML or 5xx."
+        "action": "POSTed to `/api/agent/task`, polled `/api/agent/status`, restarted the sandbox, and polled status again by the same task handle",
+        "observed": "Signed-out submission failed with 401, signed-in submission returned a stable task ID, and post-restart status lookup still returned the accepted task instead of losing it."
       },
       {
-        "action": "POSTed valid begin payloads and fetched `/auth/session` with and without cookies",
-        "observed": "Begin routes returned RP-bound challenges; `/auth/session` cleanly distinguished signed-out and signed-in state."
+        "action": "Opened `/api/events` with valid auth and then repeated with invalid auth",
+        "observed": "The signed-in stream emitted incremental task lifecycle events; the invalid-auth attempt failed closed."
       }
     ]
   },
   "tests": {
     "added": [
       {
-        "file": "internal/auth/handlers_test.go",
+        "file": "internal/runtime/api_test.go",
         "cases": [
           {
-            "name": "TestRegisterBeginRejectsMalformedInput",
-            "verifies": "Invalid begin payloads return JSON 4xx instead of 5xx."
+            "name": "TestTaskSubmissionReturnsStableHandle",
+            "verifies": "Accepted runtime work returns a stable task ID and initial lifecycle state."
           },
           {
-            "name": "TestRegisterBeginReturnsRPBoundChallenge",
-            "verifies": "Register begin response includes a challenge bound to the configured RP."
+            "name": "TestStatusLookupSurvivesRestart",
+            "verifies": "Accepted work remains recoverable after sandbox restart."
           },
           {
-            "name": "TestSessionReportsSignedOutWithoutCookies",
-            "verifies": "Session inspection returns a signed-out result when auth state is missing."
+            "name": "TestEventsRequireAuth",
+            "verifies": "Runtime event streaming fails closed without valid auth."
           }
         ]
       }
@@ -124,7 +133,8 @@ None
 
 ## When to Return to Orchestrator
 
-- The feature needs Nix/Caddy/systemd or Node B secret-management changes
-- The feature depends on a public route or acceptance invariant that conflicts with `validation-contract.md`
-- The feature would require a local auth bypass or direct-browser access to service ports
+- The feature requires Nix/Caddy/systemd or Node B secret-management changes beyond a small local adjustment
+- The feature needs a new mission boundary, new public route, or provider/VM exposure model not already captured in shared state
+- Real-provider validation is blocked by missing credentials or missing Node B/Linux capabilities
+- The feature would require a local auth bypass, direct-browser access to service ports, or guest-side provider credentials
 - A contract-critical verification path cannot be exercised with the current services or test setup
