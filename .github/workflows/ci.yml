@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check, build-frontend]
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Setup SSH
         run: |
@@ -101,6 +101,16 @@ jobs:
 
             echo "==> Waiting for services to start"
             sleep 5
+
+            echo "==> Building guest images (kernel + rootfs)"
+            /run/current-system/sw/bin/nix build .#guest-image -o /tmp/guest-image-result
+            cp -f /tmp/guest-image-result/vmlinux /var/lib/go-choir/guest/vmlinux
+            cp -f /tmp/guest-image-result/rootfs.ext4 /var/lib/go-choir/guest/rootfs.ext4
+            echo "    Guest images deployed"
+
+            echo "==> Restarting vmctl to pick up new guest images"
+            systemctl restart go-choir-vmctl
+            sleep 3
 
             echo "==> Smoke test: health endpoints"
             for port in 8081 8082 8083 8084; do
