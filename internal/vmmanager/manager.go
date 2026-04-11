@@ -313,6 +313,17 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 		cfg.MachineMemSizeMib = m.cfg.MachineMemSizeMib
 	}
 
+	// Create a per-VM writable copy of the rootfs image.
+	// The base rootfs image is read-only (from the Nix store or /var/lib/go-choir/guest/),
+	// but Firecracker needs write access to the drive. Each VM gets its own copy
+	// so VM state is isolated per-user (VAL-VM-005).
+	vmRootfs := filepath.Join(m.cfg.StateDir, cfg.VMID, "rootfs.ext4")
+	if err := m.copyFile(cfg.RootfsPath, vmRootfs); err != nil {
+		return nil, fmt.Errorf("copy rootfs for VM %s: %w", cfg.VMID, err)
+	}
+	// Point the VM config to the per-VM writable copy.
+	cfg.RootfsPath = vmRootfs
+
 	// Build the Firecracker configuration.
 	// Provider credentials are explicitly NOT included here (VAL-VM-011).
 	fcConfig := m.buildFirecrackerConfig(cfg, hostPort)
@@ -330,7 +341,7 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	m.vms[cfg.VMID] = inst
 
 	// Launch Firecracker.
-	if err := m.launchFirecracker(cfg.VMID, fcConfig); err != nil {
+	if err := m.launchFirecracker(cfg.VMID, fcConfig, hostPort, cfg.GuestPort); err != nil {
 		inst.State = StateFailed
 		return nil, fmt.Errorf("launch firecracker for VM %s: %w", cfg.VMID, err)
 	}
@@ -432,7 +443,7 @@ func (m *Manager) ResumeVM(vmID string) (*VMInstance, error) {
 
 	fcConfig := m.buildFirecrackerConfig(inst.Config, hostPort)
 
-	if err := m.launchFirecracker(vmID, fcConfig); err != nil {
+	if err := m.launchFirecracker(vmID, fcConfig, hostPort, inst.Config.GuestPort); err != nil {
 		inst.State = StateFailed
 		return nil, fmt.Errorf("resume firecracker for VM %s: %w", vmID, err)
 	}
@@ -582,13 +593,24 @@ func (m *Manager) RecoverVM(vmID string) (*VMInstance, error) {
 // this configuration. The guest environment, boot_args, and drives
 // contain only the minimum bootstrap material (VAL-VM-011).
 func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]interface{} {
+	// Calculate the /30 subnet for this VM based on host port.
+	// hostPort is 9000+N, so subnetIndex = N.
+	// Host gets 172.(N+1).0.1, guest gets 172.(N+1).0.2.
+	subnetIndex := hostPort - m.cfg.HostBasePort + 1
+	guestIP := fmt.Sprintf("172.%d.0.2", subnetIndex)
+	hostIP := fmt.Sprintf("172.%d.0.1", subnetIndex)
+
 	// Build the guest kernel boot arguments.
 	// These contain NO provider credentials (VAL-VM-011).
+	// Network config is passed via ip= kernel parameter so the guest
+	// can configure its network interface at boot time.
 	bootArgs := fmt.Sprintf(
 		"console=ttyS0 reboot=k panic=1 pci=off "+
 			"guest_port=%d persistent=/mnt/persistent "+
-			"vm_id=%s epoch=%d",
+			"vm_id=%s epoch=%d "+
+			"ip=%s::%s:255.255.255.252::eth0:off",
 		cfg.GuestPort, cfg.VMID, cfg.Epoch,
+		guestIP, hostIP,
 	)
 
 	// Firecracker VM configuration.
@@ -617,17 +639,15 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 				"host_dev_name": fmt.Sprintf("vm-%s-tap", cfg.VMID[:8]),
 			},
 		},
-		"vsock": map[string]interface{}{
-			"guest_cid": 3,
-			"uds_path":  filepath.Join(m.cfg.StateDir, cfg.VMID, "vsock.sock"),
-		},
 	}
 
 	return fcConfig
 }
 
 // launchFirecracker starts a Firecracker process for the given VM.
-func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}) error {
+// hostPort is the host port assigned for this VM, used for setting up
+// networking. guestPort is the port the guest sandbox listens on.
+func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}, hostPort int, guestPort int) error {
 	bin := m.cfg.FirecrackerBinPath
 	if bin == "" {
 		bin = "firecracker"
@@ -647,6 +667,24 @@ func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}
 	configPath := filepath.Join(configDir, "fc-config.json")
 	if err := os.WriteFile(configPath, configData, 0o644); err != nil {
 		return fmt.Errorf("write firecracker config: %w", err)
+	}
+
+	// Create the tap device for VM networking.
+	// Firecracker requires the tap device to exist before launching.
+	// The tap name comes from the config's host_dev_name field.
+	tapName := fmt.Sprintf("vm-%s-tap", vmID[:8])
+	if err := m.createTapDevice(tapName); err != nil {
+		log.Printf("vmmanager: warning: could not create tap device %s: %v (may already exist)", tapName, err)
+	}
+
+	// Configure host-side networking for the tap device.
+	// Assign the host IP in the /30 subnet and set up DNAT
+	// so traffic to the host port reaches the guest.
+	subnetIndex := hostPort - m.cfg.HostBasePort + 1
+	hostIP := fmt.Sprintf("172.%d.0.1", subnetIndex)
+	guestIP := fmt.Sprintf("172.%d.0.2", subnetIndex)
+	if err := m.setupHostNetworking(tapName, hostIP, hostPort, guestIP, guestPort); err != nil {
+		log.Printf("vmmanager: warning: host networking setup failed for %s: %v", tapName, err)
 	}
 
 	// Build the Firecracker command.
@@ -685,7 +723,8 @@ func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}
 	return nil
 }
 
-// killFirecrackerProcess forcefully terminates a Firecracker process.
+// killFirecrackerProcess forcefully terminates a Firecracker process
+// and cleans up the associated tap device.
 func (m *Manager) killFirecrackerProcess(inst *VMInstance) {
 	if inst.cmd != nil && inst.cmd.Process != nil {
 		_ = inst.cmd.Process.Kill()
@@ -700,6 +739,12 @@ func (m *Manager) killFirecrackerProcess(inst *VMInstance) {
 	}
 	inst.PID = 0
 	inst.cmd = nil
+
+	// Clean up the tap device.
+	if inst.Config.VMID != "" && len(inst.Config.VMID) >= 8 {
+		tapName := fmt.Sprintf("vm-%s-tap", inst.Config.VMID[:8])
+		m.deleteTapDevice(tapName)
+	}
 }
 
 // forceCleanup removes any leftover state for a VM before relaunching.
@@ -757,6 +802,112 @@ func (m *Manager) saveEpoch(vmID string, epoch int64) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d", epoch)), 0o644)
+}
+
+// copyFile copies a file from src to dst. It creates the destination
+// directory if needed and sets the output file to be writable by the
+// owner. This is used to create per-VM writable copies of the rootfs
+// image so each VM has its own isolated filesystem (VAL-VM-005).
+func (m *Manager) copyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create dir %s: %w", filepath.Dir(dst), err)
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open src %s: %w", src, err)
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create dst %s: %w", dst, err)
+	}
+	defer out.Close()
+
+	if _, err := out.ReadFrom(in); err != nil {
+		return fmt.Errorf("copy %s to %s: %w", src, dst, err)
+	}
+	return nil
+}
+
+// createTapDevice creates a TAP network device for Firecracker VM
+// networking. Firecracker requires the TAP device to pre-exist on the
+// host before the VM can use it. The vmctl service needs CAP_NET_ADMIN
+// to create TAP devices, which is configured in node-b.nix.
+//
+// The tap device is given a host-side IP in the 172.X.0.1/30 range,
+// and the guest is expected to configure 172.X.0.2 as its IP. NAT
+// masquerading is set up so the guest can reach the host's localhost
+// services (gateway, etc.).
+func (m *Manager) createTapDevice(name string) error {
+	// Check if the tap device already exists.
+	checkCmd := exec.Command("ip", "link", "show", name)
+	if err := checkCmd.Run(); err == nil {
+		return nil // already exists
+	}
+
+	// Create the tap device.
+	createCmd := exec.Command("ip", "tuntap", "add", "dev", name, "mode", "tap")
+	if err := createCmd.Run(); err != nil {
+		return fmt.Errorf("create tap device %s: %w", name, err)
+	}
+
+	// Bring the interface up.
+	upCmd := exec.Command("ip", "link", "set", name, "up")
+	if err := upCmd.Run(); err != nil {
+		return fmt.Errorf("bring up tap device %s: %w", name, err)
+	}
+
+	log.Printf("vmmanager: created tap device %s", name)
+	return nil
+}
+
+// deleteTapDevice removes a TAP network device and its associated
+// iptables rules after a VM stops.
+func (m *Manager) deleteTapDevice(name string) {
+	// Remove iptables DNAT rules associated with this tap device.
+	// We identify them by comment matching the tap device name.
+	_ = exec.Command("sh", "-c",
+		fmt.Sprintf("iptables -t nat -S PREROUTING | grep '%s' | cut -d' ' -f2- | while read rule; do iptables -t nat -D PREROUTING $rule 2>/dev/null; done", name)).Run()
+	_ = exec.Command("sh", "-c",
+		fmt.Sprintf("iptables -t nat -S OUTPUT | grep '%s' | cut -d' ' -f2- | while read rule; do iptables -t nat -D OUTPUT $rule 2>/dev/null; done", name)).Run()
+
+	cmd := exec.Command("ip", "link", "del", name)
+	if err := cmd.Run(); err != nil {
+		log.Printf("vmmanager: warning: could not delete tap device %s: %v", name, err)
+	}
+}
+
+// setupHostNetworking configures the host-side networking for a VM's
+// tap device. It assigns the host IP address to the tap interface and
+// sets up iptables DNAT rules to forward traffic from the assigned
+// host port to the guest's IP:port.
+func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, guestIP string, guestPort int) error {
+	// Assign the host IP to the tap device.
+	addrCmd := exec.Command("ip", "addr", "add", hostIP+"/30", "dev", tapName)
+	if err := addrCmd.Run(); err != nil {
+		// Ignore "file exists" errors (IP already assigned).
+		if addrCmd.ProcessState.ExitCode() != 0 {
+			log.Printf("vmmanager: note: ip addr add %s/30 on %s: %v (may already be set)", hostIP, tapName, err)
+		}
+	}
+
+	// Enable IP forwarding.
+	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644)
+
+	// Set up DNAT: traffic to 127.0.0.1:hostPort → guestIP:guestPort.
+	// This allows host services (proxy, gateway) to reach the VM sandbox
+	// via localhost on the assigned host port.
+	comment := fmt.Sprintf("go-choir-vm-%s", tapName)
+	dnatCmd := exec.Command("iptables", "-t", "nat", "-A", "OUTPUT",
+		"-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort),
+		"-d", "127.0.0.1",
+		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIP, guestPort),
+		"-m", "comment", "--comment", comment)
+	_ = dnatCmd.Run() // best effort
+
+	return nil
 }
 
 // healthCheckLoop periodically checks the health of all running VMs.

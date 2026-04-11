@@ -39,6 +39,11 @@ let
     export SANDBOX_ID=''${vm_id:-sandbox-guest}
     export RUNTIME_STORE_PATH=/mnt/persistent/state
 
+    # Mount essential filesystems.
+    mount -t proc proc /proc
+    mount -t sysfs sysfs /sys
+    mount -t devtmpfs devtmpfs /dev
+
     # Wait for the persistent mount to be available.
     # In production, the Firecracker VM config mounts persistent storage
     # at /mnt/persistent for per-user state that survives stop/resume.
