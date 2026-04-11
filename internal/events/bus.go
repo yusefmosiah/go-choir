@@ -34,6 +34,12 @@ const (
 
 	// ActorHost represents a host-side action (e.g., manual operator).
 	ActorHost EventActor = "host"
+
+	// ActorTool represents a tool invocation within the tool-calling loop.
+	ActorTool EventActor = "tool"
+
+	// ActorChannel represents a channel message for inter-agent coordination.
+	ActorChannel EventActor = "channel"
 )
 
 // EventCause classifies why the event was emitted.
@@ -54,6 +60,15 @@ const (
 
 	// CauseHostAction represents a manual host-side action.
 	CauseHostAction EventCause = "host_action"
+
+	// CauseToolExecution represents a tool invocation within the
+	// tool-calling loop. Tool invocations emit observable events so
+	// that later appagent and browser features can track tool-driven
+	// task progress.
+	CauseToolExecution EventCause = "tool_execution"
+
+	// CauseChannelMessage represents an inter-agent channel message.
+	CauseChannelMessage EventCause = "channel_message"
 )
 
 // RuntimeEvent wraps a types.EventRecord with additional context about the

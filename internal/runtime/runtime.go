@@ -29,13 +29,17 @@ type Runtime struct {
 	health   types.RuntimeHealthState
 	running  map[string]context.CancelFunc // task_id → cancel function
 
-	supervisor *Supervisor
-	wg         sync.WaitGroup
+	supervisor   *Supervisor
+	wg           sync.WaitGroup
+	toolRegistry *ToolRegistry
+	channelMgr   *ChannelManager
 }
 
 // New creates a new Runtime with the given config, store, event bus, and
 // provider. The runtime is idle until Start is called.
-func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider) *Runtime {
+// If a tool registry is provided, the runtime will use the tool-calling
+// loop for task execution instead of the simple provider bridge path.
+func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, opts ...RuntimeOption) *Runtime {
 	rt := &Runtime{
 		cfg:      cfg,
 		store:    s,
@@ -43,9 +47,33 @@ func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider) *R
 		provider: provider,
 		health:   types.HealthReady,
 		running:  make(map[string]context.CancelFunc),
+		channelMgr: NewChannelManager(),
+	}
+	for _, opt := range opts {
+		opt(rt)
 	}
 	rt.supervisor = NewSupervisor(rt, cfg.SupervisionInterval)
 	return rt
+}
+
+// RuntimeOption configures optional Runtime components.
+type RuntimeOption func(*Runtime)
+
+// WithToolRegistry sets the tool registry for the runtime. When a tool
+// registry is provided, the runtime uses the tool-calling loop instead
+// of the simple provider bridge path for task execution.
+func WithToolRegistry(registry *ToolRegistry) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.toolRegistry = registry
+	}
+}
+
+// WithChannelManager sets a custom channel manager for the runtime.
+// If not called, a default empty channel manager is created.
+func WithChannelManager(mgr *ChannelManager) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.channelMgr = mgr
+	}
 }
 
 // Start begins the supervisor loop and recovers tasks that were interrupted
@@ -94,14 +122,17 @@ func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*typ
 	promptLenPayload, _ := json.Marshal(map[string]int{"prompt_length": len(prompt)})
 	rt.emitEvent(ctx, rec, types.EventTaskSubmitted, events.CauseTaskLifecycle, promptLenPayload)
 
-	// Begin execution in a goroutine.
+	// Begin execution in a goroutine. Use a copy of the record to avoid
+	// racing with the caller (the returned rec must retain TaskPending).
+	taskRec := *rec
+
 	taskCtx, cancel := context.WithCancel(context.Background())
 	rt.mu.Lock()
 	rt.running[rec.TaskID] = cancel
 	rt.mu.Unlock()
 
 	rt.wg.Add(1)
-	go rt.executeTask(taskCtx, rec)
+	go rt.executeTask(taskCtx, &taskRec)
 
 	return rec, nil
 }
@@ -194,6 +225,16 @@ func (rt *Runtime) RunningCount() int {
 	return len(rt.running)
 }
 
+// ToolRegistry returns the runtime's tool registry, or nil if none is configured.
+func (rt *Runtime) ToolRegistry() *ToolRegistry {
+	return rt.toolRegistry
+}
+
+// ChannelManager returns the runtime's channel manager.
+func (rt *Runtime) ChannelManager() *ChannelManager {
+	return rt.channelMgr
+}
+
 // recoverInterruptedTasks finds tasks that were in non-terminal states when
 // the runtime previously stopped and resolves them to explicit outcomes
 // (VAL-RUNTIME-010).
@@ -227,6 +268,12 @@ func (rt *Runtime) recoverInterruptedTasks(ctx context.Context) {
 // executeTask runs a task to completion using the configured provider.
 // It transitions the task through pending → running → completed/failed/blocked,
 // emitting events at each transition.
+//
+// When a tool registry is configured, the task executes through the real
+// tool-calling loop (RunToolLoop), which handles tool_use stop reasons by
+// invoking registered Go function-call tools and feeding results back to the
+// provider. When no tool registry is configured, the task uses the simpler
+// Provider.Execute path (stub or bridge provider).
 func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	defer rt.wg.Done()
 	defer rt.removeRunning(rec.TaskID)
@@ -244,13 +291,84 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	rt.emitEvent(ctx, rec, types.EventTaskStarted, events.CauseTaskLifecycle,
 		json.RawMessage(`{}`))
 
-	// Execute through the provider. The provider may set rec.Result
-	// directly (e.g., BridgeProvider sets it from the LLM response text).
-	// For stub providers, we fall back to the providerResult() method.
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
-		rt.emitEvent(ctx, rec, kind, events.CauseProviderProgress, payload)
+		cause := events.CauseProviderProgress
+		if kind == types.EventToolInvoked || kind == types.EventToolResult {
+			cause = events.CauseToolExecution
+		}
+		rt.emitEvent(ctx, rec, kind, cause, payload)
 	}
 
+	// Use the tool-calling loop if a tool registry is configured and the
+	// provider supports the ToolLoopProvider interface. Otherwise, fall back
+	// to the simple Provider.Execute path.
+	if rt.toolRegistry != nil && rt.toolRegistry.Size() > 0 {
+		rt.executeWithToolLoop(ctx, rec, emit)
+	} else {
+		rt.executeWithProvider(ctx, rec, emit)
+	}
+}
+
+// executeWithToolLoop runs the task through the real tool-calling loop.
+// This is the primary execution path when a tool registry is configured,
+// enabling the LLM to invoke registered Go function-call tools.
+func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecord, emit EventEmitFunc) {
+	tlp := asToolLoopProvider(rt.provider)
+
+	// Build the initial conversation from the task prompt.
+	initialMessages := []json.RawMessage{}
+	userMsg, _ := json.Marshal(map[string]any{
+		"role": "user",
+		"content": []any{
+			map[string]string{"type": "text", "text": rec.Prompt},
+		},
+	})
+	initialMessages = append(initialMessages, userMsg)
+
+	systemPrompt := "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully. Use tools when they would help accomplish the task."
+
+	text, usage, err := RunToolLoop(ctx, tlp, rt.toolRegistry, initialMessages, systemPrompt, 4096, emit)
+	if err != nil {
+		if ctx.Err() != nil {
+			rt.handleExecutionError(ctx, rec, ctx.Err())
+		} else {
+			rt.handleExecutionError(ctx, rec, err)
+		}
+		return
+	}
+
+	// Transition to completed.
+	now := time.Now().UTC()
+	rec.State = types.TaskCompleted
+	rec.Result = text
+	rec.UpdatedAt = now
+	rec.FinishedAt = &now
+
+	// Store token usage in metadata.
+	if rec.Metadata == nil {
+		rec.Metadata = make(map[string]any)
+	}
+	rec.Metadata["input_tokens"] = usage.InputTokens
+	rec.Metadata["output_tokens"] = usage.OutputTokens
+
+	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
+		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
+		return
+	}
+	resultLenPayload, _ := json.Marshal(map[string]any{
+		"result_length": len(text),
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
+	})
+	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+}
+
+// executeWithProvider runs the task through the simple Provider.Execute path.
+// This is the legacy execution path used when no tool registry is configured
+// (stub provider or bridge provider without tool-calling support).
+func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecord, emit EventEmitFunc) {
+	// Execute through the provider. The provider may set rec.Result
+	// directly (e.g., BridgeProvider sets it from the LLM response text).
 	err := rt.provider.Execute(ctx, rec, emit)
 	if err != nil {
 		rt.handleExecutionError(ctx, rec, err)
@@ -258,7 +376,7 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	}
 
 	// Transition to completed.
-	now = time.Now().UTC()
+	now := time.Now().UTC()
 	rec.State = types.TaskCompleted
 	result := rec.Result
 	if result == "" {

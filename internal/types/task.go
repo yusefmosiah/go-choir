@@ -145,6 +145,20 @@ const (
 
 	// EventRuntimeDegraded is emitted when the runtime enters a degraded state.
 	EventRuntimeDegraded EventKind = "runtime.degraded"
+
+	// EventToolInvoked is emitted when the tool-calling loop invokes a
+	// registered tool. The payload includes the tool name, call ID, and
+	// argument summary (VAL-RUNTIME-005: tool-driven progress is observable).
+	EventToolInvoked EventKind = "tool.invoked"
+
+	// EventToolResult is emitted when a tool invocation completes. The
+	// payload includes the tool name, call ID, and result summary.
+	EventToolResult EventKind = "tool.result"
+
+	// EventChannelMessage is emitted when a message is posted to an agent
+	// channel, making inter-agent coordination observable through the
+	// event stream.
+	EventChannelMessage EventKind = "channel.message"
 )
 
 // EventRecord represents a single runtime event emitted during task execution
@@ -180,6 +194,52 @@ type EventRecord struct {
 
 	// Payload carries the event-specific data as a JSON blob.
 	Payload json.RawMessage `json:"payload"`
+}
+
+// ToolCall represents a single tool invocation request from the LLM provider.
+// When the provider returns a tool_use stop reason, each call specifies which
+// tool to invoke and with what arguments. The tool-calling loop executes these
+// calls and returns the results to the provider for the next turn.
+type ToolCall struct {
+	// ID is the provider-assigned call identifier, used to correlate the
+	// result back to the provider's conversation history.
+	ID string `json:"id"`
+
+	// Name is the registered tool name to invoke.
+	Name string `json:"name"`
+
+	// Arguments is the raw JSON arguments object from the provider.
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ToolResult represents the output of a tool invocation, sent back to the
+// provider as a tool_result content block in the conversation history.
+type ToolResult struct {
+	// CallID is the ID from the originating ToolCall.
+	CallID string `json:"call_id"`
+
+	// Output is the text result from the tool execution.
+	Output string `json:"output"`
+
+	// IsError is true if the tool execution returned an error.
+	IsError bool `json:"is_error,omitempty"`
+}
+
+// ChannelMessage represents a message posted to an agent channel for
+// inter-agent coordination. Channels support appagent and worker
+// communication without going through the LLM provider loop.
+type ChannelMessage struct {
+	// From identifies the sender (e.g., "appagent", "worker-1", "runtime").
+	From string `json:"from"`
+
+	// Role classifies the message (e.g., "coordinator", "worker", "status").
+	Role string `json:"role"`
+
+	// Content is the message body.
+	Content string `json:"content"`
+
+	// Timestamp is when the message was posted.
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // RuntimeHealthState represents the health state of the runtime.

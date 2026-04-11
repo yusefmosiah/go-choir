@@ -63,7 +63,23 @@ func main() {
 		log.Printf("sandbox: using stub provider (no credentials configured)")
 	}
 
-	rt := runtime.New(rtCfg, db, bus, rtProvider)
+	// Build runtime options based on configuration.
+	var rtOpts []runtime.RuntimeOption
+
+	// If the environment requests tool support, configure the tool registry
+	// with built-in tools. The registry starts empty but is ready for tool
+	// registration by future features (e-text appagent, terminal, files, etc.).
+	if os.Getenv("RUNTIME_ENABLE_TOOLS") != "" {
+		registry := runtime.NewToolRegistry()
+		if registry.Size() > 0 {
+			rtOpts = append(rtOpts, runtime.WithToolRegistry(registry))
+			log.Printf("sandbox: tool registry enabled with %d tools", registry.Size())
+		} else {
+			log.Printf("sandbox: RUNTIME_ENABLE_TOOLS set but no tools registered yet")
+		}
+	}
+
+	rt := runtime.New(rtCfg, db, bus, rtProvider, rtOpts...)
 
 	// Register runtime API routes (overrides default /health).
 	apiHandler := runtime.NewAPIHandler(rt)
