@@ -72,6 +72,7 @@ Do not rely on local direct-port browser flows for acceptance.
 ### Playwright Chromium passkey automation
 - Max concurrent validators: **1**
 - Rationale: these flows share a mutable local auth DB/service stack, require virtual-authenticator state, and are more brittle than simple browser smoke checks; keep them serialized unless the harness later proves reliable under isolated parallel runs
+- Keep the repo-level `frontend-e2e` command serialized (`--workers=1`) because parallel Playwright workers can hit SQLite write contention in the shared auth DB and cause sporadic 500s
 
 ### manual browser / real passkey validation
 - Max concurrent validators: **1**

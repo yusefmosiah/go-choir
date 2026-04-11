@@ -5,7 +5,7 @@ commands:
   vet: go vet ./...
   frontend-build: cd frontend && pnpm build
   playwright-install: cd frontend && pnpm exec playwright install chromium
-  frontend-e2e: cd frontend && pnpm exec playwright test
+  frontend-e2e: cd frontend && pnpm exec playwright test --workers=1
 
 services:
   auth:
