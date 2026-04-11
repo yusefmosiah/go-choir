@@ -1,0 +1,90 @@
+{
+  "milestone": "etext-desktop",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 20,
+    "passed": 20,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-DESKTOP-001",
+    "VAL-DESKTOP-002",
+    "VAL-DESKTOP-003",
+    "VAL-DESKTOP-004",
+    "VAL-DESKTOP-005",
+    "VAL-DESKTOP-006",
+    "VAL-DESKTOP-007",
+    "VAL-ETEXT-001",
+    "VAL-ETEXT-002",
+    "VAL-ETEXT-003",
+    "VAL-ETEXT-004",
+    "VAL-ETEXT-005",
+    "VAL-ETEXT-006",
+    "VAL-ETEXT-007",
+    "VAL-ETEXT-008",
+    "VAL-ETEXT-009",
+    "VAL-ETEXT-010",
+    "VAL-CROSS-119",
+    "VAL-CROSS-120",
+    "VAL-CROSS-122"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "validationDetails": {
+    "method": "Playwright browser automation",
+    "testFiles": [
+      "tests/desktop-window-manager.spec.js",
+      "tests/etext-authoring-history.spec.js",
+      "tests/etext-agent-revision.spec.js"
+    ],
+    "testsRun": 32,
+    "testsPassed": 32,
+    "testsFailed": 0,
+    "servicesStarted": [
+      "auth (8081)",
+      "sandbox (8085)",
+      "vmctl (8083)",
+      "gateway (8084)",
+      "proxy (8082)",
+      "frontend (4173)"
+    ],
+    "validationAreas": {
+      "desktop": {
+        "assertions": [
+          "VAL-DESKTOP-001: Authenticated users reach a real desktop shell",
+          "VAL-DESKTOP-002: App launcher opens E-Text inside the desktop",
+          "VAL-DESKTOP-003: Window focus changes raise the active window",
+          "VAL-DESKTOP-004: Windows support drag and resize",
+          "VAL-DESKTOP-005: Windows support minimize, maximize, and restore",
+          "VAL-DESKTOP-006: Window close and reopen updates desktop state cleanly",
+          "VAL-DESKTOP-007: Desktop restore preserves server-backed window state"
+        ]
+      },
+      "etext": {
+        "assertions": [
+          "VAL-ETEXT-001: User can create a document",
+          "VAL-ETEXT-002: Direct user edits create canonical user-authored revisions",
+          "VAL-ETEXT-003: Agent revision creates canonical appagent-authored revisions",
+          "VAL-ETEXT-004: Revision progress and completion update the open document without manual refresh",
+          "VAL-ETEXT-005: Latest revision survives reload and fresh auth session",
+          "VAL-ETEXT-006: Version history lists revisions with explicit attribution metadata",
+          "VAL-ETEXT-007: Historical snapshots can be opened without mutating head",
+          "VAL-ETEXT-008: Diff view compares selected revisions and changed sections",
+          "VAL-ETEXT-009: Blame identifies the last editor per section",
+          "VAL-ETEXT-010: Citations and metadata persist with document history"
+        ]
+      },
+      "crossArea": {
+        "assertions": [
+          "VAL-CROSS-119: One end-to-end e-text flow preserves user and appagent attribution",
+          "VAL-CROSS-120: Background worker output never appears as a direct canonical author",
+          "VAL-CROSS-122: Renewal and retries do not duplicate canonical document mutation"
+        ]
+      }
+    }
+  }
+}
