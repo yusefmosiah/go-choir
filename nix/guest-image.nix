@@ -256,7 +256,8 @@ let
       echo "write ${goChoirPackages.sandbox}/bin/sandbox bin/sandbox"
 
       # Copy the init script.
-      echo "write ${guestInitScript}/bin/guest-init bin/init"
+      # Note: writeShellScript puts the script directly at $out, not $out/bin/name
+      echo "write ${guestInitScript} bin/init"
 
       # Copy networking utilities.
       echo "write ${pkgs.iproute2}/bin/ip bin/ip"
