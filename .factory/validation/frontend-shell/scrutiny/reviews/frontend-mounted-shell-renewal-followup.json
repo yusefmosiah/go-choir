@@ -1,0 +1,21 @@
+{
+  "featureId": "frontend-mounted-shell-renewal-followup",
+  "reviewedAt": "2026-04-11T01:57:00Z",
+  "commitId": "8d97b1274d5751c0dc0bac559f71ec3675754d5a",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly adds an explicit 'Refresh' action to the mounted shell, enabling users to re-fetch bootstrap data and trigger silent renewal without a full page reload or WS reconnect. The implementation appropriately relies on the existing `fetchWithRenewal` helper, maintaining the auth contract via `GET /auth/session` without introducing any new or bypass auth flows. It correctly handles successful renewal by keeping the shell stable and handles complete renewal failure by dispatching `authexpired` to fall back cleanly to the guest auth state. Tests thoroughly cover all newly introduced expected behaviors.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The worker appropriately created a new `.factory/library/frontend-mounted-shell-renewal.md` document to record the behavior and design of the follow-up feature, keeping the shared knowledge base up-to-date.",
+      "evidence": "Commit b43aa77 adds `.factory/library/frontend-mounted-shell-renewal.md`."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Review passes. The mounted-shell refresh feature accurately satisfies all expected behavior requirements using the established `fetchWithRenewal` method."
+}

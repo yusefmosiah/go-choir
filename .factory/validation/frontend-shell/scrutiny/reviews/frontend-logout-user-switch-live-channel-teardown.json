@@ -1,0 +1,21 @@
+{
+  "featureId": "frontend-logout-user-switch-live-channel-teardown",
+  "reviewedAt": "2026-04-11T02:05:00.000Z",
+  "commitId": "075dd26",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly tears down the live channel upon logout by utilizing Svelte's onDestroy hook in Shell.svelte to ensure the WebSocket is cleanly disconnected. It also properly mitigates bfcache back-navigation resurrection by adding a pageshow listener in App.svelte that reverifies session state. Comprehensive Playwright tests verify both logout invariants (VAL-CROSS-006) and user-switch state isolation (VAL-CROSS-007).",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "Worker proactively documented the frontend logout and user-switch flow, including architecture invariants and Playwright test coverage.",
+      "evidence": "Created .factory/library/frontend-logout-user-switch.md in commit 075dd26"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Passed. The worker correctly implemented WebSocket teardown on logout via Svelte lifecycle hooks and added bfcache back-navigation protection. Extensive test coverage was added and all requirements were successfully met."
+}
