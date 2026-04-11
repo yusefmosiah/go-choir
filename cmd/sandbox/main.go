@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/yusefmosiah/go-choir/internal/events"
+	"github.com/yusefmosiah/go-choir/internal/provider"
 	"github.com/yusefmosiah/go-choir/internal/runtime"
 	"github.com/yusefmosiah/go-choir/internal/sandbox"
 	"github.com/yusefmosiah/go-choir/internal/server"
@@ -46,8 +47,23 @@ func main() {
 	}()
 
 	bus := events.NewEventBus()
-	provider := runtime.NewStubProvider(rtCfg.ProviderTimeout)
-	rt := runtime.New(rtCfg, db, bus, provider)
+
+	// Resolve the provider: use a real Bedrock or Z.AI provider when
+	// credentials are available, otherwise fall back to the stub provider.
+	var rtProvider runtime.Provider
+	realProvider, err := provider.ResolveProvider()
+	if err != nil {
+		log.Printf("sandbox: provider resolution failed, using stub: %v", err)
+	}
+	if realProvider != nil {
+		rtProvider = provider.NewBridgeProvider(realProvider)
+		log.Printf("sandbox: using real provider: %s", realProvider.Name())
+	} else {
+		rtProvider = runtime.NewStubProvider(rtCfg.ProviderTimeout)
+		log.Printf("sandbox: using stub provider (no credentials configured)")
+	}
+
+	rt := runtime.New(rtCfg, db, bus, rtProvider)
 
 	// Register runtime API routes (overrides default /health).
 	apiHandler := runtime.NewAPIHandler(rt)

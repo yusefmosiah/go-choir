@@ -525,6 +525,9 @@ func TestHandleHealthReady(t *testing.T) {
 	if resp.SandboxID != "sandbox-test" {
 		t.Errorf("sandbox_id: got %q, want sandbox-test", resp.SandboxID)
 	}
+	if resp.ActiveProvider != "stub" {
+		t.Errorf("active_provider: got %q, want stub (default test provider)", resp.ActiveProvider)
+	}
 }
 
 func TestHandleHealthDegraded(t *testing.T) {
@@ -761,5 +764,59 @@ func TestAuthenticateUserPresent(t *testing.T) {
 	}
 	if user != "user-alice" {
 		t.Errorf("user: got %q, want user-alice", user)
+	}
+}
+
+// --- Provider Bridge Health Visibility ---
+
+func TestHandleHealthReportsBridgeProvider(t *testing.T) {
+	// When a bridge provider is active, the health endpoint should report
+	// its name (e.g., "bedrock" or "zai") instead of "stub", so operators
+	// can distinguish real-provider paths from canned responses.
+
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+
+	// Use a mock bridge provider instead of the stub.
+	bridge := &mockBridgeProvider{name: "bedrock", result: "test"}
+
+	cfg := Config{
+		SandboxID:           "sandbox-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     50 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, bridge)
+	handler := NewAPIHandler(rt)
+
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	var resp runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.ActiveProvider != "bedrock" {
+		t.Errorf("active_provider: got %q, want bedrock", resp.ActiveProvider)
 	}
 }

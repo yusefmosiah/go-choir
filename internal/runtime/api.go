@@ -54,13 +54,15 @@ type taskStatusResponse struct {
 // runtimeHealthResponse is the JSON structure returned by GET /health.
 // It reports runtime readiness for real task handling, and surfaces
 // degraded state rather than hiding it behind a generic healthy response
-// (VAL-RUNTIME-001).
+// (VAL-RUNTIME-001). The active provider name is included so operators
+// can distinguish real-provider paths from stub/canned paths.
 type runtimeHealthResponse struct {
-	Status        string                  `json:"status"`
-	Service       string                  `json:"service"`
-	SandboxID     string                  `json:"sandbox_id"`
-	RuntimeHealth types.RuntimeHealthState `json:"runtime_health"`
-	RunningTasks  int                     `json:"running_tasks"`
+	Status         string                  `json:"status"`
+	Service        string                  `json:"service"`
+	SandboxID      string                  `json:"sandbox_id"`
+	RuntimeHealth  types.RuntimeHealthState `json:"runtime_health"`
+	RunningTasks   int                     `json:"running_tasks"`
+	ActiveProvider string                  `json:"active_provider"`
 }
 
 // APIHandler provides HTTP handlers for the runtime API endpoints.
@@ -306,11 +308,12 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
 	_ = json.NewEncoder(w).Encode(runtimeHealthResponse{
-		Status:        string(health),
-		Service:       "sandbox",
-		SandboxID:     h.rt.cfg.SandboxID,
-		RuntimeHealth: health,
-		RunningTasks:  h.rt.RunningCount(),
+		Status:         string(health),
+		Service:        "sandbox",
+		SandboxID:      h.rt.cfg.SandboxID,
+		RuntimeHealth:  health,
+		RunningTasks:   h.rt.RunningCount(),
+		ActiveProvider: h.rt.provider.ProviderName(),
 	})
 }
 

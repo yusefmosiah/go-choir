@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -661,5 +663,203 @@ func TestProviderStubDeltaEvent(t *testing.T) {
 	}
 	if !hasDelta {
 		t.Error("expected task.delta event from stub provider")
+	}
+}
+
+// --- Bridge Provider Integration Tests ---
+
+// mockBridgeProvider implements the runtime.Provider interface for testing
+// the bridge provider integration with the runtime engine.
+type mockBridgeProvider struct {
+	name       string
+	result     string
+	execErr    error
+	mu         sync.Mutex
+	called     bool
+	taskResult string // captures the result set by Execute on the TaskRecord
+}
+
+func (m *mockBridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
+	m.mu.Lock()
+	m.called = true
+	m.mu.Unlock()
+
+	if m.execErr != nil {
+		emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"failed","real":"true"}`))
+		return m.execErr
+	}
+
+	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"`+m.name+`","real":"true"}`))
+	emit(types.EventTaskDelta, "execution", json.RawMessage(`{"text":"`+m.result+`","provider":"`+m.name+`","real":"true"}`))
+	task.Result = m.result
+	m.mu.Lock()
+	m.taskResult = m.result
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mockBridgeProvider) ProviderName() string { return m.name }
+
+func testRuntimeWithBridge(t *testing.T, bridge Provider) (*Runtime, *store.Store) {
+	t.Helper()
+
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-bridge-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+	cfg := Config{
+		SandboxID:           "sandbox-bridge-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     50 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, bridge)
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	return rt, s
+}
+
+func TestBridgeProviderSubmitsAndCompletes(t *testing.T) {
+	bridge := &mockBridgeProvider{
+		name:   "bedrock",
+		result: "Real Bedrock response with genuine inference!",
+	}
+
+	rt, s := testRuntimeWithBridge(t, bridge)
+	ctx := context.Background()
+
+	rec, err := rt.SubmitTask(ctx, "What is the capital of France?", "user-bridge")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait for the task to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify task completed with the bridge provider result.
+	stored, err := s.GetTask(ctx, rec.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.State != types.TaskCompleted {
+		t.Errorf("state: got %q, want completed", stored.State)
+	}
+	if stored.Result != "Real Bedrock response with genuine inference!" {
+		t.Errorf("result: got %q, want bridge provider result", stored.Result)
+	}
+
+	// Verify the bridge was actually called.
+	if !bridge.called {
+		t.Error("bridge provider was not called")
+	}
+}
+
+func TestBridgeProviderFailureSurfacesWithoutCrashing(t *testing.T) {
+	bridge := &mockBridgeProvider{
+		name:    "zai",
+		execErr: fmt.Errorf("upstream provider timeout"),
+	}
+
+	rt, _ := testRuntimeWithBridge(t, bridge)
+	ctx := context.Background()
+
+	rec, err := rt.SubmitTask(ctx, "This should fail at the provider", "user-fail")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// The task should be in failed state, not crashing the runtime.
+	stored, err := rt.GetTask(ctx, rec.TaskID, "user-fail")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.State != types.TaskFailed {
+		t.Errorf("state: got %q, want failed", stored.State)
+	}
+
+	// The runtime should still be healthy for later tasks.
+	if rt.HealthState() == types.HealthFailed {
+		t.Error("runtime should not be in failed state after a single provider error")
+	}
+
+	// Submit another task — should still work.
+	rec2, err := rt.SubmitTask(ctx, "Another task after failure", "user-retry")
+	if err != nil {
+		t.Fatalf("submit task after failure: %v", err)
+	}
+	if rec2.TaskID == "" {
+		t.Error("second task should have a valid ID")
+	}
+}
+
+func TestBridgeProviderEventsContainRealMarker(t *testing.T) {
+	bridge := &mockBridgeProvider{
+		name:   "zai",
+		result: "Z.AI generated text",
+	}
+
+	rt, s := testRuntimeWithBridge(t, bridge)
+	ctx := context.Background()
+
+	rec, err := rt.SubmitTask(ctx, "test event markers", "user-events")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	evts, err := s.ListEvents(ctx, rec.TaskID, 20)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+
+	// Look for events with the "real":"true" marker that distinguishes
+	// bridge provider events from stub provider events.
+	hasRealMarker := false
+	for _, ev := range evts {
+		if ev.Kind == types.EventTaskDelta || ev.Kind == types.EventTaskProgress {
+			var payload map[string]string
+			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
+				if payload["real"] == "true" {
+					hasRealMarker = true
+					if payload["provider"] == "stub" {
+						t.Error("real provider event should not have provider=stub")
+					}
+				}
+			}
+		}
+	}
+	if !hasRealMarker {
+		t.Error("expected at least one event with real=true marker from bridge provider")
+	}
+}
+
+func TestHealthReportsActiveProvider(t *testing.T) {
+	bridge := &mockBridgeProvider{
+		name:   "bedrock",
+		result: "test",
+	}
+
+	rt, _ := testRuntimeWithBridge(t, bridge)
+
+	// The runtime's provider should report its name.
+	if rt.provider.ProviderName() != "bedrock" {
+		t.Errorf("provider name: got %q, want bedrock", rt.provider.ProviderName())
 	}
 }

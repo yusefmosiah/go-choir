@@ -1,0 +1,708 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yusefmosiah/go-choir/internal/types"
+)
+
+// --- Bedrock Provider Tests ---
+
+func TestBedrockProviderRequiresRegion(t *testing.T) {
+	_, err := NewBedrockProvider(BedrockConfig{
+		Region:    "",
+		ModelID:   "test-model",
+		AuthToken: "test-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("expected region error, got: %v", err)
+	}
+}
+
+func TestBedrockProviderRequiresModelID(t *testing.T) {
+	_, err := NewBedrockProvider(BedrockConfig{
+		Region:    "us-east-1",
+		ModelID:   "",
+		AuthToken: "test-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "model_id") {
+		t.Fatalf("expected model_id error, got: %v", err)
+	}
+}
+
+func TestBedrockProviderRequiresAuthToken(t *testing.T) {
+	_, err := NewBedrockProvider(BedrockConfig{
+		Region:    "us-east-1",
+		ModelID:   "test-model",
+		AuthToken: "",
+	})
+	if err == nil || !strings.Contains(err.Error(), "auth token") {
+		t.Fatalf("expected auth token error, got: %v", err)
+	}
+}
+
+func TestBedrockProviderCallSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the request targets the Bedrock invoke endpoint.
+		if !strings.Contains(r.URL.Path, "/model/") || !strings.Contains(r.URL.Path, "/invoke") {
+			t.Errorf("unexpected URL path: %s", r.URL.Path)
+		}
+
+		// Verify Authorization header uses Bearer token.
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			t.Errorf("expected Bearer auth, got: %s", auth)
+		}
+
+		// Verify anthropic-version header.
+		if v := r.Header.Get("anthropic-version"); v != "bedrock-2023-05-31" {
+			t.Errorf("expected anthropic-version bedrock-2023-05-31, got: %s", v)
+		}
+
+		// Return a successful Anthropic Messages API response.
+		resp := anthropicResponse{
+			ID: "msg_test123",
+			Content: []anthropicResponseBlock{
+				{Type: "text", Text: "Hello from Bedrock!"},
+			},
+			StopReason: "end_turn",
+			Usage:      anthropicUsage{InputTokens: 10, OutputTokens: 5},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:     "us-east-1",
+		modelID:   "us.anthropic.claude-sonnet-4-5-20250514-v1:0",
+		authToken:  "test-bearer-token",
+		httpClient: server.Client(),
+		anthropicV: "bedrock-2023-05-31",
+	}
+	// Override the httpClient base URL by constructing a custom transport.
+	p.httpClient = &http.Client{
+		Timeout:   120 * time.Second,
+		Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+	}
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		System: "You are helpful.",
+		Messages: []Message{
+			{Role: "user", Content: []Block{{Type: "text", Text: "Hello"}}},
+		},
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		t.Fatalf("bedrock call: %v", err)
+	}
+
+	if resp.Text != "Hello from Bedrock!" {
+		t.Errorf("expected response text 'Hello from Bedrock!', got: %s", resp.Text)
+	}
+	if resp.ProviderName != "bedrock" {
+		t.Errorf("expected provider name 'bedrock', got: %s", resp.ProviderName)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("unexpected usage: %+v", resp.Usage)
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("expected stop_reason 'end_turn', got: %s", resp.StopReason)
+	}
+}
+
+func TestBedrockProviderCallError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"message":"Service unavailable"}`))
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:     "us-east-1",
+		modelID:   "test-model",
+		authToken:  "test-token",
+		httpClient: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+		},
+		anthropicV: "bedrock-2023-05-31",
+	}
+
+	_, err := p.Call(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1024,
+	})
+	if err == nil {
+		t.Fatal("expected error for 503 response")
+	}
+	// Error should be sanitized (no raw response body leaked).
+	if strings.Contains(err.Error(), "Service unavailable") {
+		t.Errorf("error message should be sanitized, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "sanitized") {
+		t.Errorf("error should mention sanitized, got: %v", err)
+	}
+}
+
+func TestBedrockProviderNameAndReal(t *testing.T) {
+	p := &BedrockProvider{region: "us-east-1", modelID: "test", authToken: "tok"}
+	if p.Name() != "bedrock" {
+		t.Errorf("expected name 'bedrock', got: %s", p.Name())
+	}
+	if !p.IsReal() {
+		t.Error("bedrock provider should report IsReal() = true")
+	}
+}
+
+// --- Z.AI Provider Tests ---
+
+func TestZAIProviderRequiresAPIKey(t *testing.T) {
+	_, err := NewZAIProvider(ZAIConfig{
+		APIKey:  "",
+		ModelID: "glm-4.7",
+	})
+	if err == nil || !strings.Contains(err.Error(), "api key") {
+		t.Fatalf("expected api key error, got: %v", err)
+	}
+}
+
+func TestZAIProviderRequiresModelID(t *testing.T) {
+	_, err := NewZAIProvider(ZAIConfig{
+		APIKey:  "test-key",
+		ModelID: "",
+	})
+	if err == nil || !strings.Contains(err.Error(), "model_id") {
+		t.Fatalf("expected model_id error, got: %v", err)
+	}
+}
+
+func TestZAIProviderCallSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the request targets the /v1/messages endpoint.
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("unexpected URL path: %s", r.URL.Path)
+		}
+
+		// Verify x-api-key header.
+		if v := r.Header.Get("x-api-key"); v != "test-zai-key" {
+			t.Errorf("expected x-api-key 'test-zai-key', got: %s", v)
+		}
+
+		// Verify anthropic-version header.
+		if v := r.Header.Get("anthropic-version"); v != "2023-06-01" {
+			t.Errorf("expected anthropic-version 2023-06-01, got: %s", v)
+		}
+
+		// Return a successful Anthropic Messages API response.
+		resp := anthropicResponse{
+			ID:    "msg_zai_test",
+			Model: "glm-4.7",
+			Content: []anthropicResponseBlock{
+				{Type: "text", Text: "Hello from Z.AI!"},
+			},
+			StopReason: "end_turn",
+			Usage:      anthropicUsage{InputTokens: 8, OutputTokens: 4},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:   "glm-4.7",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		System: "You are helpful.",
+		Messages: []Message{
+			{Role: "user", Content: []Block{{Type: "text", Text: "Hi"}}},
+		},
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		t.Fatalf("zai call: %v", err)
+	}
+
+	if resp.Text != "Hello from Z.AI!" {
+		t.Errorf("expected 'Hello from Z.AI!', got: %s", resp.Text)
+	}
+	if resp.ProviderName != "zai" {
+		t.Errorf("expected provider name 'zai', got: %s", resp.ProviderName)
+	}
+	if resp.Model != "glm-4.7" {
+		t.Errorf("expected model 'glm-4.7', got: %s", resp.Model)
+	}
+}
+
+func TestZAIProviderCallError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid api key"}`))
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "bad-key",
+		modelID:   "glm-4.7",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := p.Call(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1024,
+	})
+	if err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+	// Error should be sanitized.
+	if strings.Contains(err.Error(), "invalid api key") {
+		t.Errorf("error message should be sanitized, got: %v", err)
+	}
+}
+
+func TestZAIProviderNameAndReal(t *testing.T) {
+	p := &ZAIProvider{apiKey: "key", modelID: "model", baseURL: "http://test"}
+	if p.Name() != "zai" {
+		t.Errorf("expected name 'zai', got: %s", p.Name())
+	}
+	if !p.IsReal() {
+		t.Error("zai provider should report IsReal() = true")
+	}
+}
+
+func TestZAIProviderDefaultBaseURL(t *testing.T) {
+	p, err := NewZAIProvider(ZAIConfig{
+		APIKey:  "test-key",
+		ModelID: "glm-4.7",
+	})
+	if err != nil {
+		t.Fatalf("create zai provider: %v", err)
+	}
+	if p.baseURL != "https://api.z.ai/api/anthropic" {
+		t.Errorf("expected default base URL, got: %s", p.baseURL)
+	}
+}
+
+// --- Resolve Provider Tests ---
+
+func TestResolveProviderPrefersBedrock(t *testing.T) {
+	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-token")
+	os.Setenv("AWS_REGION", "us-east-1")
+	os.Setenv("ZAI_API_KEY", "test-zai-key")
+	defer func() {
+		os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+		os.Unsetenv("AWS_REGION")
+		os.Unsetenv("ZAI_API_KEY")
+	}()
+
+	p, err := ResolveProvider()
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if p.Name() != "bedrock" {
+		t.Errorf("expected bedrock, got: %s", p.Name())
+	}
+}
+
+func TestResolveProviderFallsBackToZAI(t *testing.T) {
+	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+	os.Setenv("ZAI_API_KEY", "test-zai-key")
+	defer os.Unsetenv("ZAI_API_KEY")
+
+	p, err := ResolveProvider()
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if p.Name() != "zai" {
+		t.Errorf("expected zai, got: %s", p.Name())
+	}
+}
+
+func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
+	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+	os.Unsetenv("ZAI_API_KEY")
+
+	p, err := ResolveProvider()
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+	if p != nil {
+		t.Errorf("expected nil provider when no credentials, got: %s", p.Name())
+	}
+}
+
+// --- Bridge Provider Tests ---
+
+type mockLLMProvider struct {
+	name    string
+	isReal  bool
+	resp    *LLMResponse
+	err     error
+	called  bool
+	lastReq *LLMRequest
+}
+
+func (m *mockLLMProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	m.called = true
+	m.lastReq = &req
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.resp, nil
+}
+
+func (m *mockLLMProvider) Name() string  { return m.name }
+func (m *mockLLMProvider) IsReal() bool { return m.isReal }
+
+func TestBridgeProviderExecuteSuccess(t *testing.T) {
+	mock := &mockLLMProvider{
+		name:   "test-provider",
+		isReal: true,
+		resp: &LLMResponse{
+			ID:           "msg_123",
+			Text:         "Real provider response!",
+			Model:        "test-model",
+			StopReason:   "end_turn",
+			Usage:        Usage{InputTokens: 10, OutputTokens: 20},
+			ProviderName: "test-provider",
+		},
+	}
+
+	bridge := NewBridgeProvider(mock)
+
+	task := &types.TaskRecord{
+		TaskID:  "task-1",
+		OwnerID: "user-1",
+		Prompt:  "What is the meaning of life?",
+	}
+
+	var events []struct {
+		kind    types.EventKind
+		phase   string
+		payload json.RawMessage
+	}
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
+		events = append(events, struct {
+			kind    types.EventKind
+			phase   string
+			payload json.RawMessage
+		}{kind, phase, payload})
+	}
+
+	err := bridge.Execute(context.Background(), task, emit)
+	if err != nil {
+		t.Fatalf("bridge execute: %v", err)
+	}
+
+	if !mock.called {
+		t.Error("expected inner provider to be called")
+	}
+
+	// Verify the result was set on the task.
+	if task.Result != "Real provider response!" {
+		t.Errorf("expected result 'Real provider response!', got: %s", task.Result)
+	}
+
+	// Verify events were emitted.
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events, got %d", len(events))
+	}
+
+	// First event should be a progress with "started" status and "real" flag.
+	var firstPayload map[string]string
+	if err := json.Unmarshal(events[0].payload, &firstPayload); err != nil {
+		t.Fatalf("unmarshal first event: %v", err)
+	}
+	if firstPayload["status"] != "started" {
+		t.Errorf("expected first event status 'started', got: %s", firstPayload["status"])
+	}
+	if firstPayload["real"] != "true" {
+		t.Errorf("expected first event real=true, got: %s", firstPayload["real"])
+	}
+	if firstPayload["provider"] != "test-provider" {
+		t.Errorf("expected first event provider 'test-provider', got: %s", firstPayload["provider"])
+	}
+
+	// Delta event should contain the response text.
+	deltaIdx := len(events) - 1
+	var deltaPayload map[string]string
+	if err := json.Unmarshal(events[deltaIdx].payload, &deltaPayload); err != nil {
+		t.Fatalf("unmarshal delta event: %v", err)
+	}
+	if deltaPayload["real"] != "true" {
+		t.Errorf("expected delta event real=true, got: %s", deltaPayload["real"])
+	}
+	if deltaPayload["text"] != "Real provider response!" {
+		t.Errorf("expected delta text 'Real provider response!', got: %s", deltaPayload["text"])
+	}
+}
+
+func TestBridgeProviderExecuteFailure(t *testing.T) {
+	mock := &mockLLMProvider{
+		name:   "failing-provider",
+		isReal: true,
+		err:    fmt.Errorf("upstream timeout"),
+	}
+
+	bridge := NewBridgeProvider(mock)
+
+	task := &types.TaskRecord{
+		TaskID:  "task-2",
+		OwnerID: "user-1",
+		Prompt:  "This should fail",
+	}
+
+	var events []struct {
+		kind    types.EventKind
+		phase   string
+		payload json.RawMessage
+	}
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
+		events = append(events, struct {
+			kind    types.EventKind
+			phase   string
+			payload json.RawMessage
+		}{kind, phase, payload})
+	}
+
+	err := bridge.Execute(context.Background(), task, emit)
+	if err == nil {
+		t.Fatal("expected error from failed provider call")
+	}
+	if !strings.Contains(err.Error(), "failing-provider") {
+		t.Errorf("error should mention provider name, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "upstream timeout") {
+		t.Errorf("error should wrap original error, got: %v", err)
+	}
+
+	// Should have emitted a failure event.
+	var lastPayload map[string]string
+	if err := json.Unmarshal(events[len(events)-1].payload, &lastPayload); err != nil {
+		t.Fatalf("unmarshal last event: %v", err)
+	}
+	if lastPayload["status"] != "failed" {
+		t.Errorf("expected last event status 'failed', got: %s", lastPayload["status"])
+	}
+}
+
+func TestBridgeProviderEventsDistinguishRealFromStub(t *testing.T) {
+	// This test verifies that the events emitted by the bridge provider
+	// contain a "real":"true" marker that distinguishes them from the
+	// stub provider's "provider":"stub" marker.
+	mock := &mockLLMProvider{
+		name:   "bedrock",
+		isReal: true,
+		resp: &LLMResponse{
+			Text:         "real response",
+			Model:        "claude-sonnet",
+			StopReason:   "end_turn",
+			Usage:        Usage{InputTokens: 5, OutputTokens: 3},
+			ProviderName: "bedrock",
+		},
+	}
+
+	bridge := NewBridgeProvider(mock)
+	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	var collected []map[string]string
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
+		var m map[string]string
+		json.Unmarshal(payload, &m)
+		collected = append(collected, m)
+	}
+
+	_ = bridge.Execute(context.Background(), task, emit)
+
+	// Every event should have real="true" and a non-stub provider name.
+	for i, ev := range collected {
+		if ev["real"] != "true" {
+			t.Errorf("event %d: expected real=true, got %s", i, ev["real"])
+		}
+		if ev["provider"] == "stub" {
+			t.Errorf("event %d: provider should not be 'stub'", i)
+		}
+	}
+}
+
+// --- Helper types ---
+
+// rewriteTransport redirects requests from the original URL to the test
+// server URL, preserving the path and headers.
+type rewriteTransport struct {
+	target  string
+	original string
+}
+
+func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	newURL := strings.Replace(req.URL.String(), t.original, t.target, 1)
+	newReq, err := http.NewRequest(req.Method, newURL, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	newReq = newReq.WithContext(req.Context())
+	// Copy headers.
+	for k, vs := range req.Header {
+		for _, v := range vs {
+			newReq.Header.Add(k, v)
+		}
+	}
+	return http.DefaultClient.Do(newReq)
+}
+
+// --- Bedrock from Env Tests ---
+
+func TestBedrockProviderFromEnvMissingRegion(t *testing.T) {
+	os.Unsetenv("AWS_REGION")
+	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
+	defer os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+
+	_, err := NewBedrockProviderFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("expected region error, got: %v", err)
+	}
+}
+
+func TestBedrockProviderFromEnvMissingToken(t *testing.T) {
+	os.Setenv("AWS_REGION", "us-east-1")
+	os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+	defer os.Unsetenv("AWS_REGION")
+
+	_, err := NewBedrockProviderFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "auth token") {
+		t.Fatalf("expected auth token error, got: %v", err)
+	}
+}
+
+func TestBedrockProviderFromEnvDefaultsModel(t *testing.T) {
+	os.Setenv("AWS_REGION", "us-east-1")
+	os.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
+	os.Unsetenv("RUNTIME_BEDROCK_MODEL")
+	defer func() {
+		os.Unsetenv("AWS_REGION")
+		os.Unsetenv("AWS_BEARER_TOKEN_BEDROCK")
+	}()
+
+	p, err := NewBedrockProviderFromEnv()
+	if err != nil {
+		t.Fatalf("create from env: %v", err)
+	}
+	if p.modelID != "us.anthropic.claude-sonnet-4-5-20250514-v1:0" {
+		t.Errorf("expected default model, got: %s", p.modelID)
+	}
+}
+
+// --- Z.AI from Env Tests ---
+
+func TestZAIProviderFromEnvMissingKey(t *testing.T) {
+	os.Unsetenv("ZAI_API_KEY")
+
+	_, err := NewZAIProviderFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "api key") {
+		t.Fatalf("expected api key error, got: %v", err)
+	}
+}
+
+func TestZAIProviderFromEnvDefaultsModel(t *testing.T) {
+	os.Setenv("ZAI_API_KEY", "test-key")
+	os.Unsetenv("RUNTIME_ZAI_MODEL")
+	defer os.Unsetenv("ZAI_API_KEY")
+
+	p, err := NewZAIProviderFromEnv()
+	if err != nil {
+		t.Fatalf("create from env: %v", err)
+	}
+	if p.modelID != "glm-4.7" {
+		t.Errorf("expected default model 'glm-4.7', got: %s", p.modelID)
+	}
+}
+
+// --- Redaction Tests ---
+
+func TestRedactModel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Bedrock-style IDs: "us.anthropic.<long-model>"
+		{"us.anthropic.claude-sonnet-4-5-20250514-v1:0", "us.anthropic.clau***v1:0"},
+		// Simple model name without dots
+		{"simple-model", "simple-model"},
+		// 4-part model ID: 3+ parts → first.second.<redacted last>
+		{"a.b.c.d", "a.b.***"},
+		// 2-part
+		{"a.b", "a.***"},
+	}
+	for _, tc := range tests {
+		got := redactModel(tc.input)
+		if got != tc.expected {
+			t.Errorf("redactModel(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestRedactMiddle(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"claude-sonnet-4-5-20250514-v1:0", "clau***v1:0"},
+		{"short", "***"},
+		{"123456789", "1234***6789"},
+	}
+	for _, tc := range tests {
+		got := redactMiddle(tc.input)
+		if got != tc.expected {
+			t.Errorf("redactMiddle(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestErrorSanitization(t *testing.T) {
+	// Verify that HTTP errors from providers do not include raw response bodies.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error with secret=abc123"}`))
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:     "us-east-1",
+		modelID:   "test-model",
+		authToken:  "test-token",
+		httpClient: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+		},
+		anthropicV: "bedrock-2023-05-31",
+	}
+
+	_, err := p.Call(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1024,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "secret=abc123") {
+		t.Errorf("error should not contain raw response body: %v", err)
+	}
+}

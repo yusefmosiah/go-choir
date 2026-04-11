@@ -35,8 +35,14 @@ Environment variables, external dependencies, and setup notes.
 - expect new runtime/store variables to be introduced for Dolt workspace paths, task/event persistence, and supervisor config as Mission 3 lands
 
 ### Gateway/provider runtime
-- expect Bedrock and/or Z.AI-specific env vars to be added during Mission 3
+- `AWS_BEARER_TOKEN_BEDROCK` — Bearer auth token for Bedrock invoke endpoint (not SigV4; matches choiros-rs pattern)
+- `AWS_REGION` — AWS region for Bedrock (e.g., `us-east-1`)
+- `RUNTIME_BEDROCK_MODEL` — Bedrock model ID override (defaults to `us.anthropic.claude-sonnet-4-5-20250514-v1:0`)
+- `ZAI_API_KEY` — API key for Z.AI's Anthropic-compatible endpoint at `https://api.z.ai/api/anthropic`
+- `RUNTIME_ZAI_MODEL` — Z.AI model ID override (defaults to `glm-4.7`)
+- Provider resolution: Bedrock is preferred if `AWS_BEARER_TOKEN_BEDROCK` is set; Z.AI is used if only `ZAI_API_KEY` is set; otherwise the stub provider is used
 - provider secrets must be injected from host runtime configuration, not committed to the repo and not baked into guest images
+- Error responses from providers are sanitized: raw response bodies are never included in error messages to avoid leaking credentials or provider details
 
 ### VM runtime
 - expect Firecracker/vmctl env vars for image paths, kernel paths, ownership registry storage, and lifecycle settings once the VM milestone lands

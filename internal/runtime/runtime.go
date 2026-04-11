@@ -244,7 +244,9 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	rt.emitEvent(ctx, rec, types.EventTaskStarted, events.CauseTaskLifecycle,
 		json.RawMessage(`{}`))
 
-	// Execute through the provider.
+	// Execute through the provider. The provider may set rec.Result
+	// directly (e.g., BridgeProvider sets it from the LLM response text).
+	// For stub providers, we fall back to the providerResult() method.
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		rt.emitEvent(ctx, rec, kind, events.CauseProviderProgress, payload)
 	}
@@ -258,7 +260,10 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	// Transition to completed.
 	now = time.Now().UTC()
 	rec.State = types.TaskCompleted
-	result := rt.providerResult()
+	result := rec.Result
+	if result == "" {
+		result = rt.providerResult()
+	}
 	rec.Result = result
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now

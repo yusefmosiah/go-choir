@@ -14,14 +14,19 @@ import (
 type EventEmitFunc func(kind types.EventKind, phase string, payload json.RawMessage)
 
 // Provider is the interface for executing a runtime task. The stub provider
-// simulates execution; the real Bedrock/Z.AI bridge will implement this
-// interface in a later feature.
+// simulates execution; the real Bedrock/Z.AI bridge (via the provider package's
+// BridgeProvider) implements this interface for real upstream calls.
 type Provider interface {
 	// Execute runs the task to completion, emitting incremental events via
 	// the callback. Returns nil on success or an error describing the failure.
 	// The runtime transitions the task to failed/blocked on error and remains
 	// available for later tasks (VAL-RUNTIME-008).
 	Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error
+
+	// ProviderName returns the name of the provider for observability
+	// (e.g., "stub", "bedrock", "zai"). This is used in health responses
+	// and event payloads to distinguish real providers from stubs.
+	ProviderName() string
 }
 
 // StubProvider simulates task execution with a configurable delay and optional
@@ -47,6 +52,9 @@ func NewStubProvider(delay time.Duration) *StubProvider {
 		Result: "Task completed successfully (stub provider).",
 	}
 }
+
+// ProviderName returns "stub" for the stub provider.
+func (p *StubProvider) ProviderName() string { return "stub" }
 
 // Execute simulates task execution by sleeping for the configured delay,
 // emitting progress events, and returning the configured result or error.
