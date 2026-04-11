@@ -1,0 +1,43 @@
+=== Sandbox Process Environment Verification ===
+
+Host-side sandbox process environment:
+--------------------------------------
+PID: 1496042
+Command: /nix/store/.../bin/sandbox
+
+Environment Variables (sorted):
+INVOCATION_ID=43f02d12cca7436e8976c1f5dd9f7ce5
+JOURNAL_STREAM=9:8367160
+LANG=en_US.UTF-8
+LOCALE_ARCHIVE=/nix/store/0blk7gr1f1qcf1h59igmgxr9qkz520pn-glibc-locales-2.42-51/lib/locale/locale-archive
+MEMORY_PRESSURE_WATCH=/sys/fs/cgroup/system.slice/go-choir-sandbox.service/memory.pressure
+MEMORY_PRESSURE_WRITE=c29tZSAyMDAwMDAgMjAwMDAwMAA=
+PATH=/nix/store/74sind1d6vf2bfwd7yklg8chsvzqxmmq-coreutils-9.10/bin:...
+RUNTIME_GATEWAY_TOKEN=**********:847a7c65f0f18bd1fd823ca79a3bba888e7f0bae7ed218ca7919a98388ece466
+RUNTIME_GATEWAY_URL=http://127.0.0.1:8084
+SANDBOX_ID=sandbox-m1
+SANDBOX_PORT=8085
+SYSTEMD_EXEC_PID=1496042
+TZDIR=/nix/store/h15ranlgwagilr6ajd7ich6d896kf9zd-tzdata-2026a/share/zoneinfo
+USER=root
+
+Analysis:
+---------
+PRESENT (allowed):
+- RUNTIME_GATEWAY_TOKEN: Sandbox identity token for auth to gateway
+- RUNTIME_GATEWAY_URL: Points to host gateway (http://127.0.0.1:8084)
+- SANDBOX_ID, SANDBOX_PORT: Sandbox identity config
+
+ABSENT (verified - VAL-VM-011 compliance):
+- ZAI_API_KEY: NOT present
+- FIREWORKS_API_KEY: NOT present
+- FIREWORKS_BASE_URL: NOT present
+- Any provider API credentials
+
+Note: The host-side sandbox service does not have provider credentials in its
+environment. Provider credentials are loaded by the gateway service only (which
+acts as the proxy between sandbox and providers).
+
+Conclusion: Even the host-side sandbox (which the guest sandbox is based on)
+does not have provider credentials. The gateway token is the ONLY secret present,
+and this is the same token that would be passed to the guest via /mnt/persistent/gateway-token.

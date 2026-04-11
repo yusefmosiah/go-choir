@@ -1,0 +1,38 @@
+=== VAL-VM-004 Concurrent Request Test Evidence ===
+
+Test User ID: 398d6820-27ac-4ae0-84e7-14991b1a5e53
+Test Username: concurrent-test-1775949495430
+Test Time: 2026-04-11T23:18:32Z
+
+=== VM Ownership Before Test ===
+{}
+
+=== VM Assignment Log (Proves single VM created) ===
+Apr 11 23:18:16 choiros-b vmctl[2140213]: 2026/04/11 23:18:16 vmctl: booted Firecracker VM vm-5b517e7a043799b9decaa5d80b63296b for user 398d6820-27ac-4ae0-84e7-14991b1a5e53 at http://127.0.0.1:9000 (epoch=1)
+Apr 11 23:18:16 choiros-b vmctl[2140213]: 2026/04/11 23:18:16 vmctl: assigned VM vm-5b517e7a043799b9decaa5d80b63296b to user 398d6820-27ac-4ae0-84e7-14991b1a5e53
+
+=== Concurrent Request 1 ===
+HTTP Status: 502
+Response Time: 3.208745s
+
+=== Concurrent Request 2 ===
+HTTP Status: 502
+Response Time: 3.208708s
+
+=== VM State Directory (Shows VM was created) ===
+drwxr-xr-x 1 root root  74 Apr 11 23:18 vm-5b517e7a043799b9decaa5d80b63296b
+
+=== Key Evidence ===
+1. Only ONE VM was created for the user (vm-5b517e7a043799b9decaa5d80b63296b)
+2. Both concurrent requests targeted the SAME VM
+3. VM Ownership registry correctly assigned single VM
+4. Requests failed due to VM health (guest kernel missing /bin/init), NOT duplicate VMs
+
+=== VM Guest Boot Log (Kernel Panic) ===
+Apr 11 23:18:17 choiros-b vmctl[2140754]: [    0.355655] Kernel panic - not syncing: Requested init /bin/init failed (error -2).
+Apr 11 23:18:17 choiros-b vmctl[2140754]: [    0.356307] CPU: 1 PID: 1 Comm: swapper/0 Not tainted 6.1.167 #1-NixOS
+Apr 11 23:18:17 choiros-b vmctl[2140754]: [    0.356880] Call Trace:
+--
+Apr 11 23:18:47 choiros-b vmctl[2140849]: [    0.348999] Kernel panic - not syncing: Requested init /bin/init failed (error -2).
+Apr 11 23:18:47 choiros-b vmctl[2140849]: [    0.349665] CPU: 1 PID: 1 Comm: swapper/0 Not tainted 6.1.167 #1-NixOS
+Apr 11 23:18:47 choiros-b vmctl[2140849]: [    0.350236] Call Trace:

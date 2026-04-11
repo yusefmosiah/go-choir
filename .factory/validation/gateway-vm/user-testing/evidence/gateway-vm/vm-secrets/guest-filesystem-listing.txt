@@ -1,0 +1,51 @@
+=== Guest Filesystem Contents Inspection ===
+
+Guest rootfs mounted at /tmp/guest-inspect for inspection:
+-----------------------------------------------------------
+$ ssh node-b "mount -o loop,ro /var/lib/go-choir/guest/rootfs.ext4 /tmp/guest-inspect"
+[Mount successful]
+
+Root directory listing:
+-----------------------
+total 72
+drwxr-xr-x 13 root root  4096 Jan  1  1980 .
+drwxrwxrwt  1 root root  1536 Apr 11 23:16 ..
+drwxr-xr-x  2 root root  4096 Jan  1  1980 bin
+drwxr-xr-x  2 root root  4096 Jan  1  1980 dev
+drwxr-xr-x  2 root root  4096 Jan  1  1980 etc
+drwx------  2 root root 16384 Jan  1  1980 lost+found
+drwxr-xr-x  3 root root  4096 Jan  1  1980 mnt
+drwxr-xr-x  2 root root  4096 Jan  1  1980 proc
+drwxr-xr-x  2 root root  4096 Jan  1  1980 run
+drwxr-xr-x  2 root root  4096 Jan  1  1980 sbin
+drwxr-xr-x  2 root root  4096 Jan  1  1980 sys
+drwxr-xr-x  2 root root  4096 Jan  1  1980 tmp
+drwxr-xr-x  3 root root  4096 Jan  1  1980 usr
+
+/bin directory (executables only):
+----------------------------------
+total 20544
+-r-xr-xr-x  1 root root  1677816 Jan  1  1980 cat
+-r-xr-xr-x  1 root root  1677816 Jan  1  1980 cut
+-r-xr-xr-x  1 root root  1677816 Jan  1  1980 echo
+-r-xr-xr-x  1 root root   204720 Jan  1  1980 grep
+-r-xr-xr-x  1 root root   806816 Jan  1  1980 ip
+-r-xr-xr-x  1 root root  1677816 Jan  1  1980 mkdir
+-r-xr-xr-x  1 root root 12075992 Jan  1  1980 sandbox
+-r-xr-xr-x  1 root root  1217736 Jan  1  1980 sh
+
+/etc directory (config only):
+-----------------------------
+total 12
+-r--r--r--  1 root root   19 Jan  1  1980 resolv.conf (nameserver 8.8.8.8)
+
+Secret Pattern Search Results:
+------------------------------
+$ grep -r 'ZAI_API_KEY\|FIREWORKS_API_KEY' /tmp/guest-inspect/ 2>&1
+No API key patterns found in guest filesystem
+
+Conclusion: Guest filesystem contains ONLY:
+- sandbox binary (the runtime)
+- Essential utilities (sh, ip, cat, echo, grep, cut, mkdir, mount)
+- resolv.conf for DNS
+- No credential files, no API keys, no provider secrets

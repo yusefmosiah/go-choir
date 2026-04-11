@@ -1,0 +1,52 @@
+=== Firecracker Configuration - Boot Args Verification ===
+
+VM: vm-37e40a561d218dcca62e5854c4d2ae63
+Location: /var/lib/go-choir/vm-state/vm-37e40a561d218dcca62e5854c4d2ae63/fc-config.json
+
+Firecracker Config (formatted):
+{
+  "boot-source": {
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/bin/init guest_port=8085 persistent=/mnt/persistent vm_id=vm-37e40a561d218dcca62e5854c4d2ae63 epoch=1 ip=172.1.0.2::172.1.0.1:255.255.255.252::eth0:off",
+    "kernel_image_path": "/var/lib/go-choir/guest/vmlinux"
+  },
+  "drives": [
+    {
+      "drive_id": "rootfs",
+      "is_read_only": false,
+      "is_root_device": true,
+      "path_on_host": "/var/lib/go-choir/vm-state/vm-37e40a561d218dcca62e5854c4d2ae63/rootfs.ext4"
+    }
+  ],
+  "machine-config": {
+    "mem_size_mib": 512,
+    "vcpu_count": 2
+  },
+  "network-interfaces": [
+    {
+      "guest_mac": "AA:FC:00:00:00:28",
+      "host_dev_name": "vm-vm-37e40-tap",
+      "iface_id": "eth0"
+    }
+  ]
+}
+
+Boot Arguments Analysis:
+------------------------
+Included (expected):
+- console=ttyS0 reboot=k panic=1 pci=off (Firecracker console/config)
+- root=/dev/vda rw init=/bin/init (root device, init script)
+- guest_port=8085 (sandbox listening port)
+- persistent=/mnt/persistent (persistent data mount)
+- vm_id=vm-37e40a561d218dcca62e5854c4d2ae63 (VM identity)
+- epoch=1 (boot epoch for crash detection)
+- ip=172.1.0.2::172.1.0.1:255.255.255.252::eth0:off (network config)
+
+ABSENT (verified - VAL-VM-011 compliance):
+- ZAI_API_KEY
+- FIREWORKS_API_KEY
+- Any provider credentials
+- Any API secrets
+
+Conclusion: Boot arguments contain ONLY the minimum bootstrap material.
+No provider credentials are passed to the guest via kernel cmdline.
+The RUNTIME_GATEWAY_URL is constructed by guest init script from the ip= parameter.
