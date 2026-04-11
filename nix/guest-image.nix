@@ -172,7 +172,7 @@ let
         exec switch_root /root /bin/init
       '';
     in [
-      { object = initScript; symlink = "/init"; }
+      { source = initScript; symlink = "/init"; }
     ];
   };
 
