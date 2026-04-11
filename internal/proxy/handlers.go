@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/websocket"
 )
 
 // errorResponse is a generic JSON error envelope.
@@ -21,19 +23,23 @@ type errorResponse struct {
 
 // AuthResult holds the result of access JWT validation.
 type AuthResult struct {
-	UserID  string
-	Valid   bool
+	UserID string
+	Valid  bool
 }
 
-// Handler provides HTTP handlers for the proxy routes.
+// Handler provides HTTP and WebSocket handlers for the proxy routes.
 type Handler struct {
-	cfg      *Config
-	pubKey   ed25519.PublicKey
+	cfg          *Config
+	pubKey       ed25519.PublicKey
 	reverseProxy *httputil.ReverseProxy
+	upgrader     websocket.Upgrader
+	dialer       *websocket.Dialer
+	sandboxURL   *url.URL // parsed sandbox URL for WS dial derivation
 }
 
 // NewHandler creates a proxy Handler with the given config and auth public key.
-// It initializes the reverse proxy pointing at the configured sandbox URL.
+// It initializes the reverse proxy pointing at the configured sandbox URL and
+// the WebSocket upgrader/dialer for live-channel proxying.
 func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 	sandboxURL, err := url.Parse(cfg.SandboxURL)
 	if err != nil {
@@ -80,9 +86,19 @@ func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 	}
 
 	return &Handler{
-		cfg:         cfg,
-		pubKey:      pubKey,
+		cfg:          cfg,
+		pubKey:       pubKey,
 		reverseProxy: proxy,
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool {
+				// The proxy is the trust boundary for origin validation.
+				// Accept all origins here; the deployed Caddy layer and
+				// same-origin cookie policy enforce origin checks.
+				return true
+			},
+		},
+		dialer:     websocket.DefaultDialer,
+		sandboxURL: sandboxURL,
 	}, nil
 }
 
@@ -203,6 +219,9 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/shell/bootstrap":
 		h.HandleBootstrap(w, r)
 		return
+	case path == "/api/ws":
+		h.HandleWS(w, r)
+		return
 	case strings.HasPrefix(path, "/api/"):
 		// For Milestone 1, other /api/* routes are not yet protected through
 		// specific handlers. Return 404 for unknown API routes.
@@ -214,8 +233,118 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleWS handles GET /api/ws. It validates the access JWT cookie, denies
+// requests with missing or invalid auth without upgrading the connection, and
+// relays WebSocket frames bidirectionally between the client and the hardcoded
+// placeholder sandbox. The proxy injects the authenticated user context via
+// the X-Authenticated-User header on the sandbox dial and strips any
+// client-supplied identity headers.
+func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
+	// Step 1: Validate auth BEFORE upgrading. Missing or invalid auth is
+	// denied with a machine-readable 401 JSON response and no WS upgrade.
+	authResult, err := h.validateAccessJWT(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	// Step 2: Upgrade the client connection to WebSocket.
+	clientConn, err := h.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// Upgrade failed — nothing to relay. The upgrader already wrote
+		// an HTTP error response.
+		return
+	}
+	defer clientConn.Close()
+
+	// Step 3: Dial the sandbox WebSocket endpoint.
+	sandboxWSURL := h.sandboxWSURL()
+	sandboxHeader := http.Header{}
+	// Inject the trusted user context; strip any client-supplied value.
+	// The proxy is the trust boundary — only JWT-verified identity flows.
+	sandboxHeader.Set("X-Authenticated-User", authResult.UserID)
+
+	sandboxConn, _, err := h.dialer.Dial(sandboxWSURL, sandboxHeader)
+	if err != nil {
+		log.Printf("proxy WS: dial sandbox %s: %v", sandboxWSURL, err)
+		// Close the client connection since we can't reach the sandbox.
+		clientConn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "upstream unavailable"))
+		return
+	}
+	defer sandboxConn.Close()
+
+	// Step 4: Relay frames bidirectionally until either side closes or errors.
+	relayDone := make(chan struct{}, 2)
+
+	// Client -> Sandbox relay.
+	go func() {
+		defer func() { relayDone <- struct{}{} }()
+		h.relayFrames(clientConn, sandboxConn, "client->sandbox")
+	}()
+
+	// Sandbox -> Client relay.
+	go func() {
+		defer func() { relayDone <- struct{}{} }()
+		h.relayFrames(sandboxConn, clientConn, "sandbox->client")
+	}()
+
+	// Wait for one direction to finish, then close both connections.
+	<-relayDone
+
+	// Send close messages to both sides to unblock the other relay goroutine.
+	clientConn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	sandboxConn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+
+	// Wait briefly for the second goroutine to finish.
+	<-relayDone
+}
+
+// sandboxWSURL derives the WebSocket URL for the sandbox /api/ws endpoint
+// from the configured HTTP sandbox URL.
+func (h *Handler) sandboxWSURL() string {
+	u := *h.sandboxURL // shallow copy
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+	u.Path = "/api/ws"
+	return u.String()
+}
+
+// relayFrames copies WebSocket messages from src to dst until an error occurs
+// or the connection is closed. It preserves the message type (text or binary).
+func (h *Handler) relayFrames(src, dst *websocket.Conn, direction string) {
+	for {
+		mt, msg, err := src.ReadMessage()
+		if err != nil {
+			// Normal close or expected error — stop relaying silently.
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return
+			}
+			// Abnormal closure or EOF is normal teardown when the other side
+			// drops; no need to log noisily.
+			if errors.Is(err, io.EOF) || websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
+				return
+			}
+			// Unexpected errors are worth logging for debugging.
+			log.Printf("proxy WS relay %s: read error: %v", direction, err)
+			return
+		}
+		if err := dst.WriteMessage(mt, msg); err != nil {
+			// Write error means the other side is gone; stop relaying silently.
+			return
+		}
+	}
+}
+
 // RegisterRoutes registers all proxy routes on the given server.
 func RegisterRoutes(s interface{ HandleFunc(string, http.HandlerFunc) }, h *Handler) {
 	s.HandleFunc("/api/shell/bootstrap", h.HandleBootstrap)
+	s.HandleFunc("/api/ws", h.HandleWS)
 	s.HandleFunc("/api/", h.HandleAPI)
 }
