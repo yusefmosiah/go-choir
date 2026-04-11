@@ -35,7 +35,7 @@ let
       # parameter. Without this, the ip= parameter is silently ignored
       # and the guest has no network connectivity until userspace brings
       # up the interface.
-      IP_PNP = lib.mkForce yes;
+      IP_PNP = pkgs.lib.mkForce yes;
       NETDEVICES = yes;
       VIRTIO_MMIO = yes;
       VIRTIO_MMIO_CMDLINE_DEVICES = yes;
