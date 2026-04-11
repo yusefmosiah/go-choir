@@ -302,3 +302,65 @@ test('signed-out prompt submission is denied', async ({ page }) => {
   const taskRunner = page.locator('[data-task-runner]');
   await expect(taskRunner).not.toBeVisible();
 });
+
+// ---------------------------------------------------------------
+// Test: renewal and retries do not duplicate runtime task submission
+// (VAL-CROSS-111)
+// ---------------------------------------------------------------
+test('renewal and retries do not duplicate runtime task submission', async ({
+  page,
+  authenticator,
+}) => {
+  const username = uniqueUsername();
+  await registerAndLoadShell(page, authenticator, username);
+
+  // Count task submission requests.
+  let submissionCount = 0;
+  const submissionDetails = [];
+  page.on('request', (req) => {
+    const url = new URL(req.url());
+    if (url.pathname === '/api/agent/task' && req.method() === 'POST') {
+      submissionCount++;
+      submissionDetails.push({
+        timestamp: new Date().toISOString(),
+        url: req.url(),
+      });
+    }
+  });
+
+  // Type a prompt and submit.
+  const promptInput = page.locator('[data-prompt-input]');
+  await promptInput.fill('Test for duplicate submission prevention');
+
+  const submitBtn = page.locator('[data-prompt-submit]');
+  await submitBtn.click();
+
+  // Wait for the task status section to appear.
+  const taskStatus = page.locator('[data-task-status]');
+  await expect(taskStatus).toBeVisible({ timeout: 10000 });
+
+  // Record the task ID.
+  const taskIdElement = page.locator('[data-task-id]');
+  const taskId = await taskIdElement.textContent();
+
+  // Simulate a page reload (which could trigger renewal/retry behavior).
+  // The app should reattach to the same task without resubmitting.
+  await page.reload();
+  await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 10000 });
+
+  // Wait for task status to reappear after reload.
+  const taskStatusAfterReload = page.locator('[data-task-status]');
+  await expect(taskStatusAfterReload).toBeVisible({ timeout: 10000 });
+
+  // The task ID should remain the same.
+  const taskIdAfterReload = await page.locator('[data-task-id]').textContent();
+  expect(taskIdAfterReload).toBe(taskId);
+
+  // Wait for the task to complete.
+  const taskState = page.locator('[data-task-state]');
+  await expect(taskState).toContainText(/Completed|Failed/, { timeout: 15000 });
+
+  // Verify only ONE submission was made despite reload.
+  expect(submissionCount).toBe(1);
+  expect(submissionDetails.length).toBe(1);
+});
