@@ -15,6 +15,14 @@ export default defineConfig({
         target: 'http://127.0.0.1:8081',
         changeOrigin: true,
       },
+      // Proxy /api/* to the proxy service so the frontend can call
+      // same-origin protected routes (shell bootstrap, WebSocket)
+      // without hitting direct service ports.
+      '/api': {
+        target: 'http://127.0.0.1:8082',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 });
