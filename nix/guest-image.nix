@@ -31,6 +31,7 @@ let
       IP_PNP = yes;
       NETDEVICES = yes;
       VIRTIO_MMIO = yes;
+      VIRTIO_MMIO_CMDLINE_DEVICES = yes;
       VIRTIO_BLK = yes;
       VIRTIO_NET = yes;
       DEVTMPFS = yes;
