@@ -39,6 +39,7 @@ Use for browser-facing features in Mission 2 Milestone 1:
    - Add or extend a minimal frontend test harness if the feature needs one.
    - Write failing tests for the UI state transitions or browser-facing logic you are about to implement.
    - If the feature is mostly integration wiring, still add the smallest meaningful failing test around routing/state behavior before implementation.
+   - When the feature touches passkey/browser-auth validation, keep the Playwright Chromium virtual-authenticator harness current.
 
 4. **Implement the smallest browser slice that satisfies the feature**
    - Keep signed-out and signed-in states visibly distinct.
@@ -50,12 +51,14 @@ Use for browser-facing features in Mission 2 Milestone 1:
    - Run browser checks for the exact state transitions the feature changes.
    - For guest UI features, verify the app does not spam failing protected requests while signed out.
    - For shell features, verify the UI is not just static chrome; prove bootstrap/live-channel behavior or explicit degraded-state handling.
+   - For passkey/session-lifecycle features, run the Playwright Chromium suite or the focused Playwright test you added.
 
 6. **Run validators before handoff**
    - `go test ./... -count=1 -p 4`
    - `go vet ./...`
    - `go build ./cmd/...`
    - `cd frontend && pnpm build`
+   - `cd frontend && pnpm exec playwright test` when the feature changes passkey automation or browser session-lifecycle flows
    - Run any new frontend test command you introduced
 
 7. **Return a concrete handoff**

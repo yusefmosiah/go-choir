@@ -11,7 +11,8 @@ Milestone 1 browser/auth/proxy validation is primarily Node B–based, not local
 ### Browser UI surface
 
 **Primary tool:** `agent-browser` for smoke/navigation checks  
-**Manual tool:** real browser on `https://draft.choir-ip.com` for passkey/WebAuthn ceremonies
+**Automated passkey tool:** Playwright Chromium with a virtual authenticator against the local stack  
+**Manual tool:** real browser on `https://draft.choir-ip.com` for final deployed edge/TLS/Caddy confirmation
 
 Expected browser-visible routes and states:
 - `/` — guest auth UI when signed out; placeholder desktop shell when signed in
@@ -20,8 +21,8 @@ Expected browser-visible routes and states:
 - `GET /api/ws` — protected live channel
 
 Manual-validation limitation:
-- passkey automation is not currently available in this environment
-- real WebAuthn registration/login must be manually validated on the deployed HTTPS origin
+- automated passkey validation should use the Playwright Chromium harness against `http://localhost:4173`
+- deployed manual browser validation is still useful for final origin/TLS confirmation on `https://draft.choir-ip.com`
 
 ### Direct HTTP/API surface
 
@@ -68,6 +69,10 @@ Do not rely on local direct-port browser flows for acceptance.
 - Max concurrent validators: **5**
 - Rationale: dry run showed lightweight browser automation on this machine (8 CPU / 16 GB RAM) with comfortable headroom for a light Svelte app
 
+### Playwright Chromium passkey automation
+- Max concurrent validators: **1**
+- Rationale: these flows share a mutable local auth DB/service stack, require virtual-authenticator state, and are more brittle than simple browser smoke checks; keep them serialized unless the harness later proves reliable under isolated parallel runs
+
 ### manual browser / real passkey validation
 - Max concurrent validators: **1**
 - Rationale: requires a human-driven real browser flow on the deployed HTTPS origin
@@ -85,6 +90,7 @@ Do not rely on local direct-port browser flows for acceptance.
 ## Flow Validator Guidance: curl
 
 - Public `https://draft.choir-ip.com` HTTP checks are safe to run concurrently.
+- Local Playwright passkey automation should use `http://localhost:4173` and isolated browser contexts/cookie jars.
 - Use separate cookie jars/browser profiles when validating multiple users or replay/rotation scenarios.
 - Node B SSH-based validation touches shared remote system state; keep it single-threaded.
 - Do not access Node A or any host other than `node-b`.
@@ -92,6 +98,7 @@ Do not rely on local direct-port browser flows for acceptance.
 ## Notes
 
 - Browser validations must prove the frontend uses same-origin cookies only; no bearer-token injection, `localhost`, or direct service ports
+- Local Playwright passkey automation is the preferred way to validate WebAuthn registration/login/session-lifecycle assertions without manual ceremonies
 - Validate cookie-backed rehydration on hard reload/new tab and fallback to signed-out state when renewal can no longer succeed
 - Provider/gateway and VM routing are out of scope for this mission’s user testing
 - TLS certificates are auto-provisioned by Caddy/Let's Encrypt

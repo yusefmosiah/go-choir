@@ -4,6 +4,8 @@ commands:
   test: go test ./... -count=1 -p 4
   vet: go vet ./...
   frontend-build: cd frontend && pnpm build
+  playwright-install: cd frontend && pnpm exec playwright install chromium
+  frontend-e2e: cd frontend && pnpm exec playwright test
 
 services:
   auth:
