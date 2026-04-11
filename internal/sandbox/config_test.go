@@ -8,6 +8,7 @@ import (
 func TestLoadConfigDefaults(t *testing.T) {
 	_ = os.Unsetenv("SANDBOX_PORT")
 	_ = os.Unsetenv("SANDBOX_ID")
+	_ = os.Unsetenv("RUNTIME_STORE_PATH")
 
 	cfg := LoadConfig()
 
@@ -16,6 +17,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.SandboxID != "sandbox-dev" {
 		t.Errorf("expected default sandbox_id sandbox-dev, got %q", cfg.SandboxID)
+	}
+	if cfg.StorePath != "" {
+		t.Errorf("expected empty default store_path, got %q", cfg.StorePath)
 	}
 }
 

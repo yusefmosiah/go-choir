@@ -13,7 +13,7 @@ import (
 
 func TestHandleBootstrapReturnsSandboxIdentity(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
 	w := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestHandleBootstrapReturnsSandboxIdentity(t *testing.T) {
 
 func TestHandleBootstrapEchoesUserContext(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
 	req.Header.Set("X-Authenticated-User", "user-alice@example.com")
@@ -57,7 +57,7 @@ func TestHandleBootstrapEchoesUserContext(t *testing.T) {
 
 func TestHandleBootstrapEchoesRequestPath(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap?detail=full", nil)
 	w := httptest.NewRecorder()
@@ -81,7 +81,7 @@ func TestHandleBootstrapEchoesRequestPath(t *testing.T) {
 
 func TestHandleBootstrapRejectsNonGet(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
@@ -98,7 +98,7 @@ func TestHandleBootstrapRejectsNonGet(t *testing.T) {
 
 func TestHandleBootstrapReturnsJSONContentType(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
 	w := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestHandleBootstrapReturnsJSONContentType(t *testing.T) {
 
 func TestHandleErrorReturnsNon2xx(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/error", nil)
 	w := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestHandleErrorReturnsNon2xx(t *testing.T) {
 
 func TestHandleErrorReturnsJSONContentType(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/error", nil)
 	w := httptest.NewRecorder()
@@ -154,7 +154,7 @@ func TestHandleErrorReturnsJSONContentType(t *testing.T) {
 
 func TestHandleWSUpgradesAndEchoes(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-ws-test"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	// Create a test HTTP server that routes to the WS handler.
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +211,7 @@ func TestHandleWSUpgradesAndEchoes(t *testing.T) {
 
 func TestHandleWSEchoesUserContext(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-ws-user"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.HandleWS(w, r)
@@ -257,7 +257,7 @@ func TestHandleWSEchoesUserContext(t *testing.T) {
 
 func TestBootstrapNoUserContextWithoutHeader(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-test-001"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
 	// No X-Authenticated-User header set.
@@ -276,7 +276,7 @@ func TestBootstrapNoUserContextWithoutHeader(t *testing.T) {
 
 func TestHandleWSNoUserContextWithoutHeader(t *testing.T) {
 	cfg := Config{Port: "0", SandboxID: "sandbox-ws-no-user"}
-	h := NewHandler(cfg)
+	h := NewHandler(cfg.SandboxID)
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.HandleWS(w, r)

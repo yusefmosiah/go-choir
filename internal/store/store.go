@@ -400,6 +400,45 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 	return events, nil
 }
 
+// ListEventsByOwnerAfter returns events for the given owner with sequence >
+// afterSeq across all tasks, ordered by timestamp ascending, limited to the
+// given count. This supports SSE catch-up after reconnection where the client
+// needs events newer than a previously seen sequence number.
+func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_id, task_id, owner_id, seq, ts, kind, phase, payload_json
+		   FROM events
+		  WHERE owner_id = ?
+		    AND seq > ?
+		  ORDER BY ts ASC
+		  LIMIT ?`,
+		ownerID,
+		afterSeq,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query events by owner after seq: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []types.EventRecord
+	for rows.Next() {
+		rec, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events by owner after seq: %w", err)
+	}
+	return events, nil
+}
+
 // scanTask scans a task record from a single row.
 func scanTask(row interface{ Scan(...any) error }) (types.TaskRecord, error) {
 	var rec types.TaskRecord

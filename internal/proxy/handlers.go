@@ -73,6 +73,12 @@ func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 
 	proxy := httputil.NewSingleHostReverseProxy(sandboxURL)
 
+	// Flush immediately for SSE streaming responses (/api/events) and
+	// other streaming endpoints. A value of -1 means flush after each
+	// write to the client, which ensures SSE events arrive incrementally
+	// rather than being buffered (VAL-RUNTIME-005).
+	proxy.FlushInterval = -1
+
 	// Customize the director to preserve the original request path and query
 	// without rewriting. The default NewSingleHostReverseProxy director
 	// replaces the path, but we want the sandbox to receive the same public
@@ -254,6 +260,14 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case path == "/api/ws":
 		h.HandleWS(w, r)
+		return
+	case path == "/api/agent/task" || path == "/api/agent/status" || path == "/api/events":
+		// Runtime API routes: auth-gated at the proxy level and forwarded
+		// to the sandbox with the authenticated user context injected.
+		// The sandbox runtime handlers also verify X-Authenticated-User
+		// for defense-in-depth caller scoping (VAL-RUNTIME-002,
+		// VAL-RUNTIME-006).
+		h.HandleProtectedAPI(w, r)
 		return
 	case strings.HasPrefix(path, "/api/"):
 		// All /api/* routes require auth by default. Check auth before

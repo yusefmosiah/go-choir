@@ -731,3 +731,91 @@ func fmtEventID(i int) string {
 func fmtID(prefix string, i int) string {
 	return prefix + "-" + string(rune('0'+i))
 }
+
+func TestListEventsByOwnerAfter(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Create events for alice with increasing sequence numbers.
+	for i := 0; i < 5; i++ {
+		rec := &types.EventRecord{
+			EventID:   fmtEventID(i),
+			TaskID:    "task-001",
+			OwnerID:   "user-alice",
+			Timestamp: now.Add(time.Duration(i) * time.Second),
+			Kind:      types.EventTaskProgress,
+			Payload:   json.RawMessage(`{"step":` + string(rune('0'+byte(i))) + `}`),
+		}
+		if err := s.AppendEvent(ctx, rec); err != nil {
+			t.Fatalf("append event %d: %v", i, err)
+		}
+	}
+
+	// Get events after seq 2 (should return seq 3, 4, 5).
+	events, err := s.ListEventsByOwnerAfter(ctx, "user-alice", 2, 10)
+	if err != nil {
+		t.Fatalf("list events by owner after seq: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("events after seq 2: got %d, want 3", len(events))
+	}
+
+	// Events should be ordered by timestamp ascending.
+	for i, ev := range events {
+		expectedSeq := int64(i + 3)
+		if ev.Seq != expectedSeq {
+			t.Errorf("event %d seq: got %d, want %d", i, ev.Seq, expectedSeq)
+		}
+		if ev.OwnerID != "user-alice" {
+			t.Errorf("event %d owner_id: got %q, want user-alice", i, ev.OwnerID)
+		}
+	}
+}
+
+func TestListEventsByOwnerAfterFiltersByOwner(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Events for alice and bob.
+	for i, owner := range []string{"alice", "bob", "alice"} {
+		rec := &types.EventRecord{
+			EventID:   fmtEventID(i),
+			TaskID:    "task-" + owner,
+			OwnerID:   owner,
+			Timestamp: now.Add(time.Duration(i) * time.Second),
+			Kind:      types.EventTaskSubmitted,
+			Payload:   json.RawMessage(`{}`),
+		}
+		if err := s.AppendEvent(ctx, rec); err != nil {
+			t.Fatalf("append event %d: %v", i, err)
+		}
+	}
+
+	// Alice's events after seq 0.
+	aliceEvents, err := s.ListEventsByOwnerAfter(ctx, "alice", 0, 10)
+	if err != nil {
+		t.Fatalf("list alice events after seq: %v", err)
+	}
+	if len(aliceEvents) != 2 {
+		t.Errorf("alice events: got %d, want 2", len(aliceEvents))
+	}
+	for _, ev := range aliceEvents {
+		if ev.OwnerID != "alice" {
+			t.Errorf("owner_id: got %q, want alice", ev.OwnerID)
+		}
+	}
+
+	// Bob's events after seq 0.
+	bobEvents, err := s.ListEventsByOwnerAfter(ctx, "bob", 0, 10)
+	if err != nil {
+		t.Fatalf("list bob events after seq: %v", err)
+	}
+	if len(bobEvents) != 1 {
+		t.Errorf("bob events: got %d, want 1", len(bobEvents))
+	}
+}

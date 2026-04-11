@@ -1,0 +1,765 @@
+package runtime
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yusefmosiah/go-choir/internal/events"
+	"github.com/yusefmosiah/go-choir/internal/store"
+	"github.com/yusefmosiah/go-choir/internal/types"
+)
+
+// testAPISetup creates a fresh Runtime and APIHandler for HTTP handler tests.
+func testAPISetup(t *testing.T) (*Runtime, *APIHandler) {
+	t.Helper()
+
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+	provider := NewStubProvider(50 * time.Millisecond)
+	cfg := Config{
+		SandboxID:           "sandbox-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     50 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, provider)
+	handler := NewAPIHandler(rt)
+
+	// Stop the runtime before closing the store to avoid "database is
+	// closed" log noise from in-flight goroutines.
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	return rt, handler
+}
+
+// authenticatedRequest creates an HTTP request with the X-Authenticated-User
+// header set, simulating the proxy's user-context injection.
+func authenticatedRequest(method, path, body, user string) *http.Request {
+	var req *http.Request
+	if body != "" {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	if user != "" {
+		req.Header.Set("X-Authenticated-User", user)
+	}
+	return req
+}
+
+// --- Task Submission Tests ---
+
+func TestHandleTaskSubmissionReturnsStableHandle(t *testing.T) {
+	// VAL-RUNTIME-003: accepted task submission returns a stable handle.
+	_, handler := testAPISetup(t)
+
+	body := `{"prompt":"explain closures in Go"}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	var resp taskSubmitResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.TaskID == "" {
+		t.Error("task_id should not be empty")
+	}
+	if resp.State != types.TaskPending {
+		t.Errorf("state: got %q, want %q", resp.State, types.TaskPending)
+	}
+	if resp.OwnerID != "user-alice" {
+		t.Errorf("owner_id: got %q, want user-alice", resp.OwnerID)
+	}
+}
+
+func TestHandleTaskSubmissionAuthGated(t *testing.T) {
+	// VAL-RUNTIME-002: task submission is auth-gated.
+	_, handler := testAPISetup(t)
+
+	// Request without auth header.
+	body := `{"prompt":"test prompt"}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleTaskSubmissionMethodNotAllowed(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/task", "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleTaskSubmissionEmptyPrompt(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	body := `{"prompt":""}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleTaskSubmissionInvalidBody(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", "not json", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// --- Task Status Tests ---
+
+func TestHandleTaskStatusReturnsCorrelatedHandle(t *testing.T) {
+	// VAL-RUNTIME-004: status is correlated to the submitted handle.
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "test prompt", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.TaskID != rec.TaskID {
+		t.Errorf("task_id: got %q, want %q", resp.TaskID, rec.TaskID)
+	}
+	if resp.State != types.TaskCompleted {
+		t.Errorf("state: got %q, want %q", resp.State, types.TaskCompleted)
+	}
+	if resp.Result == "" {
+		t.Error("result should not be empty for completed task")
+	}
+}
+
+func TestHandleTaskStatusAuthGated(t *testing.T) {
+	// VAL-RUNTIME-006: status is auth-gated.
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?task_id=test", "", "")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleTaskStatusCallerScoped(t *testing.T) {
+	// VAL-RUNTIME-006: status is caller-scoped (user cannot see other users' tasks).
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "alice task", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Eve tries to see Alice's task.
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-eve")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d (caller-scoped denial)", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleTaskStatusMissingTaskID(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status", "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleTaskStatusNotFound(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?task_id=nonexistent", "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleTaskStatusFailedOutcome(t *testing.T) {
+	// VAL-RUNTIME-004: status exposes non-happy-path outcomes.
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+	provider := &StubProvider{
+		Delay:   10 * time.Millisecond,
+		FailErr: errors.New("provider timeout"),
+	}
+
+	cfg := Config{
+		SandboxID:           "sandbox-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     10 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, provider)
+	handler := NewAPIHandler(rt)
+
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	rec, err := rt.SubmitTask(context.Background(), "failing prompt", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait for the task to fail.
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.State != types.TaskFailed {
+		t.Errorf("state: got %q, want %q", resp.State, types.TaskFailed)
+	}
+	if resp.Error == "" {
+		t.Error("error should not be empty for failed task")
+	}
+}
+
+// --- Events Tests ---
+
+func TestHandleEventsAuthGated(t *testing.T) {
+	// VAL-RUNTIME-006: events are auth-gated.
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/events", "", "")
+	w := httptest.NewRecorder()
+
+	handler.HandleEvents(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleEventsReturnsSSEStream(t *testing.T) {
+	// VAL-RUNTIME-005: events stream is long-lived and incremental.
+	rt, handler := testAPISetup(t)
+
+	// Start the SSE connection in a goroutine.
+	req := authenticatedRequest(http.MethodGet, "/api/events", "", "user-alice")
+	req = req.WithContext(context.Background())
+	w := httptest.NewRecorder()
+
+	// SSE is a long-lived connection; we need to run it in a goroutine
+	// and signal when we're done reading.
+	done := make(chan struct{})
+	go func() {
+		handler.HandleEvents(w, req)
+		close(done)
+	}()
+
+	// Submit a task to generate events.
+	_, err := rt.SubmitTask(context.Background(), "test prompt for events", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait a bit for events to be emitted.
+	time.Sleep(100 * time.Millisecond)
+
+	// Read the response body so far.
+	body := w.Body.String()
+
+	// The response should have SSE headers.
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("content-type: got %q, want text/event-stream", ct)
+	}
+
+	// The body should contain at least one SSE data line.
+	if !strings.Contains(body, "data: ") {
+		t.Errorf("expected SSE data line in body, got: %s", body)
+	}
+
+	// Verify the SSE data contains event records.
+	lines := strings.Split(body, "\n")
+	var foundSubmitted bool
+	for _, line := range lines {
+		if strings.HasPrefix(line, "data: ") {
+			var ev types.EventRecord
+			data := strings.TrimPrefix(line, "data: ")
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				continue // skip malformed lines
+			}
+			if ev.Kind == types.EventTaskSubmitted && ev.OwnerID == "user-alice" {
+				foundSubmitted = true
+			}
+		}
+	}
+	if !foundSubmitted {
+		t.Error("expected task.submitted event in SSE stream")
+	}
+}
+
+func TestHandleEventsCallerScoped(t *testing.T) {
+	// VAL-RUNTIME-006: events are caller-scoped.
+	rt, handler := testAPISetup(t)
+
+	// Submit a task for alice.
+	_, err := rt.SubmitTask(context.Background(), "alice task", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Connect as bob — should not see alice's events.
+	req := authenticatedRequest(http.MethodGet, "/api/events", "", "user-bob")
+	req = req.WithContext(context.Background())
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler.HandleEvents(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	body := w.Body.String()
+
+	// Bob should not see any events for alice's task.
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "data: ") {
+			var ev types.EventRecord
+			data := strings.TrimPrefix(line, "data: ")
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				continue
+			}
+			if ev.OwnerID == "user-alice" {
+				t.Errorf("bob should not see alice's events: %+v", ev)
+			}
+		}
+	}
+}
+
+func TestHandleEventsIncremental(t *testing.T) {
+	// VAL-RUNTIME-005: events arrive incrementally, not buffered.
+	rt, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/events", "", "user-alice")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	go func() {
+		handler.HandleEvents(w, req)
+	}()
+
+	// Submit a task — should generate events incrementally.
+	_, err := rt.SubmitTask(context.Background(), "incremental test", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	body := w.Body.String()
+
+	// Parse SSE events and check that multiple different kinds arrived.
+	kinds := make(map[types.EventKind]bool)
+	scanner := bufio.NewScanner(strings.NewReader(body))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			var ev types.EventRecord
+			data := strings.TrimPrefix(line, "data: ")
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				continue
+			}
+			kinds[ev.Kind] = true
+		}
+	}
+
+	// Should see at least submitted + started (incremental, not buffered).
+	if !kinds[types.EventTaskSubmitted] {
+		t.Error("expected task.submitted event")
+	}
+	if !kinds[types.EventTaskStarted] {
+		t.Error("expected task.started event (arrived incrementally)")
+	}
+}
+
+// --- Health Tests ---
+
+func TestHandleHealthReady(t *testing.T) {
+	// VAL-RUNTIME-001: health reflects runtime readiness.
+	_, handler := testAPISetup(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.Status != "ready" {
+		t.Errorf("status: got %q, want ready", resp.Status)
+	}
+	if resp.RuntimeHealth != types.HealthReady {
+		t.Errorf("runtime_health: got %q, want ready", resp.RuntimeHealth)
+	}
+	if resp.SandboxID != "sandbox-test" {
+		t.Errorf("sandbox_id: got %q, want sandbox-test", resp.SandboxID)
+	}
+}
+
+func TestHandleHealthDegraded(t *testing.T) {
+	// VAL-RUNTIME-001: degraded state is surfaced.
+	rt, handler := testAPISetup(t)
+
+	rt.SetHealth(types.HealthDegraded)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d (degraded is still serving)", w.Code, http.StatusOK)
+	}
+
+	var resp runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.Status != "degraded" {
+		t.Errorf("status: got %q, want degraded", resp.Status)
+	}
+	if resp.RuntimeHealth != types.HealthDegraded {
+		t.Errorf("runtime_health: got %q, want degraded", resp.RuntimeHealth)
+	}
+}
+
+func TestHandleHealthFailed(t *testing.T) {
+	// VAL-RUNTIME-001: failed state is surfaced with 503.
+	rt, handler := testAPISetup(t)
+
+	rt.SetHealth(types.HealthFailed)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleHealth(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+
+	var resp runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.RuntimeHealth != types.HealthFailed {
+		t.Errorf("runtime_health: got %q, want failed", resp.RuntimeHealth)
+	}
+}
+
+func TestHandleHealthReflectsRunningTasks(t *testing.T) {
+	_, handler := testAPISetup(t)
+	rt := handler.rt
+
+	// No tasks running initially.
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	var resp runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.RunningTasks != 0 {
+		t.Errorf("running_tasks: got %d, want 0", resp.RunningTasks)
+	}
+
+	// Submit a task.
+	_, err := rt.SubmitTask(context.Background(), "running task", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	var resp2 runtimeHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp2.RunningTasks < 1 {
+		t.Errorf("running_tasks: got %d, want >= 1", resp2.RunningTasks)
+	}
+}
+
+// --- Supervisor Recovery Visibility Tests ---
+
+func TestSupervisorRecoveryVisible(t *testing.T) {
+	// VAL-RUNTIME-009: supervisor recovery is externally visible.
+	rt, _ := testAPISetup(t)
+
+	// Subscribe to events.
+	ch := rt.EventBus().Subscribe()
+	defer rt.EventBus().Unsubscribe(ch)
+
+	// Manually degrade and then recover the runtime.
+	rt.SetHealth(types.HealthDegraded)
+
+	// Should see degraded event.
+	select {
+	case ev := <-ch:
+		if ev.Record.Kind != types.EventRuntimeDegraded {
+			t.Errorf("event kind: got %q, want %q", ev.Record.Kind, types.EventRuntimeDegraded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for degraded event")
+	}
+
+	// Recover to ready.
+	rt.SetHealth(types.HealthReady)
+
+	// Should see health event.
+	select {
+	case ev := <-ch:
+		if ev.Record.Kind != types.EventRuntimeHealth {
+			t.Errorf("event kind: got %q, want %q", ev.Record.Kind, types.EventRuntimeHealth)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for health event")
+	}
+}
+
+func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
+	// VAL-RUNTIME-008: provider failures surface without crashing the runtime.
+	// Submit a failing task, verify the runtime still accepts new tasks.
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+	failProvider := &StubProvider{
+		Delay:   10 * time.Millisecond,
+		FailErr: errors.New("provider connection refused"),
+	}
+
+	cfg := Config{
+		SandboxID:           "sandbox-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     10 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, failProvider)
+	handler := NewAPIHandler(rt)
+
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	// Submit the failing task.
+	body := `{"prompt":"will fail"}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	w := httptest.NewRecorder()
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	// Wait for failure.
+	time.Sleep(200 * time.Millisecond)
+
+	// Check the failed task status.
+	var submitResp taskSubmitResponse
+	if err := json.NewDecoder(w.Body).Decode(&submitResp); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+
+	statusReq := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/status?task_id=%s", submitResp.TaskID), "", "user-alice")
+	statusW := httptest.NewRecorder()
+	handler.HandleTaskStatus(statusW, statusReq)
+
+	if statusW.Code != http.StatusOK {
+		t.Fatalf("status code: got %d, want %d", statusW.Code, http.StatusOK)
+	}
+
+	var statusResp taskStatusResponse
+	if err := json.NewDecoder(statusW.Body).Decode(&statusResp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+
+	if statusResp.State != types.TaskFailed {
+		t.Errorf("state: got %q, want %q", statusResp.State, types.TaskFailed)
+	}
+
+	// The runtime should still accept new tasks.
+	newBody := `{"prompt":"after failure"}`
+	newReq := authenticatedRequest(http.MethodPost, "/api/agent/task", newBody, "user-alice")
+	newW := httptest.NewRecorder()
+
+	// Replace the provider with a working one for the new task.
+	rt.provider = NewStubProvider(50 * time.Millisecond)
+
+	handler.HandleTaskSubmission(newW, newReq)
+
+	if newW.Code != http.StatusAccepted {
+		t.Errorf("status after failure: got %d, want %d", newW.Code, http.StatusAccepted)
+	}
+}
+
+// --- AuthenticateUser Tests ---
+
+func TestAuthenticateUserMissing(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/status", nil)
+	_, err := authenticateUser(req)
+	if err == nil {
+		t.Error("expected error for missing auth header")
+	}
+}
+
+func TestAuthenticateUserPresent(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/status", nil)
+	req.Header.Set("X-Authenticated-User", "user-alice")
+
+	user, err := authenticateUser(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user != "user-alice" {
+		t.Errorf("user: got %q, want user-alice", user)
+	}
+}

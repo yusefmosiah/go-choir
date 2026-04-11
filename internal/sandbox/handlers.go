@@ -42,10 +42,10 @@ type Handler struct {
 	upgrader websocket.Upgrader
 }
 
-// NewHandler creates a sandbox handler with the given configuration.
-func NewHandler(cfg Config) *Handler {
+// NewHandler creates a sandbox handler with the given sandbox ID.
+func NewHandler(sandboxID string) *Handler {
 	return &Handler{
-		cfg: cfg,
+		cfg: Config{SandboxID: sandboxID},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				// Allow all origins for the placeholder sandbox; the proxy
