@@ -21,7 +21,6 @@ let
     structuredExtraConfig = with pkgs.lib.kernel; {
       EXT4_FS = yes;
       JBD2 = yes;
-      MB_CACHE = yes;
       CRC16 = yes;
       NET = yes;
       INET = yes;
