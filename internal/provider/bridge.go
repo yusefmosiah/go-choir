@@ -141,9 +141,10 @@ func (b *BridgeProvider) CallWithTools(ctx context.Context, req runtime.ToolLoop
 
 	// Convert the tool-loop request into an LLMRequest.
 	llmReq := LLMRequest{
-		Model:    "", // model is set by the provider internally
-		System:   req.System,
-		Messages: convertRawMessages(req.Messages),
+		Model:     "", // model is set by the provider internally
+		System:    req.System,
+		Messages:  convertRawMessages(req.Messages),
+		Tools:     convertToolLoopDefs(req.ToolDefinitions),
 		MaxTokens: req.MaxTokens,
 		Stream:    false,
 	}
@@ -198,25 +199,31 @@ func convertStopReason(reason string) string {
 	}
 }
 
-// extractToolCalls extracts tool calls from an LLM response. Currently,
-// the LLMResponse type doesn't carry tool call data because the initial
-// provider bridge was designed for single-turn completion. When the
-// provider package is enhanced to parse tool_use content blocks from
-// Anthropic/Bedrock responses, this function will extract them properly.
-//
-// For now, returns an empty slice, which means the tool-calling loop
-// will fall through to the toolLoopAdapter path for providers that
-// don't yet return structured tool call data.
+// extractToolCalls extracts tool calls from an LLM response that has
+// structured tool_use content blocks already parsed into ToolCalls.
+// This is the bridge between the provider package's ContentToolCall
+// representation and the runtime's types.ToolCall consumed by the
+// tool-calling loop.
 func extractToolCalls(resp *LLMResponse) []types.ToolCall {
-	// TODO: When the provider package's LLMResponse is enhanced to
-	// carry tool call data (from Anthropic content blocks with type
-	// "tool_use"), extract and return them here. This is a placeholder
-	// that returns empty until that enhancement lands.
-	return nil
+	if len(resp.ToolCalls) == 0 {
+		return nil
+	}
+	calls := make([]types.ToolCall, 0, len(resp.ToolCalls))
+	for _, tc := range resp.ToolCalls {
+		calls = append(calls, types.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Name,
+			Arguments: canonicalJSON(tc.Arguments),
+		})
+	}
+	return calls
 }
 
 // convertRawMessages converts raw JSON messages from the tool-loop request
-// into the provider package's Message format.
+// into the provider package's Message format. This preserves all structured
+// content block fields (id, name, input for tool_use; tool_use_id, content,
+// is_error for tool_result) so that the conversation history round-trips
+// correctly through the Anthropic Messages API.
 func convertRawMessages(raw []json.RawMessage) []Message {
 	out := make([]Message, 0, len(raw))
 	for _, r := range raw {
@@ -256,23 +263,27 @@ func convertRawMessages(raw []json.RawMessage) []Message {
 		for _, block := range blocks {
 			switch block.Type {
 			case "text":
-				content = append(content, Block{Type: "text", Text: block.Text})
+				content = append(content, Block{
+					Type: "text",
+					Text: block.Text,
+				})
 			case "tool_result":
 				resultText := block.Content
 				if resultText == "" {
-					// Tool result content may be in a nested content field.
 					resultText = block.Text
 				}
 				content = append(content, Block{
-					Type: "tool_result",
-					Text: resultText,
+					Type:      "tool_result",
+					Text:      resultText,
+					ToolUseID: block.ToolUseID,
+					IsError:   block.IsError,
 				})
 			case "tool_use":
-				// Tool use blocks are passed through for the provider to see.
-				inputText := string(block.Input)
 				content = append(content, Block{
-					Type: "tool_use",
-					Text: inputText,
+					Type:  "tool_use",
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: canonicalJSON(block.Input),
 				})
 			}
 		}
@@ -283,6 +294,25 @@ func convertRawMessages(raw []json.RawMessage) []Message {
 				Content: content,
 			})
 		}
+	}
+	return out
+}
+
+// convertToolLoopDefs converts runtime.ToolDefinition values to provider
+// ToolDef values for inclusion in the LLM request. This bridges the gap
+// between the runtime's tool schema format and the Anthropic Messages
+// API tool definition format.
+func convertToolLoopDefs(defs []runtime.ToolDefinition) []ToolDef {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]ToolDef, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, ToolDef{
+			Name:        def.Name,
+			Description: def.Description,
+			InputSchema: def.Parameters,
+		})
 	}
 	return out
 }

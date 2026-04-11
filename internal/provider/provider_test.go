@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yusefmosiah/go-choir/internal/runtime"
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
@@ -706,3 +707,547 @@ func TestErrorSanitization(t *testing.T) {
 		t.Errorf("error should not contain raw response body: %v", err)
 	}
 }
+
+// --- Tool Use Content Block Tests ---
+
+func TestBedrockProviderCallWithToolUse(t *testing.T) {
+	// When the provider returns a tool_use content block in the response,
+	// the LLMResponse should preserve it as a ToolCall.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the request includes tools if present.
+		var body map[string]json.RawMessage
+		json.NewDecoder(r.Body).Decode(&body)
+		// Not strictly required for this test, but verify we can parse it.
+
+		resp := anthropicResponse{
+			ID: "msg_tool_test",
+			Content: []anthropicResponseBlock{
+				{Type: "text", Text: "Let me look that up."},
+				{Type: "tool_use", ID: "toolu_01", Name: "read_file", Input: json.RawMessage(`{"path":"/tmp/test.txt"}`)},
+			},
+			StopReason: "tool_use",
+			Usage:      anthropicUsage{InputTokens: 50, OutputTokens: 30},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:     "us-east-1",
+		modelID:   "us.anthropic.claude-sonnet-4-5-20250514-v1:0",
+		authToken:  "test-bearer-token",
+		httpClient: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+		},
+		anthropicV: "bedrock-2023-05-31",
+	}
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		System:   "You are helpful.",
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Read the test file"}}}},
+		MaxTokens: 4096,
+	})
+	if err != nil {
+		t.Fatalf("bedrock call: %v", err)
+	}
+
+	// Verify text content is preserved.
+	if resp.Text != "Let me look that up." {
+		t.Errorf("text: got %q, want 'Let me look that up.'", resp.Text)
+	}
+
+	// Verify stop reason is tool_use.
+	if resp.StopReason != "tool_use" {
+		t.Errorf("stop_reason: got %q, want tool_use", resp.StopReason)
+	}
+
+	// Verify tool calls are extracted from content blocks.
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool_calls: got %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "toolu_01" {
+		t.Errorf("tool call id: got %q, want toolu_01", resp.ToolCalls[0].ID)
+	}
+	if resp.ToolCalls[0].Name != "read_file" {
+		t.Errorf("tool call name: got %q, want read_file", resp.ToolCalls[0].Name)
+	}
+	if string(resp.ToolCalls[0].Arguments) != `{"path":"/tmp/test.txt"}` {
+		t.Errorf("tool call arguments: got %q, want {\"path\":\"/tmp/test.txt\"}", string(resp.ToolCalls[0].Arguments))
+	}
+}
+
+func TestZAIProviderCallWithToolUse(t *testing.T) {
+	// Same test for Z.AI provider.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := anthropicResponse{
+			ID:    "msg_zai_tool",
+			Model: "glm-4.7",
+			Content: []anthropicResponseBlock{
+				{Type: "tool_use", ID: "toolu_02", Name: "search", Input: json.RawMessage(`{"query":"golang testing"}`)},
+			},
+			StopReason: "tool_use",
+			Usage:      anthropicUsage{InputTokens: 40, OutputTokens: 20},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:   "glm-4.7",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Search for golang testing"}}}},
+		MaxTokens: 4096,
+	})
+	if err != nil {
+		t.Fatalf("zai call: %v", err)
+	}
+
+	if resp.StopReason != "tool_use" {
+		t.Errorf("stop_reason: got %q, want tool_use", resp.StopReason)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool_calls: got %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "toolu_02" {
+		t.Errorf("tool call id: got %q, want toolu_02", resp.ToolCalls[0].ID)
+	}
+	if resp.ToolCalls[0].Name != "search" {
+		t.Errorf("tool call name: got %q, want search", resp.ToolCalls[0].Name)
+	}
+}
+
+func TestBedrockProviderCallWithMultipleToolUse(t *testing.T) {
+	// Provider returns multiple tool_use blocks in one response.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := anthropicResponse{
+			ID: "msg_multi_tool",
+			Content: []anthropicResponseBlock{
+				{Type: "tool_use", ID: "toolu_10", Name: "read_file", Input: json.RawMessage(`{"path":"/a"}`)},
+				{Type: "tool_use", ID: "toolu_11", Name: "read_file", Input: json.RawMessage(`{"path":"/b"}`)},
+				{Type: "tool_use", ID: "toolu_12", Name: "search", Input: json.RawMessage(`{"q":"test"}`)},
+			},
+			StopReason: "tool_use",
+			Usage:      anthropicUsage{InputTokens: 30, OutputTokens: 60},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:     "us-east-1",
+		modelID:   "test-model",
+		authToken:  "test-token",
+		httpClient: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+		},
+		anthropicV: "bedrock-2023-05-31",
+	}
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "read both files"}}}},
+		MaxTokens: 4096,
+	})
+	if err != nil {
+		t.Fatalf("bedrock call: %v", err)
+	}
+
+	if len(resp.ToolCalls) != 3 {
+		t.Fatalf("tool_calls: got %d, want 3", len(resp.ToolCalls))
+	}
+
+	// Verify each tool call is preserved in order.
+	names := []string{"read_file", "read_file", "search"}
+	for i, tc := range resp.ToolCalls {
+		if tc.Name != names[i] {
+			t.Errorf("tool_calls[%d].name: got %q, want %q", i, tc.Name, names[i])
+		}
+	}
+}
+
+// --- extractToolCalls Tests ---
+
+func TestExtractToolCallsFromResponse(t *testing.T) {
+	// extractToolCalls should return tool calls from an LLMResponse that
+	// has ToolCalls populated (from parsed tool_use content blocks).
+	resp := &LLMResponse{
+		ID:         "msg_test",
+		StopReason: "tool_use",
+		ToolCalls: []ContentToolCall{
+			{ID: "toolu_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"/tmp/test"}`)},
+			{ID: "toolu_2", Name: "search", Arguments: json.RawMessage(`{"q":"hello"}`)},
+		},
+	}
+
+	calls := extractToolCalls(resp)
+	if len(calls) != 2 {
+		t.Fatalf("tool calls: got %d, want 2", len(calls))
+	}
+	if calls[0].ID != "toolu_1" {
+		t.Errorf("call[0].id: got %q, want toolu_1", calls[0].ID)
+	}
+	if calls[0].Name != "read_file" {
+		t.Errorf("call[0].name: got %q, want read_file", calls[0].Name)
+	}
+	if string(calls[0].Arguments) != `{"path":"/tmp/test"}` {
+		t.Errorf("call[0].arguments: got %q", string(calls[0].Arguments))
+	}
+	if calls[1].ID != "toolu_2" {
+		t.Errorf("call[1].id: got %q, want toolu_2", calls[1].ID)
+	}
+}
+
+func TestExtractToolCallsEmptyResponse(t *testing.T) {
+	// extractToolCalls should return nil when there are no tool calls.
+	resp := &LLMResponse{
+		ID:         "msg_test",
+		StopReason: "end_turn",
+		Text:       "Hello!",
+		ToolCalls:  nil,
+	}
+
+	calls := extractToolCalls(resp)
+	if calls != nil {
+		t.Errorf("expected nil for response without tool calls, got %d", len(calls))
+	}
+}
+
+// --- Bridge CallWithTools Integration Tests ---
+
+func TestBridgeProviderCallWithToolsReturnsToolCalls(t *testing.T) {
+	// When the inner provider returns a response with tool_use content blocks,
+	// CallWithTools should extract and return the tool calls.
+	mock := &mockLLMProvider{
+		name:   "test-provider",
+		isReal: true,
+		resp: &LLMResponse{
+			ID:         "msg_tool_bridge",
+			Text:       "Let me check that.",
+			StopReason: "tool_use",
+			Usage:      Usage{InputTokens: 50, OutputTokens: 30},
+			ToolCalls: []ContentToolCall{
+				{ID: "toolu_bridge_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"/etc/hosts"}`)},
+			},
+		},
+	}
+
+	bridge := NewBridgeProvider(mock)
+
+	req := runtime.ToolLoopRequest{
+		System:     "You are helpful.",
+		Messages:   []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"Read the hosts file"}]}`)},
+		MaxTokens:  4096,
+	}
+
+	resp, err := bridge.CallWithTools(context.Background(), req)
+	if err != nil {
+		t.Fatalf("call with tools: %v", err)
+	}
+
+	if resp.StopReason != "tool_use" {
+		t.Errorf("stop_reason: got %q, want tool_use", resp.StopReason)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool_calls: got %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "toolu_bridge_1" {
+		t.Errorf("tool call id: got %q, want toolu_bridge_1", resp.ToolCalls[0].ID)
+	}
+	if resp.ToolCalls[0].Name != "read_file" {
+		t.Errorf("tool call name: got %q, want read_file", resp.ToolCalls[0].Name)
+	}
+	if string(resp.ToolCalls[0].Arguments) != `{"path":"/etc/hosts"}` {
+		t.Errorf("tool call arguments: got %q", string(resp.ToolCalls[0].Arguments))
+	}
+}
+
+func TestBridgeProviderCallWithToolsEndTurn(t *testing.T) {
+	// When the inner provider returns end_turn, CallWithTools should
+	// return an end_turn response without tool calls.
+	mock := &mockLLMProvider{
+		name:   "test-provider",
+		isReal: true,
+		resp: &LLMResponse{
+			ID:         "msg_end",
+			Text:       "The answer is 42.",
+			StopReason: "end_turn",
+			Usage:      Usage{InputTokens: 10, OutputTokens: 20},
+			ToolCalls:  nil,
+		},
+	}
+
+	bridge := NewBridgeProvider(mock)
+
+	req := runtime.ToolLoopRequest{
+		System:     "You are helpful.",
+		Messages:   []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"What is the answer?"}]}`)},
+		MaxTokens:  4096,
+	}
+
+	resp, err := bridge.CallWithTools(context.Background(), req)
+	if err != nil {
+		t.Fatalf("call with tools: %v", err)
+	}
+
+	if resp.StopReason != "end_turn" {
+		t.Errorf("stop_reason: got %q, want end_turn", resp.StopReason)
+	}
+	if resp.Text != "The answer is 42." {
+		t.Errorf("text: got %q, want 'The answer is 42.'", resp.Text)
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Errorf("tool_calls: got %d, want 0", len(resp.ToolCalls))
+	}
+}
+
+// --- convertRawMessages Tests ---
+
+func TestConvertRawMessagesToolUseBlock(t *testing.T) {
+	// tool_use content blocks should preserve id, name, and input fields
+	// when converting from raw messages to provider Message format.
+	raw := []json.RawMessage{
+		json.RawMessage(`{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"/tmp/test"}}]}`),
+	}
+
+	msgs := convertRawMessages(raw)
+	if len(msgs) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(msgs))
+	}
+	if msgs[0].Role != "assistant" {
+		t.Errorf("role: got %q, want assistant", msgs[0].Role)
+	}
+	if len(msgs[0].Content) != 1 {
+		t.Fatalf("content blocks: got %d, want 1", len(msgs[0].Content))
+	}
+	block := msgs[0].Content[0]
+	if block.Type != "tool_use" {
+		t.Errorf("block type: got %q, want tool_use", block.Type)
+	}
+	if block.ID != "toolu_1" {
+		t.Errorf("block id: got %q, want toolu_1", block.ID)
+	}
+	if block.Name != "read_file" {
+		t.Errorf("block name: got %q, want read_file", block.Name)
+	}
+	if block.Input == nil || string(block.Input) != `{"path":"/tmp/test"}` {
+		t.Errorf("block input: got %q, want {\"path\":\"/tmp/test\"}", block.Input)
+	}
+}
+
+func TestConvertRawMessagesToolResultBlock(t *testing.T) {
+	// tool_result content blocks should preserve tool_use_id and content fields.
+	raw := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file contents here"}]}`),
+	}
+
+	msgs := convertRawMessages(raw)
+	if len(msgs) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(msgs))
+	}
+	if len(msgs[0].Content) != 1 {
+		t.Fatalf("content blocks: got %d, want 1", len(msgs[0].Content))
+	}
+	block := msgs[0].Content[0]
+	if block.Type != "tool_result" {
+		t.Errorf("block type: got %q, want tool_result", block.Type)
+	}
+	if block.ToolUseID != "toolu_1" {
+		t.Errorf("block tool_use_id: got %q, want toolu_1", block.ToolUseID)
+	}
+	if block.Text != "file contents here" {
+		t.Errorf("block text/content: got %q, want 'file contents here'", block.Text)
+	}
+}
+
+func TestConvertRawMessagesMixedBlocks(t *testing.T) {
+	// A single message may contain text, tool_use, and tool_result blocks.
+	raw := []json.RawMessage{
+		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"I'll help"},{"type":"tool_use","id":"toolu_1","name":"search","input":{"q":"go"}}]}`),
+	}
+
+	msgs := convertRawMessages(raw)
+	if len(msgs) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(msgs))
+	}
+	if len(msgs[0].Content) != 2 {
+		t.Fatalf("content blocks: got %d, want 2", len(msgs[0].Content))
+	}
+
+	// First block: text.
+	if msgs[0].Content[0].Type != "text" {
+		t.Errorf("block[0] type: got %q, want text", msgs[0].Content[0].Type)
+	}
+	if msgs[0].Content[0].Text != "I'll help" {
+		t.Errorf("block[0] text: got %q, want 'I'll help'", msgs[0].Content[0].Text)
+	}
+
+	// Second block: tool_use.
+	if msgs[0].Content[1].Type != "tool_use" {
+		t.Errorf("block[1] type: got %q, want tool_use", msgs[0].Content[1].Type)
+	}
+	if msgs[0].Content[1].ID != "toolu_1" {
+		t.Errorf("block[1] id: got %q, want toolu_1", msgs[0].Content[1].ID)
+	}
+}
+
+func TestConvertRawMessagesPlainTextContent(t *testing.T) {
+	// Plain string content should still work.
+	raw := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":"hello world"}`),
+	}
+
+	msgs := convertRawMessages(raw)
+	if len(msgs) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(msgs))
+	}
+	if len(msgs[0].Content) != 1 {
+		t.Fatalf("content blocks: got %d, want 1", len(msgs[0].Content))
+	}
+	if msgs[0].Content[0].Type != "text" {
+		t.Errorf("block type: got %q, want text", msgs[0].Content[0].Type)
+	}
+	if msgs[0].Content[0].Text != "hello world" {
+		t.Errorf("block text: got %q, want 'hello world'", msgs[0].Content[0].Text)
+	}
+}
+
+// --- convertMessages Tests ---
+
+func TestConvertMessagesPreservesToolUseBlocks(t *testing.T) {
+	// When converting Message with tool_use content blocks for the API
+	// request, the id, name, and input fields must be preserved.
+	msgs := []Message{
+		{
+			Role: "assistant",
+			Content: []Block{
+				{Type: "text", Text: "Let me check."},
+				{Type: "tool_use", ID: "toolu_1", Name: "read_file", Input: json.RawMessage(`{"path":"/tmp/test"}`)},
+			},
+		},
+	}
+
+	result := convertMessages(msgs)
+	if len(result) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(result))
+	}
+	if len(result[0].Content) != 2 {
+		t.Fatalf("content blocks: got %d, want 2", len(result[0].Content))
+	}
+
+	// Second block should be tool_use with preserved fields.
+	toolBlock := result[0].Content[1]
+	if toolBlock.Type != "tool_use" {
+		t.Errorf("block type: got %q, want tool_use", toolBlock.Type)
+	}
+	if toolBlock.ID != "toolu_1" {
+		t.Errorf("block id: got %q, want toolu_1", toolBlock.ID)
+	}
+	if toolBlock.Name != "read_file" {
+		t.Errorf("block name: got %q, want read_file", toolBlock.Name)
+	}
+	if toolBlock.Input == nil || string(toolBlock.Input) != `{"path":"/tmp/test"}` {
+		t.Errorf("block input: got %q, want {\"path\":\"/tmp/test\"}", toolBlock.Input)
+	}
+}
+
+func TestConvertMessagesPreservesToolResultBlocks(t *testing.T) {
+	// When converting Message with tool_result content blocks for the API
+	// request, the tool_use_id must be preserved.
+	msgs := []Message{
+		{
+			Role: "user",
+			Content: []Block{
+				{Type: "tool_result", ToolUseID: "toolu_1", Text: "file contents"},
+			},
+		},
+	}
+
+	result := convertMessages(msgs)
+	if len(result) != 1 {
+		t.Fatalf("messages: got %d, want 1", len(result))
+	}
+	if len(result[0].Content) != 1 {
+		t.Fatalf("content blocks: got %d, want 1", len(result[0].Content))
+	}
+
+	block := result[0].Content[0]
+	if block.Type != "tool_result" {
+		t.Errorf("block type: got %q, want tool_result", block.Type)
+	}
+	if block.ToolUseID != "toolu_1" {
+		t.Errorf("block tool_use_id: got %q, want toolu_1", block.ToolUseID)
+	}
+}
+
+// --- CallWithTools with Tool Definitions Tests ---
+
+func TestBridgeProviderCallWithToolsPassesToolDefinitions(t *testing.T) {
+	// When the bridge provider sends a CallWithTools request with tool
+	// definitions, the underlying LLM request should include tools.
+	var capturedReq *LLMRequest
+	mock := &capturingLLMProvider{
+		name: "test-provider",
+		resp: &LLMResponse{
+			ID:         "msg_tools",
+			StopReason: "end_turn",
+			Text:       "Done.",
+			Usage:      Usage{InputTokens: 10, OutputTokens: 5},
+		},
+		capture: func(req LLMRequest) { capturedReq = &req },
+	}
+
+	bridge := NewBridgeProvider(mock)
+
+	req := runtime.ToolLoopRequest{
+		System: "You are helpful.",
+		Messages: []json.RawMessage{
+			json.RawMessage(`{"role":"user","content":[{"type":"text","text":"Read a file"}]}`),
+		},
+		ToolDefinitions: []runtime.ToolDefinition{
+			{Name: "read_file", Description: "Read a file", Parameters: map[string]any{"type": "object"}},
+		},
+		MaxTokens: 4096,
+	}
+
+	_, err := bridge.CallWithTools(context.Background(), req)
+	if err != nil {
+		t.Fatalf("call with tools: %v", err)
+	}
+
+	if capturedReq == nil {
+		t.Fatal("expected captured request")
+	}
+	if len(capturedReq.Tools) != 1 {
+		t.Fatalf("tools: got %d, want 1", len(capturedReq.Tools))
+	}
+	if capturedReq.Tools[0].Name != "read_file" {
+		t.Errorf("tool name: got %q, want read_file", capturedReq.Tools[0].Name)
+	}
+}
+
+// --- Helper: capturing LLM provider ---
+
+// capturingLLMProvider captures the LLMRequest before returning a canned response.
+type capturingLLMProvider struct {
+	name    string
+	resp    *LLMResponse
+	capture func(LLMRequest)
+}
+
+func (c *capturingLLMProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	if c.capture != nil {
+		c.capture(req)
+	}
+	return c.resp, nil
+}
+func (c *capturingLLMProvider) Name() string  { return c.name }
+func (c *capturingLLMProvider) IsReal() bool { return true }

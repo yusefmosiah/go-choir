@@ -18,6 +18,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,10 @@ type LLMRequest struct {
 	// Messages is the conversation history in Anthropic Messages format.
 	Messages []Message `json:"messages"`
 
+	// Tools is the list of tool definitions to include in the request.
+	// When non-empty, the provider may return tool_use content blocks.
+	Tools []ToolDef `json:"tools,omitempty"`
+
 	// MaxTokens is the maximum number of output tokens.
 	MaxTokens int `json:"max_tokens"`
 
@@ -54,10 +59,30 @@ type Message struct {
 	Content []Block `json:"content"`
 }
 
-// Block is a content block within a message.
+// ToolDef is a tool definition for inclusion in LLM requests. The
+// provider package uses this instead of importing from the runtime
+// package to avoid circular dependencies.
+type ToolDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema,omitempty"` // Anthropic uses "input_schema"
+}
+
+// Block is a content block within a message. It supports all Anthropic
+// Messages API content block types: text, tool_use, and tool_result.
+// The fields are structured so that each block type uses its relevant
+// subset:
+//   - text: Type="text", Text=content
+//   - tool_use: Type="tool_use", ID=call_id, Name=tool_name, Input=args
+//   - tool_result: Type="tool_result", ToolUseID=call_id, Text=result_content
 type Block struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`         // tool_use: provider-assigned call ID
+	Name      string          `json:"name,omitempty"`       // tool_use: tool name to invoke
+	Input     json.RawMessage `json:"input,omitempty"`      // tool_use: tool arguments as JSON
+	ToolUseID string          `json:"tool_use_id,omitempty"` // tool_result: ID of the originating tool call
+	IsError   bool            `json:"is_error,omitempty"`   // tool_result: true if result is an error
 }
 
 // LLMResponse is the unified response shape from all provider backends.
@@ -78,6 +103,13 @@ type LLMResponse struct {
 	// Usage contains token usage information.
 	Usage Usage `json:"usage"`
 
+	// ToolCalls contains structured tool invocation requests extracted from
+	// tool_use content blocks in the provider response. Non-empty only when
+	// StopReason is "tool_use". This field bridges the gap between the
+	// Anthropic Messages API response format (where tool calls appear as
+	// content blocks with type "tool_use") and the runtime's ToolCall type.
+	ToolCalls []ContentToolCall `json:"tool_calls,omitempty"`
+
 	// ProviderName identifies which provider handled this request, for
 	// observability and redacted logging.
 	ProviderName string `json:"provider_name"`
@@ -87,6 +119,21 @@ type LLMResponse struct {
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+}
+
+// ContentToolCall represents a tool invocation extracted from a tool_use
+// content block in an Anthropic Messages API response. This is the
+// provider-package-level representation; the bridge layer converts these
+// into runtime.ToolCall values consumed by the tool-calling loop.
+type ContentToolCall struct {
+	// ID is the provider-assigned tool call identifier (e.g., "toolu_01").
+	ID string `json:"id"`
+
+	// Name is the tool name to invoke (must match a registered tool).
+	Name string `json:"name"`
+
+	// Arguments is the raw JSON arguments object for the tool call.
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 // Provider is the interface for executing LLM requests. Implementations
@@ -218,6 +265,7 @@ func (p *BedrockProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	}
 
 	ar.Messages = convertMessages(req.Messages)
+	ar.Tools = convertToolDefs(req.Tools)
 	return ar
 }
 
@@ -324,6 +372,7 @@ func (p *ZAIProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	}
 
 	ar.Messages = convertMessages(req.Messages)
+	ar.Tools = convertToolDefs(req.Tools)
 	return ar
 }
 
@@ -333,6 +382,7 @@ type anthropicRequest struct {
 	Model            string                 `json:"model,omitempty"` // empty for Bedrock (model in URL)
 	System           any                    `json:"system,omitempty"`
 	Messages         []anthropicMessage     `json:"messages"`
+	Tools            []anthropicTool        `json:"tools,omitempty"`
 	MaxTokens        int                    `json:"max_tokens"`
 	Stream           bool                   `json:"stream,omitempty"`
 	AnthropicVersion string                 `json:"anthropic_version,omitempty"`
@@ -344,14 +394,27 @@ type anthropicSystemBlock struct {
 	CacheControl map[string]string `json:"cache_control,omitempty"`
 }
 
+// anthropicTool is the tool definition format for the Anthropic Messages API.
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema,omitempty"`
+}
+
 type anthropicMessage struct {
 	Role    string              `json:"role"`
 	Content []anthropicContent  `json:"content"`
 }
 
 type anthropicContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`          // tool_use: call ID
+	Name      string          `json:"name,omitempty"`         // tool_use: tool name
+	Input     json.RawMessage `json:"input,omitempty"`        // tool_use: arguments
+	ToolUseID string          `json:"tool_use_id,omitempty"`  // tool_result: originating call ID
+	Content   string          `json:"content,omitempty"`      // tool_result: result content (when string)
+	IsError   bool            `json:"is_error,omitempty"`      // tool_result: error flag
 }
 
 type anthropicResponse struct {
@@ -363,8 +426,11 @@ type anthropicResponse struct {
 }
 
 type anthropicResponseBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`    // tool_use: provider-assigned call ID
+	Name  string          `json:"name,omitempty"`  // tool_use: tool name
+	Input json.RawMessage `json:"input,omitempty"` // tool_use: tool arguments
 }
 
 type anthropicUsage struct {
@@ -380,12 +446,41 @@ func convertMessages(msgs []Message) []anthropicMessage {
 			Content: make([]anthropicContent, 0, len(msg.Content)),
 		}
 		for _, block := range msg.Content {
-			item.Content = append(item.Content, anthropicContent{
-				Type: block.Type,
-				Text: block.Text,
-			})
+			ac := anthropicContent{
+				Type:      block.Type,
+				Text:      block.Text,
+				ID:        block.ID,
+				Name:      block.Name,
+				Input:     block.Input,
+				ToolUseID: block.ToolUseID,
+				IsError:   block.IsError,
+			}
+			// For tool_result blocks, the result content goes in the
+			// "content" field (not "text") per Anthropic Messages API.
+			if block.Type == "tool_result" {
+				ac.Content = block.Text
+				ac.Text = "" // clear text field for tool_result
+			}
+			item.Content = append(item.Content, ac)
 		}
 		out = append(out, item)
+	}
+	return out
+}
+
+// convertToolDefs converts provider ToolDef values to the Anthropic
+// tool definition format. Empty input returns nil (omitted from JSON).
+func convertToolDefs(tools []ToolDef) []anthropicTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]anthropicTool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, anthropicTool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: tool.InputSchema,
+		})
 	}
 	return out
 }
@@ -463,14 +558,23 @@ func parseBedrockResponse(resp *http.Response, modelID string) (*LLMResponse, er
 	}
 
 	for _, block := range payload.Content {
-		if block.Type == "text" && block.Text != "" {
-			result.Text += block.Text
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				result.Text += block.Text
+			}
+		case "tool_use":
+			result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: canonicalJSON(block.Input),
+			})
 		}
 	}
 
-	log.Printf("provider: bedrock response model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d",
+	log.Printf("provider: bedrock response model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d tool_calls=%d",
 		redactModel(result.Model), result.StopReason,
-		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text))
+		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text), len(result.ToolCalls))
 
 	return result, nil
 }
@@ -497,14 +601,23 @@ func parseAnthropicResponse(resp *http.Response, modelID string, providerName st
 	}
 
 	for _, block := range payload.Content {
-		if block.Type == "text" && block.Text != "" {
-			result.Text += block.Text
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				result.Text += block.Text
+			}
+		case "tool_use":
+			result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: canonicalJSON(block.Input),
+			})
 		}
 	}
 
-	log.Printf("provider: %s response model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d",
+	log.Printf("provider: %s response model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d tool_calls=%d",
 		providerName, result.Model, result.StopReason,
-		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text))
+		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text), len(result.ToolCalls))
 
 	return result, nil
 }
@@ -514,6 +627,29 @@ func coalesce(s, fallback string) string {
 		return s
 	}
 	return fallback
+}
+
+// canonicalJSON normalizes a JSON raw message: trims whitespace,
+// unmarshals and re-marshals to ensure consistent formatting, and
+// returns "{}" for empty or null input. This matches the Cogent
+// reference behavior for tool_use input arguments.
+func canonicalJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage([]byte("{}"))
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return json.RawMessage([]byte("{}"))
+	}
+	var v any
+	if err := json.Unmarshal(trimmed, &v); err != nil {
+		return raw
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return b
 }
 
 // ResolveProvider creates the configured real provider from environment
