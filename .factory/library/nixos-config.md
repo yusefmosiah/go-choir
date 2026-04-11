@@ -26,6 +26,8 @@ Key configuration:
 
 The built `dist/` contains hashed asset references (e.g., `assets/index-4UYezCQ3.js`) rather than placeholder HTML, proving the public root serves the real SPA.
 
+**Verified on x86_64-linux (Node B)**: The `npmDepsHash = "sha256-UXHDem8sfIX42Aylef0AxtVWVjOI5gjIh5q0T41Qe5E="` was confirmed correct by building `.#packages.x86_64-linux.frontend` on Node B and deploying via `nixos-rebuild switch`. The public root at `https://draft.choir-ip.com/` serves the built SPA with real asset references. If the hash changes after dependency updates, use the same `prefetch-npm-deps` or empty-hash-and-error pattern to resolve.
+
 ### nixosConfigurations.go-choir-b
 The NixOS system config is built from 3 modules passed as `specialArgs.goChoirPackages` so systemd services and Caddy can reference the built packages.
 
