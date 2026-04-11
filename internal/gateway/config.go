@@ -67,7 +67,8 @@ func LoadRateLimiterConfig() RateLimiterConfig {
 
 	if v := os.Getenv("GATEWAY_RATE_LIMIT_MAX_REQUESTS"); v != "" {
 		if n, err := fmt.Sscanf(v, "%d", &cfg.MaxRequests); err == nil && n == 1 {
-			// parsed successfully
+			// parsed successfully - cfg.MaxRequests is now set
+			_ = cfg.MaxRequests // silence staticcheck: empty branch
 		}
 	}
 

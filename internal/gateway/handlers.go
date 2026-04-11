@@ -431,6 +431,7 @@ func writeGatewayJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 // drainBody reads and discards the response body to allow connection reuse.
+// nolint:unused
 func drainBody(resp *http.Response) {
 	if resp != nil && resp.Body != nil {
 		_, _ = io.Copy(io.Discard, resp.Body)

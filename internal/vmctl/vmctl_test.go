@@ -129,12 +129,16 @@ func TestOwnershipRegistry_ActiveCount(t *testing.T) {
 		t.Errorf("expected 0 active VMs, got %d", count)
 	}
 
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign user-1: %v", err)
+	}
 	if count := reg.ActiveCount(); count != 1 {
 		t.Errorf("expected 1 active VM, got %d", count)
 	}
 
-	reg.ResolveOrAssign("user-2")
+	if _, err := reg.ResolveOrAssign("user-2"); err != nil {
+		t.Fatalf("ResolveOrAssign user-2: %v", err)
+	}
 	if count := reg.ActiveCount(); count != 2 {
 		t.Errorf("expected 2 active VMs, got %d", count)
 	}
@@ -174,7 +178,9 @@ func TestOwnershipRegistry_RemoveOwnership(t *testing.T) {
 	own, _ := reg.ResolveOrAssign("user-1")
 	vmID := own.VMID
 
-	reg.RemoveOwnership("user-1")
+	if err := reg.RemoveOwnership("user-1"); err != nil {
+		t.Fatalf("RemoveOwnership: %v", err)
+	}
 
 	// Ownership should be gone.
 	if reg.GetOwnership("user-1") != nil {
@@ -197,7 +203,9 @@ func TestOwnershipRegistry_RemoveOwnershipIdempotent(t *testing.T) {
 func TestOwnershipRegistry_MarkUnhealthy(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
 	if err := reg.MarkUnhealthy("user-1"); err != nil {
 		t.Fatalf("MarkUnhealthy: %v", err)
 	}
@@ -211,9 +219,15 @@ func TestOwnershipRegistry_MarkUnhealthy(t *testing.T) {
 func TestOwnershipRegistry_ListOwnerships(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
-	reg.ResolveOrAssign("user-1")
-	reg.ResolveOrAssign("user-2")
-	reg.ResolveOrAssign("user-3")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign user-1: %v", err)
+	}
+	if _, err := reg.ResolveOrAssign("user-2"); err != nil {
+		t.Fatalf("ResolveOrAssign user-2: %v", err)
+	}
+	if _, err := reg.ResolveOrAssign("user-3"); err != nil {
+		t.Fatalf("ResolveOrAssign user-3: %v", err)
+	}
 
 	list := reg.ListOwnerships()
 	if len(list) != 3 {
@@ -267,7 +281,9 @@ func TestOwnershipRegistry_StoppedVMGetsResumed(t *testing.T) {
 	oldVMID := own1.VMID
 	oldEpoch := own1.Epoch
 
-	reg.StopVM("user-1")
+	if err := reg.StopVM("user-1"); err != nil {
+		t.Fatalf("StopVM: %v", err)
+	}
 
 	own2, _ := reg.ResolveOrAssign("user-1")
 	if own2.VMID != oldVMID {
@@ -381,7 +397,9 @@ func TestHandler_ResolveReturnsExistingVM(t *testing.T) {
 	req1.Header.Set("X-Internal-Caller", "true")
 	resp1, _ := http.DefaultClient.Do(req1)
 	var result1 resolveResponse
-	json.NewDecoder(resp1.Body).Decode(&result1)
+	if err := json.NewDecoder(resp1.Body).Decode(&result1); err != nil {
+		t.Fatalf("decode result1: %v", err)
+	}
 	_ = resp1.Body.Close()
 
 	// Second resolve.
@@ -390,7 +408,9 @@ func TestHandler_ResolveReturnsExistingVM(t *testing.T) {
 	req2.Header.Set("X-Internal-Caller", "true")
 	resp2, _ := http.DefaultClient.Do(req2)
 	var result2 resolveResponse
-	json.NewDecoder(resp2.Body).Decode(&result2)
+	if err := json.NewDecoder(resp2.Body).Decode(&result2); err != nil {
+		t.Fatalf("decode result2: %v", err)
+	}
 	_ = resp2.Body.Close()
 
 	if result1.VMID != result2.VMID {
@@ -446,7 +466,9 @@ func TestHandler_Lookup(t *testing.T) {
 	}
 
 	var result ownershipResponse
-	json.NewDecoder(resp2.Body).Decode(&result)
+	if err := json.NewDecoder(resp2.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result.UserID != "user-1" {
 		t.Errorf("expected user-1, got %s", result.UserID)
 	}
@@ -495,7 +517,9 @@ func TestHandler_Stop(t *testing.T) {
 	defer func() { _ = resp3.Body.Close() }()
 
 	var result ownershipResponse
-	json.NewDecoder(resp3.Body).Decode(&result)
+	if err := json.NewDecoder(resp3.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result.State != "stopped" {
 		t.Errorf("expected stopped state, got %s", result.State)
 	}
@@ -558,7 +582,9 @@ func TestHandler_List(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 
 	count, _ := result["count"].(float64)
 	if int(count) != 2 {
@@ -628,7 +654,9 @@ func TestClient_Stop(t *testing.T) {
 	srv, _ := newTestServer(t)
 	client := NewClient(srv.URL)
 
-	client.Resolve("user-stop-test")
+	if _, err := client.Resolve("user-stop-test"); err != nil {
+		t.Fatalf("client resolve: %v", err)
+	}
 
 	if err := client.Stop("user-stop-test"); err != nil {
 		t.Fatalf("client stop: %v", err)
@@ -639,7 +667,9 @@ func TestClient_Remove(t *testing.T) {
 	srv, _ := newTestServer(t)
 	client := NewClient(srv.URL)
 
-	client.Resolve("user-remove-test")
+	if _, err := client.Resolve("user-remove-test"); err != nil {
+		t.Fatalf("client resolve: %v", err)
+	}
 
 	if err := client.Remove("user-remove-test"); err != nil {
 		t.Fatalf("client remove: %v", err)
@@ -755,7 +785,9 @@ func TestOwnershipRegistry_LastActiveAtUpdated(t *testing.T) {
 	// Wait a tiny bit and resolve again.
 	time.Sleep(10 * time.Millisecond)
 
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
 	updated := reg.GetOwnership("user-1")
 
 	if !updated.LastActiveAt.After(firstActive) {
@@ -846,7 +878,9 @@ func TestOwnershipRegistry_RecoverIncrementsEpoch(t *testing.T) {
 	epoch := own1.Epoch
 
 	// Mark unhealthy and recover.
-	reg.MarkUnhealthy("user-1")
+	if err := reg.MarkUnhealthy("user-1"); err != nil {
+		t.Fatalf("MarkUnhealthy: %v", err)
+	}
 
 	recovered, err := reg.RecoverVM("user-1")
 	if err != nil {
@@ -868,8 +902,12 @@ func TestOwnershipRegistry_LogoutStopsOnlyCurrentUser(t *testing.T) {
 	// VAL-VM-008: Logout or idle transitions only the current user's VM.
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
-	reg.ResolveOrAssign("user-alice")
-	reg.ResolveOrAssign("user-bob")
+	if _, err := reg.ResolveOrAssign("user-alice"); err != nil {
+		t.Fatalf("ResolveOrAssign alice: %v", err)
+	}
+	if _, err := reg.ResolveOrAssign("user-bob"); err != nil {
+		t.Fatalf("ResolveOrAssign bob: %v", err)
+	}
 
 	// Logout user-alice.
 	if err := reg.LogoutVM("user-alice"); err != nil {
@@ -897,8 +935,12 @@ func TestOwnershipRegistry_IdleTimeoutChecks(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 	reg.SetIdleTimeout(50 * time.Millisecond)
 
-	reg.ResolveOrAssign("user-active")
-	reg.ResolveOrAssign("user-idle")
+	if _, err := reg.ResolveOrAssign("user-active"); err != nil {
+		t.Fatalf("ResolveOrAssign user-active: %v", err)
+	}
+	if _, err := reg.ResolveOrAssign("user-idle"); err != nil {
+		t.Fatalf("ResolveOrAssign user-idle: %v", err)
+	}
 
 	// Simulate user-idle being idle by backdating its LastActiveAt.
 	reg.mu.Lock()
@@ -943,8 +985,12 @@ func TestOwnershipRegistry_HibernateRequiresRunningVM(t *testing.T) {
 	}
 
 	// Already stopped VM.
-	reg.ResolveOrAssign("user-1")
-	reg.StopVM("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
+	if err := reg.StopVM("user-1"); err != nil {
+		t.Fatalf("StopVM: %v", err)
+	}
 	if err := reg.HibernateVM("user-1"); err == nil {
 		t.Error("expected error for stopped VM")
 	}
@@ -960,7 +1006,9 @@ func TestOwnershipRegistry_ResumeNonResumableState(t *testing.T) {
 	}
 
 	// Active VM — resume returns it as-is.
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
 	own, err := reg.ResumeVM("user-1")
 	if err != nil {
 		t.Fatalf("ResumeVM on active: %v", err)
@@ -980,7 +1028,9 @@ func TestOwnershipRegistry_RecoverRequiresFailedState(t *testing.T) {
 	}
 
 	// Active VM — cannot recover.
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
 	_, err = reg.RecoverVM("user-1")
 	if err == nil {
 		t.Error("expected error for active VM")
@@ -1005,14 +1055,18 @@ func TestOwnershipRegistry_EpochTracksBootGeneration(t *testing.T) {
 	}
 
 	// Stop and resolve (resume) — epoch stays the same.
-	reg.StopVM("user-1")
+	if err := reg.StopVM("user-1"); err != nil {
+		t.Fatalf("StopVM: %v", err)
+	}
 	own3, _ := reg.ResolveOrAssign("user-1")
 	if own3.Epoch != epoch1 {
 		t.Errorf("expected same epoch on resume, got %d vs %d", epoch1, own3.Epoch)
 	}
 
 	// Mark unhealthy and recover — epoch increments.
-	reg.MarkUnhealthy("user-1")
+	if err := reg.MarkUnhealthy("user-1"); err != nil {
+		t.Fatalf("MarkUnhealthy: %v", err)
+	}
 	own4, _ := reg.RecoverVM("user-1")
 	if own4.Epoch <= epoch1 {
 		t.Errorf("expected epoch > %d after recovery, got %d", epoch1, own4.Epoch)
@@ -1046,7 +1100,9 @@ func TestOwnershipRegistry_NoIdleTimeoutWhenZero(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 	// Default idle timeout is 0 — no idle checking.
 
-	reg.ResolveOrAssign("user-1")
+	if _, err := reg.ResolveOrAssign("user-1"); err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
 
 	// Backdate the last active time.
 	reg.mu.Lock()
@@ -1067,7 +1123,9 @@ func TestOwnershipRegistry_ResolveAfterLogout(t *testing.T) {
 	own1, _ := reg.ResolveOrAssign("user-1")
 	vmID := own1.VMID
 
-	reg.LogoutVM("user-1")
+	if err := reg.LogoutVM("user-1"); err != nil {
+		t.Fatalf("LogoutVM: %v", err)
+	}
 
 	// Resolving after logout should resume the same VM (VAL-CROSS-116).
 	own2, _ := reg.ResolveOrAssign("user-1")
@@ -1091,7 +1149,9 @@ func TestHandler_HibernateAndResume(t *testing.T) {
 	req1.Header.Set("X-Internal-Caller", "true")
 	resp1, _ := http.DefaultClient.Do(req1)
 	var result1 resolveResponse
-	json.NewDecoder(resp1.Body).Decode(&result1)
+	if err := json.NewDecoder(resp1.Body).Decode(&result1); err != nil {
+		t.Fatalf("decode result1: %v", err)
+	}
 	_ = resp1.Body.Close()
 	vmID := result1.VMID
 
@@ -1107,7 +1167,9 @@ func TestHandler_HibernateAndResume(t *testing.T) {
 	}
 
 	var hibResult map[string]interface{}
-	json.NewDecoder(resp2.Body).Decode(&hibResult)
+	if err := json.NewDecoder(resp2.Body).Decode(&hibResult); err != nil {
+		t.Fatalf("decode hibResult: %v", err)
+	}
 	if hibResult["status"] != "hibernated" {
 		t.Errorf("expected status=hibernated, got %v", hibResult["status"])
 	}
@@ -1127,7 +1189,9 @@ func TestHandler_HibernateAndResume(t *testing.T) {
 	}
 
 	var result3 resolveResponse
-	json.NewDecoder(resp3.Body).Decode(&result3)
+	if err := json.NewDecoder(resp3.Body).Decode(&result3); err != nil {
+		t.Fatalf("decode result3: %v", err)
+	}
 	if result3.VMID != vmID {
 		t.Errorf("expected same VMID after resume, got %s", result3.VMID)
 	}
@@ -1159,7 +1223,9 @@ func TestHandler_RecoverRequiresUnhealthyState(t *testing.T) {
 	}
 
 	// Mark unhealthy.
-	reg.MarkUnhealthy("user-1")
+	if err := reg.MarkUnhealthy("user-1"); err != nil {
+		t.Fatalf("MarkUnhealthy: %v", err)
+	}
 
 	// Now recover should succeed with a new epoch.
 	req3, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/recover", strings.NewReader(body))
@@ -1173,7 +1239,9 @@ func TestHandler_RecoverRequiresUnhealthyState(t *testing.T) {
 	}
 
 	var result resolveResponse
-	json.NewDecoder(resp3.Body).Decode(&result)
+	if err := json.NewDecoder(resp3.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result.State != "active" {
 		t.Errorf("expected active state after recovery, got %s", result.State)
 	}
@@ -1210,7 +1278,9 @@ func TestHandler_LogoutStopsVM(t *testing.T) {
 	req2.Header.Set("X-Internal-Caller", "true")
 	resp2, _ := http.DefaultClient.Do(req2)
 	var aliceResp ownershipResponse
-	json.NewDecoder(resp2.Body).Decode(&aliceResp)
+	if err := json.NewDecoder(resp2.Body).Decode(&aliceResp); err != nil {
+		t.Fatalf("decode aliceResp: %v", err)
+	}
 	_ = resp2.Body.Close()
 	if aliceResp.State != "stopped" {
 		t.Errorf("expected alice VM stopped after logout, got %s", aliceResp.State)
@@ -1221,7 +1291,9 @@ func TestHandler_LogoutStopsVM(t *testing.T) {
 	req3.Header.Set("X-Internal-Caller", "true")
 	resp3, _ := http.DefaultClient.Do(req3)
 	var bobResp ownershipResponse
-	json.NewDecoder(resp3.Body).Decode(&bobResp)
+	if err := json.NewDecoder(resp3.Body).Decode(&bobResp); err != nil {
+		t.Fatalf("decode bobResp: %v", err)
+	}
 	_ = resp3.Body.Close()
 	if bobResp.State != "active" {
 		t.Errorf("expected bob VM still active, got %s", bobResp.State)
@@ -1258,7 +1330,9 @@ func TestHandler_IdleCheckEndpoint(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(resp2.Body).Decode(&result)
+	if err := json.NewDecoder(resp2.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if vmsStopped, _ := result["vms_stopped"].(float64); int(vmsStopped) != 1 {
 		t.Errorf("expected 1 VM stopped, got %v", result["vms_stopped"])
 	}

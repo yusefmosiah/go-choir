@@ -436,6 +436,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 // sandboxWSURL derives the WebSocket URL for the sandbox /api/ws endpoint
 // from the configured HTTP sandbox URL (static fallback).
+// nolint:unused
 func (h *Handler) sandboxWSURL() string {
 	return sandboxWSURLForBase(h.sandboxURL.String())
 }

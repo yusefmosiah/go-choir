@@ -2144,7 +2144,9 @@ func TestVMctlRouting_BootstrapRoutesThroughVM(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 
 	// The sandbox should have received the user context.
 	if result["user"] != "user-vm-1" {
@@ -2280,7 +2282,9 @@ func TestVMctlRouting_ProtectedAPIThroughVM(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result["owner_id"] != "user-runtime" {
 		t.Errorf("expected owner_id user-runtime, got %v", result["owner_id"])
 	}
@@ -2300,7 +2304,9 @@ func TestVMctlDeny_PublicVMctlBlocked(t *testing.T) {
 	}
 
 	var result errorResponse
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if !strings.Contains(result.Error, "not publicly accessible") {
 		t.Errorf("expected public denial message, got: %s", result.Error)
 	}
@@ -2320,7 +2326,9 @@ func TestVMctlRouting_HealthReportsVMctlStatus(t *testing.T) {
 	}
 
 	var result proxyHealthResponse
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result.VMctlRouting != "enabled" {
 		t.Errorf("expected vmctl_routing=enabled, got %s", result.VMctlRouting)
 	}
@@ -2379,7 +2387,9 @@ func TestVMctlRouting_GracefulDegradation(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result["sandbox_id"] != "sandbox-fallback" {
 		t.Errorf("expected fallback sandbox, got %v", result["sandbox_id"])
 	}

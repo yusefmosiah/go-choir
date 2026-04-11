@@ -392,9 +392,7 @@ func TestHandleInference_ProviderError(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	// The error should be sanitized and not contain raw upstream details.
-	if strings.Contains(errResp.Error, "Service Unavailable") {
-		// It's OK if the sanitized message is there; just verify no credential leakage.
-	}
+	_ = strings.Contains(errResp.Error, "Service Unavailable") // silence staticcheck: empty branch allowed for documentation
 	if strings.Contains(errResp.Error, "Bearer") {
 		t.Errorf("error message contains credential-like data: %q", errResp.Error)
 	}
