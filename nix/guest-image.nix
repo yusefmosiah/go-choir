@@ -10,6 +10,13 @@
 # excluded from the guest (VAL-VM-011).
 #
 # Built artifacts are what Node B actually boots (VAL-VM-010).
+#
+# IMPORTANT: All bash scripts are extracted into separate writeShellScript
+# derivations to avoid Nix parser ambiguity with '' indented strings.
+# Nix 2.31+ has issues parsing complex bash (parameter expansion, case
+# statements) inside '' strings passed to runCommand. By extracting the
+# bash into writeShellScript derivations, the runCommand bodies become
+# trivial single-line script invocations.
 { pkgs, goChoirPackages }:
 
 let
@@ -151,18 +158,10 @@ let
     exec /bin/sandbox
   '';
 
-  # Minimal guest root filesystem containing only the sandbox runtime.
-  # This is the set of files that will be packed into the ext4 rootfs image.
-  #
-  # Includes: sandbox binary, init script, and minimal networking tools
-  # (ip from iproute2, plus standard POSIX utilities from coreutils/shadow).
-  # Provider credentials, gateway secrets, auth signing keys, and other
-  # host-side material are explicitly excluded (VAL-VM-011).
-  guestRoot = pkgs.runCommand "go-choir-guest-root" {
-    # Explicitly do NOT pass any secret-containing environment variables
-    # into the derivation. The Nix sandbox prevents access to host
-    # environment anyway, but this comment makes the intent clear (VAL-VM-011).
-  } ''
+  # Script to assemble the guest root filesystem directory tree.
+  # Extracted into writeShellScript to avoid '' string parsing issues
+  # in Nix 2.31+ when complex bash lives inside runCommand.
+  guestRootSetupScript = pkgs.writeShellScript "guest-root-setup" ''
     mkdir -p $out/bin
     mkdir -p $out/tmp
     mkdir -p $out/mnt/persistent
@@ -198,9 +197,6 @@ let
     chmod +x $out/bin/mount $out/bin/mkdir $out/bin/cat $out/bin/echo $out/bin/cut $out/bin/grep
 
     # Copy the pre-built guest init script.
-    # The init script is defined as a separate writeShellScript derivation
-    # (guestInitScript) to avoid Nix parser ambiguity with bash parameter
-    # expansion patterns like ${param#vm_id=} inside '' indented strings.
     cp ${guestInitScript}/bin/guest-init $out/bin/init
 
     # Create a simple /etc/resolv.conf for DNS inside the guest.
@@ -211,15 +207,28 @@ let
     mkdir -p $out/dev $out/proc $out/sys $out/run
   '';
 
-  # Build the ext4 rootfs image from the guest root.
-  # Firecracker requires an ext4 filesystem image as the root drive.
-  # Uses debugfs to populate the image without requiring mount(8),
-  # which is unavailable inside the Nix build sandbox.
-  guestRootfs = pkgs.runCommand "go-choir-guest-rootfs.ext4" {
-    buildInputs = [ pkgs.e2fsprogs ];
-    # 512MB rootfs to accommodate sandbox binary + networking utilities.
-    # The persistent user data is on a separate mount, not in this image.
+  # Minimal guest root filesystem containing only the sandbox runtime.
+  # This is the set of files that will be packed into the ext4 rootfs image.
+  #
+  # Includes: sandbox binary, init script, and minimal networking tools
+  # (ip from iproute2, plus standard POSIX utilities from coreutils/shadow).
+  # Provider credentials, gateway secrets, auth signing keys, and other
+  # host-side material are explicitly excluded (VAL-VM-011).
+  #
+  # The actual bash logic lives in guestRootSetupScript (a writeShellScript
+  # derivation) to avoid Nix 2.31+ '' indented-string parsing issues.
+  guestRoot = pkgs.runCommand "go-choir-guest-root" {
+    # Explicitly do NOT pass any secret-containing environment variables
+    # into the derivation. The Nix sandbox prevents access to host
+    # environment anyway, but this comment makes the intent clear (VAL-VM-011).
   } ''
+    exec ${guestRootSetupScript}
+  '';
+
+  # Script to build the ext4 rootfs image using debugfs.
+  # Extracted into writeShellScript to avoid '' string parsing issues
+  # in Nix 2.31+ when complex bash lives inside runCommand.
+  guestRootfsBuildScript = pkgs.writeShellScript "guest-rootfs-build" ''
     # Create an empty ext4 filesystem image.
     dd if=/dev/zero of=$out bs=1M count=512
     mkfs.ext4 -F $out
@@ -282,6 +291,22 @@ let
     } > /tmp/debugfs-chmod.cmds
 
     debugfs -w -f /tmp/debugfs-chmod.cmds $out
+  '';
+
+  # Build the ext4 rootfs image from the guest root.
+  # Firecracker requires an ext4 filesystem image as the root drive.
+  # Uses debugfs to populate the image without requiring mount(8),
+  # which is unavailable inside the Nix build sandbox.
+  #
+  # The actual bash logic lives in guestRootfsBuildScript (a
+  # writeShellScript derivation) to avoid Nix 2.31+ '' indented-string
+  # parsing issues.
+  guestRootfs = pkgs.runCommand "go-choir-guest-rootfs.ext4" {
+    buildInputs = [ pkgs.e2fsprogs ];
+    # 512MB rootfs to accommodate sandbox binary + networking utilities.
+    # The persistent user data is on a separate mount, not in this image.
+  } ''
+    exec ${guestRootfsBuildScript}
   '';
 
   # Firecracker-compatible Linux kernel.
