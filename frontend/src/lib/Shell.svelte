@@ -1,11 +1,14 @@
 <!--
-  Shell — authenticated placeholder desktop shell.
+  Shell — authenticated desktop shell with runtime prompt UI.
 
   Clearly distinct from the guest auth UI. Exposes:
     - visible logout control
     - session-aware current-user display
     - bootstrap data from GET /api/shell/bootstrap
     - live-channel status from GET /api/ws
+    - runtime prompt/task UI that submits through POST /api/agent/task,
+      renders status/event progress, and returns a real provider-backed
+      answer (VAL-RUNTIME-007, VAL-CROSS-109)
     - in-shell protected refresh action that triggers renewal when
       access expires but refresh state is still valid
 
@@ -24,6 +27,14 @@
       this triggers refresh rotation without a page reload. When both
       are invalid, the shell falls back cleanly to guest auth state.
 
+  Renewal-safe task submission (VAL-CROSS-111):
+    - The TaskRunner component uses fetchWithRenewal for task submission
+      and guards against duplicate submission during renewal retry.
+
+  Reattachment across reload/new-tab (VAL-CROSS-121):
+    - The TaskRunner checks for an in-flight task handle on mount
+      and reattaches instead of resubmitting.
+
   Data attributes for test targeting:
     data-shell               — root container
     data-shell-header        — top bar with app name, user, logout
@@ -37,6 +48,7 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
+  import TaskRunner from './TaskRunner.svelte';
 
   export let currentUser = null;
 
@@ -318,9 +330,9 @@
       </div>
     </section>
 
-    <section class="panel desktop-panel">
-      <h2>Desktop</h2>
-      <p class="desktop-placeholder">Placeholder desktop chrome — agents and tools will appear here.</p>
+    <section class="panel runtime-panel">
+      <h2>Runtime Prompt</h2>
+      <TaskRunner on:authexpired={() => dispatch('authexpired')} />
     </section>
   </main>
 </div>
@@ -490,12 +502,6 @@
   .status-text {
     font-size: 0.9rem;
     color: #c0c0c0;
-  }
-
-  /* ---- Desktop placeholder ---- */
-  .desktop-placeholder {
-    color: #555;
-    font-size: 0.9rem;
   }
 
   /* ---- Refresh row ---- */
