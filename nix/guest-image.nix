@@ -1,8 +1,7 @@
 # Firecracker guest image builder for go-choir Node B.
 #
 # This Nix expression builds the guest VM artifacts:
-#   - A Linux kernel suitable for Firecracker
-#   - An initramfs that loads ext4 and mounts the root filesystem
+#   - A Linux kernel with ext4 built-in (not as a module)
 #   - A root filesystem (ext4) containing the sandbox runtime
 #
 # The guest image includes ONLY the sandbox runtime binary and its
@@ -14,9 +13,32 @@
 { pkgs, goChoirPackages }:
 
 let
-  # The nixpkgs kernel to use for the guest. We use linux_6_1 because
-  # it is well-tested with Firecracker.
-  guestKernelPackage = pkgs.linuxKernel.kernels.linux_6_1;
+  # Custom kernel with ext4 built-in (not as a module).
+  # The standard nixpkgs kernel builds ext4 as a module, which means
+  # the guest can't mount its rootfs without an initrd. By building
+  # ext4 into the kernel, we avoid needing an initrd entirely.
+  guestKernelPackage = pkgs.linuxKernel.kernels.linux_6_1.override {
+    structuredExtraConfig = with pkgs.kernelPatches.config; {
+      EXT4_FS = yes;
+      JBD2 = yes;
+      MB CACHE = yes;  # mbcache - needed by ext4
+      CRC16 = yes;
+      NET = yes;
+      INET = yes;
+      NETDEVICES = yes;
+      VIRTIO_MMIO = yes;
+      VIRTIO_BLK = yes;
+      VIRTIO_NET = yes;
+      DEVTMPFS = yes;
+      DEVTMPFS_MOUNT = yes;
+      TTY = yes;
+      SERIAL_8250 = yes;
+      SERIAL_8250_CONSOLE = yes;
+      PROC_FS = yes;
+      SYSFS = yes;
+      TMPFS = yes;
+    };
+  };
 
   # Minimal guest root filesystem containing only the sandbox runtime.
   # This is the set of files that will be packed into the ext4 rootfs image.
@@ -117,68 +139,10 @@ let
     debugfs -w -f /tmp/debugfs-chmod.cmds $out
   '';
 
-  # Minimal initramfs that loads the ext4 kernel module and mounts
-  # the root filesystem. The nixpkgs kernel builds ext4 as a module,
-  # so we need an initrd to load it before mounting root.
-  #
-  # The initramfs init script:
-  # 1. Mounts /proc and /sys
-  # 2. Loads the ext4 module from the kernel modules directory
-  # 3. Mounts /dev/vda (the Firecracker rootfs drive) to /root
-  # 4. Switches root to /root and execs /bin/init
-  #
-  # No provider credentials are included (VAL-VM-011).
-  guestInitrd = pkgs.makeInitrdNG {
-    compressor = "gzip";
-    contents = let
-      # The init script for the initramfs. Loads ext4 module and
-      # switches root to the real rootfs on /dev/vda.
-      initScript = pkgs.writeShellScript "init" ''
-        export PATH=/bin
-
-        # Mount essential filesystems.
-        mount -t proc proc /proc
-        mount -t sysfs sysfs /sys
-        mount -t devtmpfs devtmpfs /dev
-
-        # Load kernel modules needed for ext4 root.
-        KVER=$(uname -r)
-        MODDIR=/lib/modules/$KVER/kernel/fs
-        if [ -d "$MODDIR" ]; then
-          # Load dependencies first, then ext4.
-          for mod in jbd2 ext4; do
-            modfile=$(find /lib/modules/$KVER -name "$mod.ko*" 2>/dev/null | head -1)
-            if [ -n "$modfile" ]; then
-              insmod "$modfile" 2>/dev/null || true
-            fi
-          done
-        fi
-
-        # Wait briefly for the block device to appear.
-        for i in 1 2 3 4 5 6 7 8 9 10; do
-          if [ -b /dev/vda ]; then
-            break
-          fi
-          sleep 0.2
-        done
-
-        # Mount the root filesystem.
-        mount -t ext4 -o rw /dev/vda /root
-
-        # Unmount initramfs filesystems before switch_root.
-        umount /proc /sys /dev 2>/dev/null || true
-
-        # Switch to the real root and exec init.
-        exec switch_root /root /bin/init
-      '';
-    in [
-      { source = initScript; symlink = "/init"; }
-    ];
-  };
-
   # Firecracker-compatible Linux kernel.
   # Firecracker requires an uncompressed ELF kernel (vmlinux).
-  # The nixpkgs kernel dev output contains vmlinux.
+  # The kernel dev output contains vmlinux.
+  # This kernel has ext4 built-in so no initrd is needed.
   guestKernel = guestKernelPackage.dev;
 
 in
@@ -189,23 +153,10 @@ in
   # The kernel vmlinux ELF binary for Firecracker.
   inherit guestKernel;
 
-  # The initramfs for loading ext4 module before root mount.
-  inherit guestInitrd;
-
-  # Convenience attribute that provides all artifacts together.
+  # Convenience attribute that provides artifacts together.
   guest-image = pkgs.runCommand "go-choir-guest-image" { } ''
     mkdir -p $out
     cp ${guestRootfs} $out/rootfs.ext4
     cp ${guestKernel}/vmlinux $out/vmlinux
-    cp -r ${guestInitrd}/ $out/initrd-files
-    # makeInitrdNG produces a directory; find the actual initrd file.
-    INITRD_FILE=$(find ${guestInitrd} -name '*.cpio*' -o -name initrd 2>/dev/null | head -1)
-    if [ -n "$INITRD_FILE" ]; then
-      cp "$INITRD_FILE" $out/initrd.cpio.gz
-    else
-      # If makeInitrdNG produces a single file, copy it.
-      cp -r ${guestInitrd}/* $out/
-      [ -f $out/initrd ] && mv $out/initrd $out/initrd.cpio.gz
-    fi
   '';
 }
