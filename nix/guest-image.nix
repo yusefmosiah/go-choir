@@ -162,7 +162,7 @@ let
     # Execute the sandbox binary (replaces init process).
     exec /bin/sandbox
   '';
-  }
+  };
 
   # Script to assemble the guest root filesystem directory tree.
   # Extracted into writeShellScript to avoid '' string parsing issues
