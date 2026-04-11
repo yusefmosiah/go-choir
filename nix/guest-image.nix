@@ -55,7 +55,12 @@ let
   # Guest init script — extracted into its own derivation to avoid
   # Nix parser ambiguity with '' indented strings containing bash
   # parameter-expansion patterns like ${param#vm_id=}.
-  guestInitScript = pkgs.writeShellScript "guest-init" ''
+  # Using writeTextFile with executable=true and explicit shebang to avoid
+  # the Nix store path shebang that writeShellScript adds (which breaks in guest).
+  guestInitScript = pkgs.writeTextFile {
+    name = "guest-init";
+    executable = true;
+    text = ''#!/bin/sh
     export PATH=/bin:/usr/bin
 
     # Mount essential virtual filesystems.
@@ -157,6 +162,7 @@ let
     # Execute the sandbox binary (replaces init process).
     exec /bin/sandbox
   '';
+  }
 
   # Script to assemble the guest root filesystem directory tree.
   # Extracted into writeShellScript to avoid '' string parsing issues
