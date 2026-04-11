@@ -1,0 +1,88 @@
+{
+  "milestone": "gateway-vm",
+  "round": 3,
+  "status": "fail",
+  "testedAt": "2026-04-11T22:16:00Z",
+  "assertionsSummary": {
+    "total": 4,
+    "passed": 0,
+    "failed": 4,
+    "blocked": 0
+  },
+  "passedAssertions": [],
+  "failedAssertions": [
+    {
+      "id": "VAL-VM-004",
+      "reason": "VM guest kernel panics during boot: 'VFS: Unable to mount root fs on unknown-block(0,0)'. Root cause: kernel config missing VIRTIO_MMIO_CMDLINE_DEVICES=y. Firecracker specifies virtio-mmio device via kernel cmdline (virtio_mmio.device=4K@0xc0001000:6) but kernel ignores it without this option, so /dev/vda is never created."
+    },
+    {
+      "id": "VAL-GATEWAY-001",
+      "reason": "End-to-end flow blocked: VM guest fails to boot (kernel panic). Gateway is healthy with Z.AI provider and ready to route, but no healthy VM guest to complete the path."
+    },
+    {
+      "id": "VAL-VM-007",
+      "reason": "Cannot test guest isolation: VM guest fails to boot due to kernel panic (missing VIRTIO_MMIO_CMDLINE_DEVICES=y). Guest never reaches running state."
+    },
+    {
+      "id": "VAL-VM-011",
+      "reason": "Cannot verify guest secret absence: VM guest fails to boot (kernel panic). Guest image design excludes provider credentials but cannot be verified without running VM."
+    }
+  ],
+  "blockedAssertions": [],
+  "skippedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/gateway-vm/user-testing/synthesis-round2.json",
+  "deploymentStatus": {
+    "nodeBCommit": "214b499 (Fix Firecracker guest health and networking)",
+    "servicesRunning": ["auth", "proxy", "gateway", "vmctl", "sandbox"],
+    "gatewayProvider": "zai",
+    "gatewayActiveIdentities": 13,
+    "vmctlActiveVMs": 0,
+    "vmGuestHealth": "kernel panic - cannot boot"
+  },
+  "rootCauseAnalysis": {
+    "issue": "Firecracker VM guest kernel panics during boot - cannot mount root filesystem",
+    "kernelPanicMessage": "VFS: Unable to mount root fs on unknown-block(0,0)",
+    "symptoms": [
+      "VM ownership created successfully in registry",
+      "Firecracker process starts but exits immediately after kernel panic",
+      "Health check connection refused on guest ports (9000, 9001, etc.)",
+      "Kernel has VIRTIO_MMIO=y, VIRTIO_BLK=y, but missing VIRTIO_MMIO_CMDLINE_DEVICES=y",
+      "Kernel sees virtio_mmio.device= parameters but doesn't create /dev/vda"
+    ],
+    "kernelConfigGap": {
+      "currentSettings": {
+        "EXT4_FS": "y",
+        "JBD2": "y",
+        "IP_PNP": "y",
+        "VIRTIO_MMIO": "y",
+        "VIRTIO_BLK": "y",
+        "VIRTIO_NET": "y"
+      },
+      "missingSetting": "VIRTIO_MMIO_CMDLINE_DEVICES=y",
+      "whyItMatters": "Firecracker uses kernel command line to specify virtio-mmio device addresses (virtio_mmio.device=4K@0xc0001000:6). Without VIRTIO_MMIO_CMDLINE_DEVICES, the kernel ignores these parameters and doesn't instantiate the block device."
+    },
+    "kernelBootArgs": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/bin/init guest_port=8085 persistent=/mnt/persistent vm_id=<vm-id> epoch=1 ip=172.1.0.2::172.1.0.1:255.255.255.252::eth0:off pci=off root=/dev/vda rw virtio_mmio.device=4K@0xc0001000:6 virtio_mmio.device=4K@0xc0002000:7",
+    "fixRequired": "Add VIRTIO_MMIO_CMDLINE_DEVICES = yes to nix/guest-image.nix kernel config, rebuild guest image (vmlinux), redeploy to Node B /var/lib/go-choir/guest/"
+  },
+  "progressSinceLastRound": {
+    "commit": "214b499 (Fix Firecracker guest health and networking)",
+    "improvements": [
+      "Kernel config fixed for init script, IP_PNP, networking utilities",
+      "iptables rules properly configured in vmmanager",
+      "Gateway token flow working (vmctl issues tokens to VMs)",
+      "VM ownership registry fully functional",
+      "Firecracker process starts successfully (but kernel panics immediately)"
+    ],
+    "remainingBlocker": "Kernel config missing VIRTIO_MMIO_CMDLINE_DEVICES=y prevents virtio-mmio block device from being created, causing kernel panic on root mount"
+  },
+  "notes": [
+    "Node B redeployed to commit 214b499 with 'Fix Firecracker guest health and networking'",
+    "All services running: auth, proxy, gateway (Z.AI provider with 13 identities), vmctl, sandbox",
+    "VM ownership registry works correctly - creates ownership records with proper sandbox URLs",
+    "Firecracker process starts but kernel panics immediately due to missing /dev/vda",
+    "Gateway is fully operational and ready to route - only blocked by VM guest health",
+    "Fix is straightforward: add single kernel config option and rebuild guest image",
+    "Once kernel boots successfully, all 4 assertions should be testable and likely pass"
+  ]
+}

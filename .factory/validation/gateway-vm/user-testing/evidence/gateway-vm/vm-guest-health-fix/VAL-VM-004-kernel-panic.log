@@ -1,0 +1,86 @@
+Apr 11 22:13:01 choiros-b vmctl[820845]: 2026/04/11 22:13:01 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:13:01 choiros-b vmctl[820845]: 2026/04/11 22:13:01 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:13:13 choiros-b vmctl[820845]: 2026/04/11 22:13:13 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:13:13 choiros-b vmctl[820845]: 2026/04/11 22:13:13 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:13:16 choiros-b vmctl[820845]: 2026/04/11 22:13:16 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:13:16 choiros-b vmctl[820845]: 2026/04/11 22:13:16 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:13:28 choiros-b vmctl[820845]: 2026/04/11 22:13:28 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:13:28 choiros-b vmctl[820845]: 2026/04/11 22:13:28 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:13:31 choiros-b vmctl[820845]: 2026/04/11 22:13:31 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:13:31 choiros-b vmctl[820845]: 2026/04/11 22:13:31 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:13:43 choiros-b vmctl[820845]: 2026/04/11 22:13:43 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:13:43 choiros-b vmctl[820845]: 2026/04/11 22:13:43 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:13:46 choiros-b vmctl[820845]: 2026/04/11 22:13:46 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:13:46 choiros-b vmctl[820845]: 2026/04/11 22:13:46 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:13:58 choiros-b vmctl[820845]: 2026/04/11 22:13:58 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:13:58 choiros-b vmctl[820845]: 2026/04/11 22:13:58 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:14:01 choiros-b vmctl[820845]: 2026/04/11 22:14:01 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:14:01 choiros-b vmctl[820845]: 2026/04/11 22:14:01 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:14:13 choiros-b vmctl[820845]: 2026/04/11 22:14:13 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:14:13 choiros-b vmctl[820845]: 2026/04/11 22:14:13 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:14:16 choiros-b vmctl[820845]: 2026/04/11 22:14:16 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:14:16 choiros-b vmctl[820845]: 2026/04/11 22:14:16 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:14:28 choiros-b vmctl[820845]: 2026/04/11 22:14:28 vmmanager: health check failed for VM vm-fe6af6dba08005ba002677da2f36cf5f at http://127.0.0.1:9002
+Apr 11 22:14:28 choiros-b vmctl[820845]: 2026/04/11 22:14:28 vmmanager: VM vm-fe6af6dba08005ba002677da2f36cf5f is unhealthy
+Apr 11 22:14:30 choiros-b vmctl[820845]: 2026/04/11 22:14:30 vmctl: received terminated, shutting down gracefully
+Apr 11 22:14:30 choiros-b vmctl[820845]: 2026/04/11 22:14:30 vmctl: server stopped
+Apr 11 22:14:30 choiros-b systemd[1]: Stopping go-choir VMCtl Service (Firecracker VM lifecycle)...
+Apr 11 22:14:31 choiros-b vmctl[820845]: 2026/04/11 22:14:31 vmmanager: health check failed for VM vm-99cba71296e4e1746aeac3e7040bebd0 at http://127.0.0.1:9001
+Apr 11 22:14:31 choiros-b vmctl[820845]: 2026/04/11 22:14:31 vmmanager: VM vm-99cba71296e4e1746aeac3e7040bebd0 is unhealthy
+Apr 11 22:14:31 choiros-b vmctl[820845]: 2026/04/11 22:14:31 vmmanager: stopped VM vm-fe6af6dba08005ba002677da2f36cf5f
+Apr 11 22:14:31 choiros-b vmctl[820845]: 2026/04/11 22:14:31 vmmanager: stopped VM vm-99cba71296e4e1746aeac3e7040bebd0
+Apr 11 22:14:31 choiros-b vmctl[820845]: 2026/04/11 22:14:31 vmmanager: stopped
+Apr 11 22:14:31 choiros-b systemd[1]: go-choir-vmctl.service: Deactivated successfully.
+--
+Apr 11 22:14:32 choiros-b vmctl[1480774]: 2026/04/11 22:14:32 vmctl: ownership registry initialized (sandbox_url_base=http://127.0.0.1:8085)
+Apr 11 22:14:32 choiros-b vmctl[1480774]: 2026/04/11 22:14:32 vmctl: starting server on 127.0.0.1:8083
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmctl: gateway token issue returned 201 for vm-37e40a561d218dcca62e5854c4d2ae63
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmmanager: could not load epoch for vm-37e40a561d218dcca62e5854c4d2ae63, starting at 1: open /var/lib/go-choir/vm-state/vm-37e40a561d218dcca62e5854c4d2ae63/epoch: no such file or directory
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmmanager: created tap device vm-vm-37e40-tap
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmmanager: booted VM vm-37e40a561d218dcca62e5854c4d2ae63 (host=http://127.0.0.1:9000 epoch=1)
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmctl: booted Firecracker VM vm-37e40a561d218dcca62e5854c4d2ae63 for user test-vm-health-12345 at http://127.0.0.1:9000 (epoch=1)
+Apr 11 22:16:36 choiros-b vmctl[1480774]: 2026/04/11 22:16:36 vmctl: assigned VM vm-37e40a561d218dcca62e5854c4d2ae63 to user test-vm-health-12345
+Apr 11 22:16:36 choiros-b vmctl[1481121]: 2026-04-11T22:16:36.607358790 [vm-37e40a561d218dcca62e5854c4d2ae63:main] Running Firecracker v1.14.2
+Apr 11 22:16:36 choiros-b vmctl[1481121]: 2026-04-11T22:16:36.627059722 [vm-37e40a561d218dcca62e5854c4d2ae63:main] Artificially kick devices
+Apr 11 22:16:36 choiros-b vmctl[1481121]: 2026-04-11T22:16:36.627074811 [vm-37e40a561d218dcca62e5854c4d2ae63:fc_vcpu 0] Received a VcpuEvent::Resume message with immediate_exit enabled. immediate_exit was disabled before proceeding
+--
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.168702] NetLabel:  unlabeled traffic allowed by default
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.169462] PCI: Using ACPI for IRQ routing
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.169680] PCI: System does not support PCI
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.170725] vgaarb: loaded
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.171065] clocksource: Switched to clocksource kvm-clock
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.181765] VFS: Disk quotas dquot_6.6.0
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.182355] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.183348] pnp: PnP ACPI init
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.183913] pnp: PnP ACPI: found 5 devices
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.186002] NET: Registered PF_INET protocol family
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.186769] IP idents hash table entries: 8192 (order: 4, 65536 bytes, linear)
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.189058] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+--
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.247340] RAS: Correctable Errors collector initialized.
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.248168] clk: Disabling unused clocks
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.248997] List of all partitions:
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.249318] No filesystem could mount root, tried:
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.249318]
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.249908] Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.250664] CPU: 1 PID: 1 Comm: swapper/0 Not tainted 6.1.167 #1-NixOS
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.251270] Call Trace:
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.251502]  <TASK>
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.251703]  dump_stack_lvl+0x43/0x5a
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.252040]  panic+0x119/0x2bc
+--
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.254750] Kernel Offset: disabled
+Apr 11 22:16:36 choiros-b vmctl[1481121]: [    0.255070] Rebooting in 1 seconds..
+Apr 11 22:16:37 choiros-b vmctl[1481121]: 2026-04-11T22:16:37.947061837 [vm-37e40a561d218dcca62e5854c4d2ae63:main] Vmm is stopping.
+Apr 11 22:16:37 choiros-b vmctl[1481121]: 2026-04-11T22:16:37.947291482 [vm-37e40a561d218dcca62e5854c4d2ae63:main] Vmm is stopping.
+Apr 11 22:16:37 choiros-b vmctl[1481121]: 2026-04-11T22:16:37.978701976 [vm-37e40a561d218dcca62e5854c4d2ae63:main] Firecracker exiting successfully. exit_code=0
+Apr 11 22:16:49 choiros-b vmctl[1480774]: 2026/04/11 22:16:49 vmmanager: health check failed for VM vm-37e40a561d218dcca62e5854c4d2ae63 at http://127.0.0.1:9000
+Apr 11 22:16:49 choiros-b vmctl[1480774]: 2026/04/11 22:16:49 vmmanager: VM vm-37e40a561d218dcca62e5854c4d2ae63 is unhealthy
+Apr 11 22:17:05 choiros-b vmctl[1480774]: 2026/04/11 22:17:05 vmmanager: health check failed for VM vm-37e40a561d218dcca62e5854c4d2ae63 at http://127.0.0.1:9000
+Apr 11 22:17:05 choiros-b vmctl[1480774]: 2026/04/11 22:17:05 vmmanager: VM vm-37e40a561d218dcca62e5854c4d2ae63 is unhealthy
+Apr 11 22:17:20 choiros-b vmctl[1480774]: 2026/04/11 22:17:20 vmmanager: health check failed for VM vm-37e40a561d218dcca62e5854c4d2ae63 at http://127.0.0.1:9000
+Apr 11 22:17:20 choiros-b vmctl[1480774]: 2026/04/11 22:17:20 vmmanager: VM vm-37e40a561d218dcca62e5854c4d2ae63 is unhealthy
+Apr 11 22:17:35 choiros-b vmctl[1480774]: 2026/04/11 22:17:35 vmmanager: health check failed for VM vm-37e40a561d218dcca62e5854c4d2ae63 at http://127.0.0.1:9000
+Apr 11 22:17:35 choiros-b vmctl[1480774]: 2026/04/11 22:17:35 vmmanager: VM vm-37e40a561d218dcca62e5854c4d2ae63 is unhealthy
+Apr 11 22:17:50 choiros-b vmctl[1480774]: 2026/04/11 22:17:50 vmmanager: health check failed for VM vm-37e40a561d218dcca62e5854c4d2ae63 at http://127.0.0.1:9000
+Apr 11 22:17:50 choiros-b vmctl[1480774]: 2026/04/11 22:17:50 vmmanager: VM vm-37e40a561d218dcca62e5854c4d2ae63 is unhealthy

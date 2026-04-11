@@ -1,13 +1,12 @@
 {
   "groupId": "gateway-e2e",
-  "testedAt": "2026-04-11T20:03:30Z",
+  "testedAt": "2026-04-11T21:45:00Z",
   "isolation": {
-    "sessionId": "86f2369e5855",
-    "testUser": "gateway-e2e-86f2369e5855",
-    "userId": "53f4de37-de6e-43a5-954d-22439d71ce4f",
-    "targetOrigin": "https://draft.choir-ip.com"
+    "targetOrigin": "https://draft.choir-ip.com",
+    "browserSession": "gateway-e2e-headed",
+    "testUser": "gateway-e2e-1775943746786-jnbhi3"
   },
-  "toolsUsed": ["agent-browser", "playwright", "curl"],
+  "toolsUsed": ["agent-browser", "playwright", "curl", "ssh"],
   "assertions": [
     {
       "id": "VAL-GATEWAY-001",
@@ -15,77 +14,96 @@
       "status": "blocked",
       "steps": [
         {
-          "action": "Register test user via WebAuthn using Playwright virtual authenticator",
-          "expected": "User registered and authenticated session established",
-          "observed": "Successfully registered user 'gateway-e2e-86f2369e5855' with userId '53f4de37-de6e-43a5-954d-22439d71ce4f'"
+          "action": "Navigate to https://draft.choir-ip.com",
+          "expected": "Page loads with auth UI",
+          "observed": "Page loaded successfully with auth entry UI (Register/Sign In buttons visible)"
         },
         {
-          "action": "Navigate to deployed origin with auth cookies",
-          "expected": "Authenticated shell displayed with prompt interface",
-          "observed": "Reached authenticated shell with 'Ask the runtime...' prompt textbox and launcher button"
+          "action": "Set up virtual WebAuthn authenticator via Playwright CDP",
+          "expected": "Virtual authenticator ready for passkey registration",
+          "observed": "Virtual authenticator created successfully with authenticatorId"
         },
         {
-          "action": "Submit prompt through shell UI",
-          "expected": "Task submitted to /api/agent/task and processed through gateway",
-          "observed": "POST /api/agent/task returned task_id '2fac2458-2361-4b88-ba42-f999085e76ef'"
+          "action": "Register new user with passkey via /auth/register/begin + /auth/register/finish",
+          "expected": "Passkey registration completes successfully",
+          "observed": "Registration successful - user gateway-e2e-1775943746786-jnbhi3 created and session authenticated"
         },
         {
-          "action": "Monitor network traffic for direct provider calls",
-          "expected": "All traffic stays within draft.choir-ip.com origin, no direct browser→provider calls",
-          "observed": "All requests to draft.choir-ip.com: /api/agent/task, /api/events, /api/agent/status. No requests to bedrock.amazonaws.com, api.z.ai, or other provider origins."
+          "action": "Verify authenticated session via /auth/session",
+          "expected": "Session shows authenticated: true with user identity",
+          "observed": "Session confirmed authenticated with user identity"
         },
         {
-          "action": "Verify task completion through same-origin response path",
-          "expected": "Response returned through gateway → runtime → proxy → UI",
-          "observed": "Task status returned 'completed' with result through /api/agent/status endpoint on same origin"
+          "action": "Reload to reach authenticated shell with prompt input",
+          "expected": "Shell UI loads with task runner and prompt input visible",
+          "observed": "Shell UI partially loaded but shows 'Loading...' state - proxy cannot establish WebSocket to sandbox"
+        },
+        {
+          "action": "Submit runtime prompt through proxy to gateway to Z.AI provider",
+          "expected": "Task submission returns stable handle, flows through gateway to Z.AI provider",
+          "observed": "Cannot complete - proxy WebSocket connection to sandbox times out at 127.0.0.1:9000/9001"
         }
       ],
       "evidence": {
         "screenshots": [
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-initial-page.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-authenticated-shell.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-after-cookie-reload.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-prompt-response.png"
+          "gateway-vm/gateway-e2e/01-initial-page.png",
+          "gateway-vm/gateway-e2e/02-after-register-click.png",
+          "gateway-vm/gateway-e2e/03-passkey-status.png",
+          "gateway-vm/gateway-e2e/04-signin-clicked.png",
+          "gateway-vm/gateway-e2e/05-passkey-signin.png",
+          "gateway-vm/gateway-e2e/06-headed-initial.png",
+          "gateway-vm/gateway-e2e/07-playwright-initial.png",
+          "gateway-vm/gateway-e2e/08-playwright-registered.png"
         ],
-        "consoleErrors": "[error] Failed to load resource: the server responded with a status of 502 () - occurred during initial prompt submission attempt",
+        "consoleErrors": "none",
         "network": [
-          "POST https://draft.choir-ip.com/api/agent/task -> 200 (task_id: 2fac2458-2361-4b88-ba42-f999085e76ef)",
-          "GET https://draft.choir-ip.com/api/events -> EventSource connection established",
-          "GET https://draft.choir-ip.com/api/agent/status?task_id=2fac2458-2361-4b88-ba42-f999085e76ef -> 200 (state: completed)",
-          "No requests to external provider endpoints (bedrock.amazonaws.com, api.z.ai, etc.)"
+          "POST https://draft.choir-ip.com/auth/register/begin -> 200 (WebAuthn creation options)",
+          "POST https://draft.choir-ip.com/auth/register/finish -> 200 (session cookie set)",
+          "GET https://draft.choir-ip.com/auth/session -> 200 (authenticated: true)"
         ],
-        "taskIds": ["ac29d857-5950-41ea-8fe5-8522a9df769e", "2fac2458-2361-4b88-ba42-f999085e76ef"],
-        "correlationKey": "user:53f4de37-de6e-43a5-954d-22439d71ce4f -> sandbox:sandbox-m1 -> task:2fac2458-2361-4b88-ba42-f999085e76ef"
+        "gatewayHealth": {
+          "status": "ok",
+          "service": "gateway",
+          "provider": "zai",
+          "active_identities": 13,
+          "rate_limit_max_requests": 60,
+          "rate_limit_window_ms": 60000
+        },
+        "proxyLogs": [
+          "proxy WS: dial sandbox ws://127.0.0.1:9000/api/ws: dial tcp 127.0.0.1:9000: i/o timeout",
+          "proxy WS: dial sandbox ws://127.0.0.1:9001/api/ws: dial tcp 127.0.0.1:9001: i/o timeout"
+        ],
+        "sandboxHealth": {
+          "status": "degraded",
+          "service": "sandbox",
+          "sandbox_id": "sandbox-dev",
+          "runtime_health": "degraded",
+          "active_provider": "stub"
+        }
       },
-      "issues": "Gateway provider integration is not yet complete. The runtime returns stub responses 'Task completed successfully (stub provider)' rather than routing through Bedrock/Z.AI. The path login → proxy → runtime → UI is working, but the gateway → provider segment returns stub responses. This is expected as the gateway milestone is still in progress."
+      "issues": "End-to-end flow blocked: Proxy cannot establish WebSocket connection to sandbox at 127.0.0.1:9000/9001 (connection timeout). Gateway confirmed healthy with Z.AI provider, but proxy routing to sandbox is failing. Shell bootstrap requires working sandbox WebSocket for live channel."
     }
   ],
   "frictions": [
     {
-      "description": "WebAuthn virtual authenticator requires Playwright CDP, not available directly in agent-browser",
+      "description": "WebAuthn passkey registration requires Playwright with virtual authenticator - standard agent-browser cannot complete WebAuthn ceremony",
       "resolved": true,
-      "resolution": "Used Playwright for WebAuthn registration, then transferred cookies to agent-browser for UI testing",
+      "resolution": "Used Playwright with CDP virtual authenticator (WebAuthn.addVirtualAuthenticator) to automate passkey registration",
       "affectedAssertions": ["VAL-GATEWAY-001"]
     },
     {
-      "description": "Auth cookies expired quickly during browser session, causing repeated sign-outs",
-      "resolved": true,
-      "resolution": "Used curl with explicit cookie headers for API verification after browser session expired",
-      "affectedAssertions": ["VAL-GATEWAY-001"]
-    },
-    {
-      "description": "Runtime returns stub provider responses instead of real Bedrock/Z.AI responses",
+      "description": "Shell bootstrap requires WebSocket connection to sandbox via proxy, but proxy times out connecting to 127.0.0.1:9000/9001",
       "resolved": false,
-      "resolution": "Pending gateway milestone completion - the routing path is established but provider integration is stubbed",
+      "resolution": null,
       "affectedAssertions": ["VAL-GATEWAY-001"]
     }
   ],
   "blockers": [
     {
-      "description": "Gateway provider integration is incomplete - runtime returns stub responses 'Task completed successfully (stub provider)' rather than routing to Bedrock or Z.AI. The proxy health shows 'vmctl_routing: enabled' but sandbox is still 'sandbox-m1' (placeholder) rather than a VM with real gateway access.",
+      "description": "Proxy cannot establish WebSocket connection to sandbox at 127.0.0.1:9000/9001 - connection times out. Proxy logs show repeated 'dial tcp 127.0.0.1:9000: i/o timeout' errors. This prevents shell bootstrap and live channel establishment.",
       "affectedAssertions": ["VAL-GATEWAY-001"],
-      "quickFixAttempted": "Verified the path login → proxy → runtime → UI works correctly. The missing piece is gateway → provider integration which is scheduled for the gateway milestone."
+      "quickFixAttempted": "Verified sandbox process running (PID 812303), but it's not accepting connections on expected ports. Checked fallback sandbox at port 8085 - running in degraded mode with stub provider. Gateway confirmed healthy with Z.AI provider at port 8084."
     }
   ],
-  "summary": "Tested VAL-GATEWAY-001: The authenticated prompt flow through login → proxy → runtime → UI is working correctly with all network traffic staying within draft.choir-ip.com origin (no direct provider calls from browser). However, the gateway → Bedrock/Z.AI segment is not yet integrated - the runtime returns stub responses. The assertion is BLOCKED pending completion of the gateway provider integration milestone."
+  "summary": "Gateway service confirmed healthy with Z.AI provider (13 active identities). Auth flow working correctly - passkey registration, session management all functional. However, end-to-end flow blocked by proxy/sandbox WebSocket connection failure. Proxy attempts to dial sandbox at 127.0.0.1:9000/9001 but times out, preventing shell bootstrap and runtime task submission. The infrastructure for VM routing or host-process fallback is not fully operational despite gateway being ready for Z.AI provider calls."
 }

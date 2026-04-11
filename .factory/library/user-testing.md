@@ -137,6 +137,25 @@ Do not rely on local direct-port browser flows for acceptance.
 - `ssh node-b "ls -la /var/lib/go-choir/vms/"` - VM image directory
 - Guest inspection requires VM boot completion and SSH into guest (if available)
 
+**Debugging VM guest health issues:**
+If VM health checks fail, check for kernel panic:
+```bash
+ssh node-b "journalctl -u go-choir-vmctl --since '5 minutes ago' --no-pager"
+```
+Common issues:
+- **Kernel panic "VFS: Unable to mount root fs on unknown-block(0,0)"**: Missing `VIRTIO_MMIO_CMDLINE_DEVICES=y` in kernel config. Firecracker specifies virtio-mmio device via kernel cmdline but kernel ignores it without this option.
+- **No /dev/vda created**: Same root cause - virtio-mmio block device not instantiated
+- Check kernel boot args in vmctl logs for `virtio_mmio.device=4K@0xc0001000:6`
+
+**Kernel config requirements for Firecracker:**
+Required options in `nix/guest-image.nix`:
+- `VIRTIO_MMIO = yes` (base virtio-mmio support)
+- `VIRTIO_MMIO_CMDLINE_DEVICES = yes` (REQUIRED for cmdline device spec)
+- `VIRTIO_BLK = yes` (block device support)
+- `VIRTIO_NET = yes` (network device support)
+- `EXT4_FS = yes` (root filesystem)
+- `IP_PNP = yes` (IP autoconfiguration)
+
 ## Notes
 
 - Browser validations must prove the frontend uses same-origin cookies only; no bearer-token injection, `localhost`, or direct service ports
