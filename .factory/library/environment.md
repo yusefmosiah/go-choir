@@ -45,7 +45,11 @@ Environment variables, external dependencies, and setup notes.
 - Error responses from providers are sanitized: raw response bodies are never included in error messages to avoid leaking credentials or provider details
 
 ### VM runtime
-- expect Firecracker/vmctl env vars for image paths, kernel paths, ownership registry storage, and lifecycle settings once the VM milestone lands
+- `VMCTL_PORT` — vmctl service listen port (default: `8083`)
+- `VMCTL_SANDBOX_URL_BASE` — base URL for sandbox runtimes assigned to VMs (default: `http://127.0.0.1:8085`)
+- `PROXY_VMCTL_URL` — when set, the proxy resolves user VM ownership through vmctl instead of using the static `PROXY_SANDBOX_URL` (VAL-VM-001, VAL-VM-002)
+- vmctl control endpoints live under `/internal/vmctl/*` and are internal-only (VAL-VM-012)
+- expect additional Firecracker env vars for image paths, kernel paths, and lifecycle settings once the VM milestone lands
 
 ### Route invariants
 These browser-facing routes remain the stable contract:

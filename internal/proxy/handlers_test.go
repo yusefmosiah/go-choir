@@ -16,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/yusefmosiah/go-choir/internal/vmctl"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -2048,5 +2049,351 @@ func TestProviderRouteDeniedWithAuth(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want %d (even with auth)", w.Code, http.StatusForbidden)
+	}
+}
+
+// --- VAL-VM-001, VAL-VM-002: vmctl-backed routing tests ---
+
+// testVMctlProxyEnv sets up a proxy Handler with a vmctl service backend,
+// a fake sandbox backend, and Ed25519 key material. Returns the handler,
+// signing key, sandbox server, and vmctl test server.
+func testVMctlProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Server, *httptest.Server) {
+	t.Helper()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+
+	// Create a fake sandbox backend.
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/shell/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		user := r.Header.Get("X-Authenticated-User")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"sandbox_id":  "sandbox-vmctl-test",
+			"user":        user,
+			"bootstrap":   "vm-routed",
+			"path":        r.URL.Path,
+		})
+	})
+	sandboxMux.HandleFunc("/api/agent/task", func(w http.ResponseWriter, r *http.Request) {
+		user := r.Header.Get("X-Authenticated-User")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"task_id":  "task-123",
+			"owner_id": user,
+			"state":    "accepted",
+		})
+	})
+	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	sandboxServer := httptest.NewServer(sandboxMux)
+	t.Cleanup(func() { sandboxServer.Close() })
+
+	// Create a vmctl service.
+	reg := vmctl.NewOwnershipRegistry(sandboxServer.URL)
+	vmctlHandler := vmctl.NewHandler(reg)
+
+	vmctlMux := http.NewServeMux()
+	vmctlMux.HandleFunc("/internal/vmctl/resolve", vmctlHandler.HandleResolve)
+	vmctlMux.HandleFunc("/internal/vmctl/lookup", vmctlHandler.HandleLookup)
+	vmctlMux.HandleFunc("/internal/vmctl/list", vmctlHandler.HandleList)
+
+	vmctlServer := httptest.NewServer(vmctlMux)
+	t.Cleanup(func() { vmctlServer.Close() })
+
+	// Create proxy config with vmctl routing enabled.
+	cfg := &Config{
+		Port:              "0",
+		SandboxURL:        sandboxServer.URL,
+		AuthPublicKeyPath: "/unused/in/test",
+		VmctlURL:          vmctlServer.URL,
+	}
+
+	if !cfg.VmctlRoutingEnabled() {
+		t.Fatal("expected vmctl routing to be enabled")
+	}
+
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler with vmctl: %v", err)
+	}
+
+	return handler, priv, sandboxServer, vmctlServer
+}
+
+// TestVMctlRouting_BootstrapRoutesThroughVM tests that protected bootstrap
+// routes resolve through vmctl ownership (VAL-VM-001, VAL-VM-002).
+func TestVMctlRouting_BootstrapRoutesThroughVM(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+	_ = vmctlSrv
+
+	accessToken := issueTestAccessJWT(priv, "user-vm-1")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req.Header.Set("Cookie", "choir_access="+accessToken)
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+
+	// The sandbox should have received the user context.
+	if result["user"] != "user-vm-1" {
+		t.Errorf("expected user user-vm-1, got %v", result["user"])
+	}
+	if result["bootstrap"] != "vm-routed" {
+		t.Errorf("expected vm-routed bootstrap, got %v", result["bootstrap"])
+	}
+}
+
+// TestVMctlRouting_DifferentUsersGetDifferentVMs tests that different users
+// receive distinct VMs (VAL-VM-005, VAL-CROSS-113).
+func TestVMctlRouting_DifferentUsersGetDifferentVMs(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+	_ = vmctlSrv
+
+	user1Token := issueTestAccessJWT(priv, "alice")
+	user2Token := issueTestAccessJWT(priv, "bob")
+
+	// User 1 request.
+	req1 := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req1.Header.Set("Cookie", "choir_access="+user1Token)
+	w1 := httptest.NewRecorder()
+	handler.HandleBootstrap(w1, req1)
+
+	// User 2 request.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req2.Header.Set("Cookie", "choir_access="+user2Token)
+	w2 := httptest.NewRecorder()
+	handler.HandleBootstrap(w2, req2)
+
+	if w1.Code != http.StatusOK || w2.Code != http.StatusOK {
+		t.Fatalf("expected both 200, got %d and %d", w1.Code, w2.Code)
+	}
+
+	// Verify the vmctl registry created distinct VMs for each user.
+	client := vmctl.NewClient(vmctlSrv.URL)
+	lookup1, _ := client.Lookup("alice")
+	lookup2, _ := client.Lookup("bob")
+
+	if lookup1 == nil || lookup2 == nil {
+		t.Fatal("expected both users to have VM ownership")
+	}
+	if lookup1.VMID == lookup2.VMID {
+		t.Error("expected different VM IDs for different users (VAL-VM-005)")
+	}
+}
+
+// TestVMctlRouting_InvalidAuthDeniedBeforeVMSideEffects tests that invalid
+// auth is denied before VM ownership changes or runtime side effects
+// (VAL-CROSS-110).
+func TestVMctlRouting_InvalidAuthDeniedBeforeVMSideEffects(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+	_ = vmctlSrv
+
+	// Issue a token then expire it.
+	expiredToken := issueTestAccessJWTWithTTL(priv, "user-would-be", -1*time.Minute)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req.Header.Set("Cookie", "choir_access="+expiredToken)
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for expired token, got %d", w.Code)
+	}
+
+	// The user should NOT have a VM assignment since auth was denied
+	// before the resolve step (VAL-CROSS-110).
+	client := vmctl.NewClient(vmctlSrv.URL)
+	lookup, _ := client.Lookup("user-would-be")
+	if lookup != nil {
+		t.Error("expected no VM assignment when auth is denied (VAL-CROSS-110)")
+	}
+}
+
+// TestVMctlRouting_SameUserPinnedToSameVM tests that repeated requests
+// from the same user stay pinned to the same VM (VAL-VM-003).
+func TestVMctlRouting_SameUserPinnedToSameVM(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+	_ = vmctlSrv
+
+	accessToken := issueTestAccessJWT(priv, "user-pinned")
+
+	// Make two requests.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+		req.Header.Set("Cookie", "choir_access="+accessToken)
+		w := httptest.NewRecorder()
+		handler.HandleBootstrap(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i+1, w.Code)
+		}
+	}
+
+	// Should still have exactly one VM for this user.
+	client := vmctl.NewClient(vmctlSrv.URL)
+	lookup, _ := client.Lookup("user-pinned")
+	if lookup == nil {
+		t.Fatal("expected user to have a VM")
+	}
+	// The VM ID should be stable.
+	vmID := lookup.VMID
+
+	// Make another request and verify the VM hasn't changed.
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req.Header.Set("Cookie", "choir_access="+accessToken)
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	lookup2, _ := client.Lookup("user-pinned")
+	if lookup2.VMID != vmID {
+		t.Errorf("expected pinned VM %s, got %s (VAL-VM-003)", vmID, lookup2.VMID)
+	}
+}
+
+// TestVMctlRouting_ProtectedAPIThroughVM tests that runtime API routes also
+// resolve through vmctl ownership (VAL-VM-002).
+func TestVMctlRouting_ProtectedAPIThroughVM(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+	_ = vmctlSrv
+
+	accessToken := issueTestAccessJWT(priv, "user-runtime")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/task", strings.NewReader(`{"prompt":"test"}`))
+	req.Header.Set("Cookie", "choir_access="+accessToken)
+	w := httptest.NewRecorder()
+	handler.HandleProtectedAPI(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["owner_id"] != "user-runtime" {
+		t.Errorf("expected owner_id user-runtime, got %v", result["owner_id"])
+	}
+}
+
+// TestVMctlDeny_PublicVMctlBlocked tests that /internal/vmctl/* routes are
+// denied to browser callers (VAL-VM-012).
+func TestVMctlDeny_PublicVMctlBlocked(t *testing.T) {
+	handler, _, _, _ := testVMctlProxyEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/vmctl/resolve", nil)
+	w := httptest.NewRecorder()
+	handler.HandleVMctlDeny(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Code)
+	}
+
+	var result errorResponse
+	json.NewDecoder(w.Body).Decode(&result)
+	if !strings.Contains(result.Error, "not publicly accessible") {
+		t.Errorf("expected public denial message, got: %s", result.Error)
+	}
+}
+
+// TestVMctlRouting_HealthReportsVMctlStatus tests that proxy health includes
+// vmctl routing status when enabled.
+func TestVMctlRouting_HealthReportsVMctlStatus(t *testing.T) {
+	handler, _, _, _ := testVMctlProxyEnv(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	handler.HandleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var result proxyHealthResponse
+	json.NewDecoder(w.Body).Decode(&result)
+	if result.VMctlRouting != "enabled" {
+		t.Errorf("expected vmctl_routing=enabled, got %s", result.VMctlRouting)
+	}
+	if result.VMctlURL == "" {
+		t.Error("expected non-empty vmctl_url")
+	}
+}
+
+// TestVMctlRouting_GracefulDegradation tests that when vmctl is unreachable,
+// the proxy falls back to the static sandbox URL.
+func TestVMctlRouting_GracefulDegradation(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Create a sandbox backend.
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/shell/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		user := r.Header.Get("X-Authenticated-User")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"sandbox_id": "sandbox-fallback",
+			"user":       user,
+		})
+	})
+	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+	sandboxServer := httptest.NewServer(sandboxMux)
+	t.Cleanup(func() { sandboxServer.Close() })
+
+	// Create proxy pointing at an unreachable vmctl.
+	cfg := &Config{
+		Port:              "0",
+		SandboxURL:        sandboxServer.URL,
+		AuthPublicKeyPath: "/unused",
+		VmctlURL:          "http://127.0.0.1:1", // unreachable port
+	}
+
+	handler, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	accessToken := issueTestAccessJWT(priv, "user-fallback")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap", nil)
+	req.Header.Set("Cookie", "choir_access="+accessToken)
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	// Should still succeed by falling back to static sandbox URL.
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with fallback, got %d", w.Code)
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["sandbox_id"] != "sandbox-fallback" {
+		t.Errorf("expected fallback sandbox, got %v", result["sandbox_id"])
+	}
+}
+
+// TestConfig_VmctlRoutingEnabled tests the vmctl routing config flag.
+func TestConfig_VmctlRoutingEnabled(t *testing.T) {
+	cfg1 := &Config{VmctlURL: "http://localhost:8083"}
+	if !cfg1.VmctlRoutingEnabled() {
+		t.Error("expected vmctl routing enabled when URL is set")
+	}
+
+	cfg2 := &Config{VmctlURL: ""}
+	if cfg2.VmctlRoutingEnabled() {
+		t.Error("expected vmctl routing disabled when URL is empty")
 	}
 }

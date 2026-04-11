@@ -18,14 +18,14 @@ services:
     depends_on: []
 
   proxy:
-    start: PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" go run ./cmd/proxy
+    start: PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" PROXY_VMCTL_URL="http://127.0.0.1:8083" go run ./cmd/proxy
     stop: lsof -ti :8082 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://127.0.0.1:8082/health
     port: 8082
-    depends_on: [auth, sandbox]
+    depends_on: [auth, sandbox, vmctl]
 
   vmctl:
-    start: VMCTL_PORT=8083 go run ./cmd/vmctl
+    start: VMCTL_PORT=8083 VMCTL_SANDBOX_URL_BASE="http://127.0.0.1:8085" go run ./cmd/vmctl
     stop: lsof -ti :8083 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://127.0.0.1:8083/health
     port: 8083

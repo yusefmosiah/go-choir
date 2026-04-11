@@ -19,12 +19,19 @@ type Config struct {
 	// Port is the TCP port the proxy service listens on.
 	Port string
 
-	// SandboxURL is the base URL of the hardcoded placeholder sandbox upstream.
+	// SandboxURL is the base URL of the fallback sandbox upstream, used when
+	// vmctl routing is not configured. When vmctl is configured, this is only
+	// used as the vmctl sandbox URL base parameter.
 	SandboxURL string
 
 	// AuthPublicKeyPath is the path to the Ed25519 public key used to verify
 	// auth-issued access JWTs.
 	AuthPublicKeyPath string
+
+	// VmctlURL is the base URL of the vmctl service. When set, the proxy
+	// resolves user VM ownership through vmctl instead of using the static
+	// SandboxURL (VAL-VM-001, VAL-VM-002).
+	VmctlURL string
 }
 
 const (
@@ -50,6 +57,7 @@ func LoadConfig() (*Config, error) {
 		Port:             envOr("PROXY_PORT", DefaultProxyPort),
 		SandboxURL:       envOr("PROXY_SANDBOX_URL", DefaultSandboxURL),
 		AuthPublicKeyPath: envOr("PROXY_AUTH_PUBLIC_KEY_PATH", DefaultAuthPublicKeyPath),
+		VmctlURL:         os.Getenv("PROXY_VMCTL_URL"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -81,6 +89,13 @@ func (c *Config) EnsureDirs() error {
 		}
 	}
 	return nil
+}
+
+// VmctlRoutingEnabled returns true when vmctl-backed routing is configured.
+// When true, protected routes resolve through vmctl ownership rather than
+// falling back to the static host sandbox URL (VAL-VM-002).
+func (c *Config) VmctlRoutingEnabled() bool {
+	return c.VmctlURL != ""
 }
 
 // LoadAuthPublicKey loads the Ed25519 public key from the configured path.
