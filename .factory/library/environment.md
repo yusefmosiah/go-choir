@@ -48,6 +48,12 @@ Environment variables, external dependencies, and setup notes.
 - On Node B, provider credentials are injected via an EnvironmentFile at `/var/lib/go-choir/gateway-provider.env` which is created by the deploy helper script and never committed to git or the Nix store
 - Error responses from providers are sanitized: raw response bodies are never included in error messages to avoid leaking credentials or provider details
 
+### Gateway routing (sandbox → gateway)
+- `RUNTIME_GATEWAY_URL` — when set, the sandbox runtime routes LLM calls through the host-side gateway instead of resolving providers directly. This is the primary signal that the sandbox should use the gateway path. Falls back to checking `PROXY_VMCTL_URL` if not set.
+- `RUNTIME_GATEWAY_TOKEN` — the sandbox credential token used to authenticate to the gateway. Issued by the gateway's identity registry and communicated to the sandbox out-of-band (e.g., via VM bootstrap material).
+- When `RUNTIME_GATEWAY_URL` (or `PROXY_VMCTL_URL`) is set, the sandbox creates a `GatewayBridgeProvider` that delegates all LLM calls through the `GatewayClient`, ensuring provider credentials stay host-side (VAL-GATEWAY-001, VAL-GATEWAY-004).
+- When no gateway URL is configured, the sandbox falls back to direct provider resolution via `ResolveProvider()` (Bedrock, Z.AI, Fireworks, or stub).
+
 ### VM runtime
 - `VMCTL_PORT` — vmctl service listen port (default: `8083`)
 - `VMCTL_SANDBOX_URL_BASE` — base URL for sandbox runtimes assigned to VMs (default: `http://127.0.0.1:8085`)

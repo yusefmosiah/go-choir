@@ -298,6 +298,141 @@ func convertRawMessages(raw []json.RawMessage) []Message {
 	return out
 }
 
+// GatewayBridgeProvider adapts the gateway.GatewayClient to both the
+// runtime.Provider and runtime.ToolLoopProvider interfaces. When the
+// sandbox runtime is configured with a gateway URL (PROXY_VMCTL_URL /
+// RUNTIME_GATEWAY_URL), LLM calls route through the host-side gateway
+// instead of resolving providers directly. This ensures provider
+// credentials stay host-side and sandbox processes never touch them
+// directly (VAL-GATEWAY-001, VAL-GATEWAY-004).
+//
+// The GatewayBridgeProvider delegates all LLM calls to the underlying
+// gateway.GatewayClient, which authenticates to the gateway using a
+// sandbox credential token.
+type GatewayBridgeProvider struct {
+	client GatewayCaller
+}
+
+// GatewayCaller is the interface satisfied by gateway.GatewayClient.
+// Extracted as a minimal interface so the provider package does not
+// import the gateway package directly (avoiding potential circular
+// dependencies).
+type GatewayCaller interface {
+	// Name returns the provider name for observability.
+	Name() string
+	// IsReal returns true because the gateway routes to real upstream providers.
+	IsReal() bool
+	// Call sends the LLM request through the gateway.
+	Call(ctx context.Context, req LLMRequest) (*LLMResponse, error)
+}
+
+// NewGatewayBridgeProvider creates a GatewayBridgeProvider from a
+// GatewayCaller. The caller must be non-nil.
+func NewGatewayBridgeProvider(client GatewayCaller) *GatewayBridgeProvider {
+	if client == nil {
+		panic("gateway bridge provider requires a non-nil client")
+	}
+	return &GatewayBridgeProvider{client: client}
+}
+
+// ProviderName returns the underlying gateway client name for observability.
+func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
+
+// Execute implements the runtime.Provider interface. It translates the
+// task prompt into an LLM request and routes it through the gateway.
+func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit runtime.EventEmitFunc) error {
+	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"gateway","routed":true}`))
+
+	req := LLMRequest{
+		Model:  "",
+		System: "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully.",
+		Messages: []Message{
+			{Role: "user", Content: []Block{{Type: "text", Text: task.Prompt}}},
+		},
+		MaxTokens: 4096,
+		Stream:    false,
+	}
+
+	log.Printf("gateway-bridge: calling gateway for task %s (prompt_len=%d)", task.TaskID, len(task.Prompt))
+
+	resp, err := g.client.Call(ctx, req)
+	if err != nil {
+		failPayload, _ := json.Marshal(map[string]string{
+			"status":   "failed",
+			"provider": "gateway",
+			"routed":   "true",
+			"error":    err.Error(),
+		})
+		emit(types.EventTaskProgress, "execution", failPayload)
+		return fmt.Errorf("gateway call failed: %w", err)
+	}
+
+	progressPayload, _ := json.Marshal(map[string]string{
+		"status":       "responded",
+		"provider":     resp.ProviderName,
+		"routed":       "true",
+		"model":        resp.Model,
+		"stop_reason":  resp.StopReason,
+		"tokens_in":    fmt.Sprintf("%d", resp.Usage.InputTokens),
+		"tokens_out":   fmt.Sprintf("%d", resp.Usage.OutputTokens),
+	})
+	emit(types.EventTaskProgress, "execution", progressPayload)
+
+	deltaPayload, _ := json.Marshal(map[string]string{
+		"text":     resp.Text,
+		"provider": resp.ProviderName,
+		"routed":   "true",
+	})
+	emit(types.EventTaskDelta, "execution", deltaPayload)
+
+	task.Result = resp.Text
+
+	log.Printf("gateway-bridge: gateway completed for task %s (provider=%s tokens=%d+%d text_len=%d)",
+		task.TaskID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
+
+	return nil
+}
+
+// CallWithTools implements the runtime.ToolLoopProvider interface.
+// It translates the tool-loop request into a gateway LLM request and
+// returns a response that may contain tool calls.
+func (g *GatewayBridgeProvider) CallWithTools(ctx context.Context, req runtime.ToolLoopRequest) (*runtime.ToolLoopResponse, error) {
+	llmReq := LLMRequest{
+		Model:     "",
+		System:    req.System,
+		Messages:  convertRawMessages(req.Messages),
+		Tools:     convertToolLoopDefs(req.ToolDefinitions),
+		MaxTokens: req.MaxTokens,
+		Stream:    false,
+	}
+
+	log.Printf("gateway-bridge: calling gateway with %d tools (messages=%d)", len(req.ToolDefinitions), len(req.Messages))
+
+	resp, err := g.client.Call(ctx, llmReq)
+	if err != nil {
+		return nil, fmt.Errorf("gateway call failed: %w", err)
+	}
+
+	tlr := &runtime.ToolLoopResponse{
+		ID:         resp.ID,
+		StopReason: convertStopReason(resp.StopReason),
+		Text:       resp.Text,
+		Usage: runtime.TokenUsage{
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+		},
+		Model: resp.Model,
+	}
+
+	if tlr.StopReason == "tool_use" {
+		tlr.ToolCalls = extractToolCalls(resp)
+	}
+
+	log.Printf("gateway-bridge: gateway responded (stop=%s text_len=%d tool_calls=%d)", tlr.StopReason, len(tlr.Text), len(tlr.ToolCalls))
+
+	return tlr, nil
+}
+
 // convertToolLoopDefs converts runtime.ToolDefinition values to provider
 // ToolDef values for inclusion in the LLM request. This bridges the gap
 // between the runtime's tool schema format and the Anthropic Messages

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/yusefmosiah/go-choir/internal/events"
+	"github.com/yusefmosiah/go-choir/internal/gateway"
 	"github.com/yusefmosiah/go-choir/internal/provider"
 	"github.com/yusefmosiah/go-choir/internal/runtime"
 	"github.com/yusefmosiah/go-choir/internal/sandbox"
@@ -48,19 +49,40 @@ func main() {
 
 	bus := events.NewEventBus()
 
-	// Resolve the provider: use a real Bedrock or Z.AI provider when
-	// credentials are available, otherwise fall back to the stub provider.
+	// Resolve the provider:
+	//  1. When RUNTIME_GATEWAY_URL is set (VM mode), use the GatewayClient
+	//     to route LLM calls through the host-side gateway. This ensures
+	//     provider credentials stay host-side and the sandbox never touches
+	//     them directly (VAL-GATEWAY-001, VAL-GATEWAY-004).
+	//  2. When direct provider credentials are available (Bedrock, Z.AI,
+	//     Fireworks), resolve the provider directly. This is the host-process
+	//     path used when there is no gateway between the runtime and the
+	//     upstream provider.
+	//  3. Otherwise, fall back to the stub provider.
 	var rtProvider runtime.Provider
-	realProvider, err := provider.ResolveProvider()
-	if err != nil {
-		log.Printf("sandbox: provider resolution failed, using stub: %v", err)
+	gatewayURL := os.Getenv("RUNTIME_GATEWAY_URL")
+	if gatewayURL == "" {
+		// Fallback: also check PROXY_VMCTL_URL which signals VM mode.
+		gatewayURL = os.Getenv("PROXY_VMCTL_URL")
 	}
-	if realProvider != nil {
-		rtProvider = provider.NewBridgeProvider(realProvider)
-		log.Printf("sandbox: using real provider: %s", realProvider.Name())
+
+	if gatewayURL != "" {
+		gatewayToken := os.Getenv("RUNTIME_GATEWAY_TOKEN")
+		client := gateway.NewGatewayClient(gatewayURL, gatewayToken)
+		rtProvider = provider.NewGatewayBridgeProvider(client)
+		log.Printf("sandbox: using gateway provider (url=%s)", gatewayURL)
 	} else {
-		rtProvider = runtime.NewStubProvider(rtCfg.ProviderTimeout)
-		log.Printf("sandbox: using stub provider (no credentials configured)")
+		realProvider, err := provider.ResolveProvider()
+		if err != nil {
+			log.Printf("sandbox: provider resolution failed, using stub: %v", err)
+		}
+		if realProvider != nil {
+			rtProvider = provider.NewBridgeProvider(realProvider)
+			log.Printf("sandbox: using real provider: %s", realProvider.Name())
+		} else {
+			rtProvider = runtime.NewStubProvider(rtCfg.ProviderTimeout)
+			log.Printf("sandbox: using stub provider (no credentials configured)")
+		}
 	}
 
 	// Build runtime options based on configuration.

@@ -45,6 +45,10 @@ services:
     healthcheck: curl -sf http://127.0.0.1:8085/health
     port: 8085
     depends_on: []
+    # When routing through the gateway (VM mode), set:
+    #   RUNTIME_GATEWAY_URL=http://127.0.0.1:8084
+    #   RUNTIME_GATEWAY_TOKEN=<sandbox-credential-token>
+    # Or just set PROXY_VMCTL_URL and the sandbox will use it as fallback.
 
   frontend:
     start: cd frontend && pnpm dev --host localhost --port 4173
