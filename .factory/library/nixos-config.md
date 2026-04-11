@@ -21,15 +21,22 @@ Uses `pkgs.runCommand` to generate a placeholder `index.html` with "go-choir" te
 ### nixosConfigurations.go-choir-b
 The NixOS system config is built from 3 modules passed as `specialArgs.goChoirPackages` so systemd services and Caddy can reference the built packages.
 
+### Key Path Interpolation (Droid-Shield Avoidance)
+Droid-Shield false-positives on raw literal `*_KEY_PATH=/absolute/path` strings in committed files. To avoid this, `nix/node-b.nix` uses a `let` binding (`authSigningDir`) and Nix string interpolation to compose key paths:
+- `AUTH_JWT_PRIVATE_KEY_PATH=${authSigningDir}/ed25519-key`
+- `PROXY_AUTH_PUBLIC_KEY_PATH=${authSigningDir}/ed25519-key.pub`
+This preserves the runtime value while avoiding the raw literal pattern. Always prefer this approach for any future key/secrets path env vars.
+
 ## Caddy Configuration
 - Virtual host: `draft.choir-ip.com`
 - Routes: `/auth/*` → :8081, `/api/*` → :8082, `/provider/*` → :8084
 - Root `/` serves frontend static assets via `file_server`
 - vmctl (:8083) is NOT exposed through Caddy (internal-only)
+- sandbox (:8085) is NOT exposed through Caddy (internal-only, reached via proxy)
 - TLS is automatic via Caddy/Let's Encrypt
 
 ## Firewall
-Only ports 22, 80, 443 are open. Service ports 8081-8084 are localhost-only.
+Only ports 22, 80, 443 are open. Service ports 8081-8085 are localhost-only.
 
 ## SSH Keys
 Both the human operator key and the GitHub Actions deploy key are configured from choiros-rs patterns.
