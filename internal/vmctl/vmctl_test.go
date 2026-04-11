@@ -1384,3 +1384,315 @@ func TestHandler_LifecycleEndpointsDenyExternalCallers(t *testing.T) {
 		})
 	}
 }
+
+// --- VMManager Wiring Tests ---
+
+// mockVMManager is a test double for the VMManager interface.
+// It records lifecycle calls so tests can verify that the OwnershipRegistry
+// properly delegates to the VM manager when one is configured.
+type mockVMManager struct {
+	boots     []VMManagerConfig
+	stops     []string
+	hibernates []string
+	resumes   []string
+	recovers  []string
+	// Configurable responses
+	bootResponse *VMInstanceInfo
+	bootError    error
+	resumeResponse *VMInstanceInfo
+	resumeError  error
+	recoverResponse *VMInstanceInfo
+	recoverError error
+}
+
+func (m *mockVMManager) BootVM(cfg VMManagerConfig) (*VMInstanceInfo, error) {
+	m.boots = append(m.boots, cfg)
+	if m.bootError != nil {
+		return nil, m.bootError
+	}
+	if m.bootResponse != nil {
+		return m.bootResponse, nil
+	}
+	return &VMInstanceInfo{HostURL: "http://127.0.0.1:9001", Epoch: 1, Healthy: true, State: "running"}, nil
+}
+
+func (m *mockVMManager) StopVM(vmID string) error {
+	m.stops = append(m.stops, vmID)
+	return nil
+}
+
+func (m *mockVMManager) HibernateVM(vmID string) error {
+	m.hibernates = append(m.hibernates, vmID)
+	return nil
+}
+
+func (m *mockVMManager) ResumeVM(vmID string) (*VMInstanceInfo, error) {
+	m.resumes = append(m.resumes, vmID)
+	if m.resumeError != nil {
+		return nil, m.resumeError
+	}
+	if m.resumeResponse != nil {
+		return m.resumeResponse, nil
+	}
+	return &VMInstanceInfo{HostURL: "http://127.0.0.1:9002", Epoch: 1, Healthy: true, State: "running"}, nil
+}
+
+func (m *mockVMManager) RecoverVM(vmID string) (*VMInstanceInfo, error) {
+	m.recovers = append(m.recovers, vmID)
+	if m.recoverError != nil {
+		return nil, m.recoverError
+	}
+	if m.recoverResponse != nil {
+		return m.recoverResponse, nil
+	}
+	return &VMInstanceInfo{HostURL: "http://127.0.0.1:9003", Epoch: 2, Healthy: true, State: "running"}, nil
+}
+
+func (m *mockVMManager) GetVM(vmID string) *VMInstanceInfo {
+	return nil
+}
+
+func (m *mockVMManager) CheckHealth(vmID string) (bool, error) {
+	return true, nil
+}
+
+func TestOwnershipRegistry_DelegatesBootToVMManager(t *testing.T) {
+	// When a VMManager is set, ResolveOrAssign should boot a real VM
+	// and use the returned HostURL instead of the static sandbox URL base.
+	mock := &mockVMManager{
+		bootResponse: &VMInstanceInfo{
+			HostURL: "http://127.0.0.1:9042",
+			Epoch:   7,
+			Healthy: true,
+			State:   "running",
+		},
+	}
+
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	own, err := reg.ResolveOrAssign("user-with-vm")
+	if err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
+
+	// Verify the VM manager was called to boot.
+	if len(mock.boots) != 1 {
+		t.Fatalf("expected 1 BootVM call, got %d", len(mock.boots))
+	}
+	if mock.boots[0].VMID != own.VMID {
+		t.Errorf("expected boot VMID %s, got %s", own.VMID, mock.boots[0].VMID)
+	}
+
+	// Verify the sandbox URL came from the VM manager response.
+	if own.SandboxURL != "http://127.0.0.1:9042" {
+		t.Errorf("expected sandbox URL from VM manager, got %s", own.SandboxURL)
+	}
+
+	// Verify epoch came from the VM manager response.
+	if own.Epoch != 7 {
+		t.Errorf("expected epoch 7 from VM manager, got %d", own.Epoch)
+	}
+}
+
+func TestOwnershipRegistry_DelegatesStopToVMManager(t *testing.T) {
+	mock := &mockVMManager{}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	own, _ := reg.ResolveOrAssign("user-stop-vm")
+	if err := reg.StopVM("user-stop-vm"); err != nil {
+		t.Fatalf("StopVM: %v", err)
+	}
+
+	if len(mock.stops) != 1 {
+		t.Fatalf("expected 1 StopVM call, got %d", len(mock.stops))
+	}
+	if mock.stops[0] != own.VMID {
+		t.Errorf("expected stop VMID %s, got %s", own.VMID, mock.stops[0])
+	}
+}
+
+func TestOwnershipRegistry_DelegatesHibernateToVMManager(t *testing.T) {
+	mock := &mockVMManager{}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, _ = reg.ResolveOrAssign("user-hibernate-vm")
+	if err := reg.HibernateVM("user-hibernate-vm"); err != nil {
+		t.Fatalf("HibernateVM: %v", err)
+	}
+
+	if len(mock.hibernates) != 1 {
+		t.Fatalf("expected 1 HibernateVM call, got %d", len(mock.hibernates))
+	}
+}
+
+func TestOwnershipRegistry_DelegatesResumeToVMManager(t *testing.T) {
+	mock := &mockVMManager{
+		resumeResponse: &VMInstanceInfo{
+			HostURL: "http://127.0.0.1:9043",
+			Epoch:   5,
+			Healthy: true,
+			State:   "running",
+		},
+	}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, _ = reg.ResolveOrAssign("user-resume-vm")
+	_ = reg.HibernateVM("user-resume-vm")
+
+	own, err := reg.ResumeVM("user-resume-vm")
+	if err != nil {
+		t.Fatalf("ResumeVM: %v", err)
+	}
+
+	if len(mock.resumes) != 1 {
+		t.Fatalf("expected 1 ResumeVM call, got %d", len(mock.resumes))
+	}
+
+	// Verify the sandbox URL was updated from the resume response.
+	if own.SandboxURL != "http://127.0.0.1:9043" {
+		t.Errorf("expected sandbox URL from resume response, got %s", own.SandboxURL)
+	}
+}
+
+func TestOwnershipRegistry_DelegatesRecoverToVMManager(t *testing.T) {
+	mock := &mockVMManager{
+		recoverResponse: &VMInstanceInfo{
+			HostURL: "http://127.0.0.1:9044",
+			Epoch:   99,
+			Healthy: true,
+			State:   "running",
+		},
+	}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, _ = reg.ResolveOrAssign("user-recover-vm")
+	_ = reg.MarkUnhealthy("user-recover-vm")
+
+	own, err := reg.RecoverVM("user-recover-vm")
+	if err != nil {
+		t.Fatalf("RecoverVM: %v", err)
+	}
+
+	if len(mock.recovers) != 1 {
+		t.Fatalf("expected 1 RecoverVM call, got %d", len(mock.recovers))
+	}
+
+	// Verify the epoch and sandbox URL came from the recovery response.
+	if own.Epoch != 99 {
+		t.Errorf("expected epoch 99 from recover response, got %d", own.Epoch)
+	}
+	if own.SandboxURL != "http://127.0.0.1:9044" {
+		t.Errorf("expected sandbox URL from recover response, got %s", own.SandboxURL)
+	}
+}
+
+func TestOwnershipRegistry_DelegatesLogoutToVMManager(t *testing.T) {
+	mock := &mockVMManager{}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, _ = reg.ResolveOrAssign("user-logout-vm")
+	_ = reg.LogoutVM("user-logout-vm")
+
+	if len(mock.stops) != 1 {
+		t.Fatalf("expected 1 StopVM call from logout, got %d", len(mock.stops))
+	}
+}
+
+func TestOwnershipRegistry_DelegatesRemoveToVMManager(t *testing.T) {
+	mock := &mockVMManager{}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, _ = reg.ResolveOrAssign("user-remove-vm")
+	_ = reg.RemoveOwnership("user-remove-vm")
+
+	if len(mock.stops) != 1 {
+		t.Fatalf("expected 1 StopVM call from remove, got %d", len(mock.stops))
+	}
+}
+
+func TestOwnershipRegistry_BootFailureReturnsError(t *testing.T) {
+	mock := &mockVMManager{
+		bootError: fmt.Errorf("Firecracker process failed: KVM not available"),
+	}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	_, err := reg.ResolveOrAssign("user-boot-fail")
+	if err == nil {
+		t.Fatal("expected error when VM boot fails")
+	}
+	if !strings.Contains(err.Error(), "failed to boot VM") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Verify ownership is marked as failed.
+	own := reg.GetOwnership("user-boot-fail")
+	if own == nil {
+		t.Fatal("expected ownership to exist even after boot failure")
+	}
+	if own.State != VMStateFailed {
+		t.Errorf("expected failed state, got %s", own.State)
+	}
+}
+
+func TestOwnershipRegistry_NoVMManagerUsesHostProcessMode(t *testing.T) {
+	// Without a VMManager, ResolveOrAssign should use the static sandbox URL.
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	own, err := reg.ResolveOrAssign("user-no-vm")
+	if err != nil {
+		t.Fatalf("ResolveOrAssign: %v", err)
+	}
+
+	// Sandbox URL should be the static base URL.
+	if own.SandboxURL != "http://127.0.0.1:8085" {
+		t.Errorf("expected static sandbox URL in host-process mode, got %s", own.SandboxURL)
+	}
+}
+
+func TestOwnershipRegistry_ResumeOnResolveWithVMManager(t *testing.T) {
+	// When a user has a hibernated VM and resolves again, the VM should
+	// be resumed through the manager with the per-VM sandbox URL.
+	mock := &mockVMManager{
+		resumeResponse: &VMInstanceInfo{
+			HostURL: "http://127.0.0.1:9050",
+			Epoch:   3,
+			Healthy: true,
+			State:   "running",
+		},
+	}
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetVMManager(mock)
+
+	// First assign and hibernate.
+	own1, _ := reg.ResolveOrAssign("user-resume-resolve")
+	_ = reg.HibernateVM("user-resume-resolve")
+
+	// Resolve again should resume the VM.
+	own2, err := reg.ResolveOrAssign("user-resume-resolve")
+	if err != nil {
+		t.Fatalf("ResolveOrAssign after hibernate: %v", err)
+	}
+
+	// Same VM ID.
+	if own1.VMID != own2.VMID {
+		t.Errorf("expected same VM ID after resume, got %s and %s", own1.VMID, own2.VMID)
+	}
+
+	// Sandbox URL should be updated from the resume response.
+	if own2.SandboxURL != "http://127.0.0.1:9050" {
+		t.Errorf("expected sandbox URL from resume, got %s", own2.SandboxURL)
+	}
+
+	// Verify resume was called on the manager.
+	if len(mock.resumes) != 1 {
+		t.Fatalf("expected 1 ResumeVM call, got %d", len(mock.resumes))
+	}
+}

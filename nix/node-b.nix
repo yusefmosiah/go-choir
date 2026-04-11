@@ -199,12 +199,17 @@ in
       ExecStart = "${goChoirPackages.vmctl}/bin/vmctl";
       Restart = "on-failure";
       RestartSec = 3;
+      # Firecracker needs access to /dev/kvm for VM hardware acceleration.
+      # We must allow KVM device access while keeping other hardening.
+      PrivateDevices = lib.mkForce false;
+      # Allow Firecracker to create tap devices and access networking.
+      CapabilityBoundingSet = [ "CAP_NET_ADMIN" "CAP_SYS_PTRACE" ];
       # VM state directory for Firecracker VM persistence and epoch tracking.
       # Persistent user data in VMs is stored here and survives stop/resume
       # cycles (VAL-CROSS-116). Provider credentials are NEVER written here
       # (VAL-VM-011).
       StateDirectory = "go-choir/vm-state";
-      ReadWritePaths = [ "/var/lib/go-choir/vm-state" ];
+      ReadWritePaths = [ "/var/lib/go-choir/vm-state" "/var/lib/go-choir/guest" ];
       Environment = [
         "VMCTL_PORT=8083"
         # Firecracker VM configuration (VAL-VM-010):

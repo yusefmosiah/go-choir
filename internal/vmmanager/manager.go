@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -708,12 +710,24 @@ func (m *Manager) forceCleanup(vmID string) {
 }
 
 // probeGuestHealth attempts to reach the guest's /health endpoint.
+// On Linux/Node B with real Firecracker VMs, this uses HTTP to probe
+// the guest sandbox runtime. On macOS or environments without Firecracker,
+// this returns true by default (the VM isn't actually running).
 func (m *Manager) probeGuestHealth(hostURL string) bool {
-	// This is a simple HTTP health check against the guest sandbox.
-	// In production, this uses net/http with a short timeout.
-	// For now, we use a basic approach.
-	client := &healthClient{timeout: m.cfg.HealthCheckTimeout}
-	return client.check(hostURL + "/health")
+	client := &http.Client{
+		Timeout: m.cfg.HealthCheckTimeout,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: m.cfg.HealthCheckTimeout,
+			}).DialContext,
+		},
+	}
+	resp, err := client.Get(hostURL + "/health")
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // loadEpoch loads the epoch counter for a VM from persistent storage.
@@ -781,17 +795,4 @@ func (m *Manager) checkAllHealth() {
 	}
 }
 
-// healthClient is a minimal HTTP client for health checks.
-type healthClient struct {
-	timeout time.Duration
-}
 
-func (c *healthClient) check(url string) bool {
-	// Use a simple approach: in production this would use net/http.Client.
-	// For environments without Firecracker, this always returns true
-	// to allow testing on macOS.
-	//
-	// On Node B with real Firecracker, the VM's /health endpoint would
-	// be reached through the tap networking or host port forwarding.
-	return true
-}

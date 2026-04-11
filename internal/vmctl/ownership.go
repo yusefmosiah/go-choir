@@ -97,6 +97,55 @@ func (o *VMOwnership) IsReady() bool {
 	return o.State == VMStateActive || o.State == VMStateBooting
 }
 
+// VMManager is the interface the OwnershipRegistry uses to manage real
+// Firecracker VM lifecycles. When Firecracker is available on the host,
+// the registry delegates VM boot/stop/resume/recover operations to the
+// concrete vmmanager.Manager. When Firecracker is not available, the
+// registry runs in host-process mode with no-op VM lifecycle calls.
+type VMManager interface {
+	// BootVM launches a new Firecracker VM and returns its instance info.
+	BootVM(cfg VMManagerConfig) (*VMInstanceInfo, error)
+
+	// StopVM cleanly stops a running VM.
+	StopVM(vmID string) error
+
+	// HibernateVM saves VM state and stops it (persistent data preserved).
+	HibernateVM(vmID string) error
+
+	// ResumeVM resumes a stopped or hibernated VM (same epoch, same state).
+	ResumeVM(vmID string) (*VMInstanceInfo, error)
+
+	// RecoverVM force-kills and reboots a failed VM (new epoch).
+	RecoverVM(vmID string) (*VMInstanceInfo, error)
+
+	// GetVM returns the VM instance info, or nil if not found.
+	GetVM(vmID string) *VMInstanceInfo
+
+	// CheckHealth probes the VM's guest health endpoint.
+	CheckHealth(vmID string) (bool, error)
+}
+
+// VMManagerConfig holds the configuration for launching a single VM,
+// mirroring the vmmanager.VMConfig fields that the registry controls.
+type VMManagerConfig struct {
+	VMID              string
+	KernelImagePath   string
+	RootfsPath        string
+	GuestPort         int
+	MachineCPUCount   int
+	MachineMemSizeMib int
+	PersistentDir     string
+}
+
+// VMInstanceInfo holds the information returned by the VM manager
+// after a VM lifecycle operation.
+type VMInstanceInfo struct {
+	HostURL string
+	Epoch   int64
+	Healthy bool
+	State   string
+}
+
 // OwnershipRegistry manages the mapping of users to VMs. It provides
 // thread-safe VM assignment with singleflight semantics so that concurrent
 // first requests for the same user collapse onto one VM assignment
@@ -135,6 +184,12 @@ type OwnershipRegistry struct {
 	// Each fresh boot or recovery increments this counter, providing a
 	// mechanism to prevent duplicate canonical effects (VAL-CROSS-117).
 	epochCounter int64
+
+	// vmManager is the optional Firecracker VM lifecycle manager.
+	// When nil, the registry operates in host-process sandbox mode where
+	// all VMs share the same sandbox URL. When set, the registry delegates
+	// VM lifecycle operations to this manager for real Firecracker VMs.
+	vmManager VMManager
 }
 
 // NewOwnershipRegistry creates a new ownership registry.
@@ -152,6 +207,16 @@ func NewOwnershipRegistry(sandboxURLBase string) *OwnershipRegistry {
 		idleTimeout:    0, // no idle timeout by default
 		epochCounter:   1,
 	}
+}
+
+// SetVMManager sets the Firecracker VM lifecycle manager. When set, the
+// registry delegates VM lifecycle operations to the manager instead of
+// running in host-process sandbox mode. This activates real Firecracker
+// VM lifecycle on Node B.
+func (r *OwnershipRegistry) SetVMManager(mgr VMManager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.vmManager = mgr
 }
 
 // SetIdleTimeout configures the idle timeout for automatic VM lifecycle
@@ -194,7 +259,22 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 		// of creating a new VM, preserving the user's state and epoch
 		// (VAL-CROSS-116, VAL-CROSS-117).
 		if own.State == VMStateStopped || own.State == VMStateHibernated {
-			// Resume: keep the same VMID, same epoch.
+			mgr := r.vmManager
+			r.mu.Unlock()
+
+			// Delegate to the real VM manager if available.
+			if mgr != nil {
+				info, err := mgr.ResumeVM(own.VMID)
+				if err != nil {
+					log.Printf("vmctl: resume failed for VM %s: %v", own.VMID, err)
+					return nil, fmt.Errorf("failed to resume VM %s: %w", own.VMID, err)
+				}
+				r.mu.Lock()
+				own.SandboxURL = info.HostURL
+				r.mu.Unlock()
+			}
+
+			r.mu.Lock()
 			own.State = VMStateActive
 			own.LastActiveAt = time.Now()
 			own.StoppedBy = ""
@@ -226,6 +306,8 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 
 	// We are the first caller for this user. Create a new VM.
 	vmID := generateVMID()
+	epoch := r.nextEpoch()
+
 	own := &VMOwnership{
 		VMID:        vmID,
 		UserID:      userID,
@@ -233,7 +315,7 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 		State:       VMStateBooting,
 		CreatedAt:   time.Now(),
 		LastActiveAt: time.Now(),
-		Epoch:       r.nextEpoch(),
+		Epoch:       epoch,
 	}
 
 	// Register pending waiters map before unlocking so other callers can find it.
@@ -243,10 +325,39 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 	r.ownerships[userID] = own
 	r.vmByID[vmID] = own
 
+	// Check if we have a real Firecracker VM manager.
+	mgr := r.vmManager
+
 	r.mu.Unlock()
 
-	// Simulate VM boot (in production this would call Firecracker).
-	// For now, immediately transition to active.
+	// Boot the real Firecracker VM if a manager is configured.
+	if mgr != nil {
+		info, err := mgr.BootVM(VMManagerConfig{
+			VMID:              vmID,
+			GuestPort:         8085,
+			MachineCPUCount:   2,
+			MachineMemSizeMib: 512,
+		})
+		if err != nil {
+			log.Printf("vmctl: Firecracker boot failed for VM %s: %v", vmID, err)
+			r.mu.Lock()
+			own.State = VMStateFailed
+			waiters := r.pendingWaiters[userID]
+			delete(r.pendingWaiters, userID)
+			r.mu.Unlock()
+			for _, ch := range waiters {
+				ch <- nil
+			}
+			return nil, fmt.Errorf("failed to boot VM %s: %w", vmID, err)
+		}
+		r.mu.Lock()
+		own.SandboxURL = info.HostURL
+		own.Epoch = info.Epoch
+		r.mu.Unlock()
+		log.Printf("vmctl: booted Firecracker VM %s for user %s at %s (epoch=%d)", vmID, userID, info.HostURL, info.Epoch)
+	}
+
+	// Transition to active.
 	r.transitionVM(vmID, VMStateActive)
 
 	// Notify any waiters.
@@ -301,6 +412,11 @@ func (r *OwnershipRegistry) StopVM(userID string) error {
 		return fmt.Errorf("no VM found for user %s", userID)
 	}
 
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil && (own.State == VMStateActive || own.State == VMStateDegraded) {
+		_ = r.vmManager.StopVM(own.VMID)
+	}
+
 	own.State = VMStateStopped
 	own.LastActiveAt = time.Now()
 	log.Printf("vmctl: stopped VM %s for user %s", own.VMID, userID)
@@ -316,6 +432,11 @@ func (r *OwnershipRegistry) RemoveOwnership(userID string) error {
 	own, ok := r.ownerships[userID]
 	if !ok {
 		return nil // already gone, idempotent
+	}
+
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil && (own.State == VMStateActive || own.State == VMStateDegraded) {
+		_ = r.vmManager.StopVM(own.VMID)
 	}
 
 	own.State = VMStateStopped
@@ -360,6 +481,11 @@ func (r *OwnershipRegistry) HibernateVM(userID string) error {
 		return fmt.Errorf("VM %s cannot be hibernated (state=%s)", own.VMID, own.State)
 	}
 
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil {
+		_ = r.vmManager.HibernateVM(own.VMID)
+	}
+
 	own.State = VMStateHibernated
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = "idle"
@@ -388,6 +514,16 @@ func (r *OwnershipRegistry) ResumeVM(userID string) (*VMOwnership, error) {
 			return own, nil
 		}
 		return nil, fmt.Errorf("VM %s cannot be resumed (state=%s)", own.VMID, own.State)
+	}
+
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil {
+		info, err := r.vmManager.ResumeVM(own.VMID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resume VM %s: %w", own.VMID, err)
+		}
+		own.SandboxURL = info.HostURL
+		// Epoch stays the same for resume (VAL-CROSS-117).
 	}
 
 	// Transition to active. Epoch stays the same for resume (VAL-CROSS-117).
@@ -419,9 +555,20 @@ func (r *OwnershipRegistry) RecoverVM(userID string) (*VMOwnership, error) {
 		return nil, fmt.Errorf("VM %s is not in a recoverable state (state=%s)", own.VMID, own.State)
 	}
 
-	// Increment epoch on recovery — this is a fresh boot, not a resume.
-	// The epoch change prevents duplicate canonical effects (VAL-CROSS-117).
-	own.Epoch = r.nextEpoch()
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil {
+		info, err := r.vmManager.RecoverVM(own.VMID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to recover VM %s: %w", own.VMID, err)
+		}
+		own.SandboxURL = info.HostURL
+		own.Epoch = info.Epoch
+	} else {
+		// Increment epoch on recovery — this is a fresh boot, not a resume.
+		// The epoch change prevents duplicate canonical effects (VAL-CROSS-117).
+		own.Epoch = r.nextEpoch()
+	}
+
 	own.State = VMStateActive
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = ""
@@ -439,6 +586,11 @@ func (r *OwnershipRegistry) LogoutVM(userID string) error {
 	own, ok := r.ownerships[userID]
 	if !ok {
 		return nil // no VM for this user, idempotent
+	}
+
+	// Delegate to the real VM manager if available.
+	if r.vmManager != nil && (own.State == VMStateActive || own.State == VMStateDegraded) {
+		_ = r.vmManager.StopVM(own.VMID)
 	}
 
 	own.State = VMStateStopped

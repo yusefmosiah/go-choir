@@ -31,7 +31,9 @@ func main() {
 	}
 
 	// Check if Firecracker is available on this host.
-	// If so, create a VM manager for real Firecracker lifecycle management.
+	// If so, create a VM manager for real Firecracker lifecycle management
+	// and wire it to the ownership registry so that VM boot/stop/resume
+	// operations are delegated to real Firecracker VMs (VAL-VM-010).
 	// If not, vmctl runs in host-process mode where all VMs share the
 	// same sandbox URL (for macOS development and non-KVM environments).
 	if vmmanager.IsFirecrackerAvailable() {
@@ -42,6 +44,11 @@ func main() {
 		mgr := vmmanager.NewManager(mgrCfg)
 		mgr.Start()
 		defer mgr.Stop()
+
+		// Wire the manager to the registry via an adapter that
+		// translates between the vmctl and vmmanager interfaces.
+		registry.SetVMManager(&vmManagerAdapter{mgr: mgr})
+
 		log.Printf("vmctl: Firecracker VM manager started (kernel=%s rootfs=%s)", mgrCfg.KernelImagePath, mgrCfg.RootfsPath)
 	} else {
 		log.Printf("vmctl: Firecracker not available, using host-process sandbox mode")
@@ -54,6 +61,85 @@ func main() {
 
 	log.Printf("vmctl: ownership registry initialized (sandbox_url_base=%s)", sandboxURLBase)
 	s.Start()
+}
+
+// vmManagerAdapter adapts the vmmanager.Manager to the vmctl.VMManager
+// interface. This adapter translates between the vmctl ownership types
+// and the vmmanager VM lifecycle types.
+type vmManagerAdapter struct {
+	mgr *vmmanager.Manager
+}
+
+func (a *vmManagerAdapter) BootVM(cfg vmctl.VMManagerConfig) (*vmctl.VMInstanceInfo, error) {
+	inst, err := a.mgr.BootVM(vmmanager.VMConfig{
+		VMID:              cfg.VMID,
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         cfg.GuestPort,
+		MachineCPUCount:   cfg.MachineCPUCount,
+		MachineMemSizeMib: cfg.MachineMemSizeMib,
+		PersistentDir:     cfg.PersistentDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &vmctl.VMInstanceInfo{
+		HostURL: inst.HostURL,
+		Epoch:   inst.Config.Epoch,
+		Healthy: inst.Healthy,
+		State:   string(inst.State),
+	}, nil
+}
+
+func (a *vmManagerAdapter) StopVM(vmID string) error {
+	return a.mgr.StopVM(vmID)
+}
+
+func (a *vmManagerAdapter) HibernateVM(vmID string) error {
+	return a.mgr.HibernateVM(vmID)
+}
+
+func (a *vmManagerAdapter) ResumeVM(vmID string) (*vmctl.VMInstanceInfo, error) {
+	inst, err := a.mgr.ResumeVM(vmID)
+	if err != nil {
+		return nil, err
+	}
+	return &vmctl.VMInstanceInfo{
+		HostURL: inst.HostURL,
+		Epoch:   inst.Config.Epoch,
+		Healthy: inst.Healthy,
+		State:   string(inst.State),
+	}, nil
+}
+
+func (a *vmManagerAdapter) RecoverVM(vmID string) (*vmctl.VMInstanceInfo, error) {
+	inst, err := a.mgr.RecoverVM(vmID)
+	if err != nil {
+		return nil, err
+	}
+	return &vmctl.VMInstanceInfo{
+		HostURL: inst.HostURL,
+		Epoch:   inst.Config.Epoch,
+		Healthy: inst.Healthy,
+		State:   string(inst.State),
+	}, nil
+}
+
+func (a *vmManagerAdapter) GetVM(vmID string) *vmctl.VMInstanceInfo {
+	inst := a.mgr.GetVM(vmID)
+	if inst == nil {
+		return nil
+	}
+	return &vmctl.VMInstanceInfo{
+		HostURL: inst.HostURL,
+		Epoch:   inst.Config.Epoch,
+		Healthy: inst.Healthy,
+		State:   string(inst.State),
+	}
+}
+
+func (a *vmManagerAdapter) CheckHealth(vmID string) (bool, error) {
+	return a.mgr.CheckHealth(vmID)
 }
 
 func envOr(key, fallback string) string {

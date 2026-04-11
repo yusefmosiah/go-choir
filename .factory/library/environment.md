@@ -72,6 +72,15 @@ Environment variables, external dependencies, and setup notes.
 - `VM_HEALTH_CHECK_TIMEOUT` — per-check HTTP timeout (default: `3s`)
 - Guest images are built via `nix build .#guest-image` and contain only the sandbox binary — no provider credentials (VAL-VM-010, VAL-VM-011)
 
+### VM activation (Node B)
+
+- When `VM_FIRECRACKER_BIN` is set and the Firecracker binary is found on the host, the vmctl service activates real Firecracker VM lifecycle management instead of host-process sandbox mode.
+- The vmctl `cmd/vmctl/main.go` checks `vmmanager.IsFirecrackerAvailable()` on startup. When available, it creates a `vmmanager.Manager`, wires it to the `OwnershipRegistry` via `SetVMManager()`, and the registry delegates all VM lifecycle operations (boot, stop, hibernate, resume, recover) to the manager.
+- The `vmManagerAdapter` in `cmd/vmctl/main.go` translates between the vmctl `VMManager` interface and the concrete `vmmanager.Manager`.
+- Per-VM sandbox URLs come from the vmmanager's assigned host ports (starting at `VM_HOST_BASE_PORT`), not the static `VMCTL_SANDBOX_URL_BASE`.
+- On Node B, the vmctl systemd service needs `PrivateDevices=false` and `CAP_NET_ADMIN` to allow Firecracker access to `/dev/kvm` and tap device creation.
+- Health checks use real HTTP probes against the guest's `/health` endpoint through the assigned host port.
+
 ### Route invariants
 These browser-facing routes remain the stable contract:
 - `GET /auth/session`

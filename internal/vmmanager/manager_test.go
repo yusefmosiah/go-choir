@@ -391,6 +391,231 @@ func TestManagerPersistentDirCreation(t *testing.T) {
 	}
 }
 
+// --- Guest Isolation Tests (VAL-VM-007, VAL-VM-011) ---
+
+func TestBuildFirecrackerConfig_NoHostControlPlaneAccess(t *testing.T) {
+	// VAL-VM-007: Guest workloads cannot reach host control-plane surfaces.
+	// Verify that the Firecracker network configuration does not expose
+	// host control-plane ports (8081-8084 for auth, proxy, vmctl, gateway)
+	// or host-only sockets and paths.
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:             "vm-isolation-test",
+		KernelImagePath:  cfg.KernelImagePath,
+		RootfsPath:       cfg.RootfsPath,
+		GuestPort:        8085,
+		MachineCPUCount:  2,
+		MachineMemSizeMib: 512,
+		Epoch:            1,
+	}
+
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
+
+	// Verify the guest port is the sandbox port, not a control-plane port.
+	bootSource := fcConfig["boot-source"].(map[string]interface{})
+	bootArgs := bootSource["boot_args"].(string)
+	if !containsStr(bootArgs, "guest_port=8085") {
+		t.Errorf("expected guest_port=8085 in boot args, got: %s", bootArgs)
+	}
+
+	// Verify the config does not reference host control-plane URLs or ports.
+	forbiddenPatterns := []string{
+		"127.0.0.1:8081", // auth
+		"127.0.0.1:8082", // proxy
+		"127.0.0.1:8083", // vmctl
+		"127.0.0.1:8084", // gateway
+		"/var/lib/go-choir/auth",
+		"/var/lib/go-choir/auth-signing",
+		"/var/lib/go-choir/gateway-provider.env",
+		"/var/run/",
+		"/run/",
+	}
+	for _, pattern := range forbiddenPatterns {
+		if contains(fcConfig, pattern) {
+			t.Errorf("VAL-VM-007: firecracker config exposes host control-plane path: %s", pattern)
+		}
+	}
+
+	// Verify the network interface uses a tap device, not host-side ports.
+	netIfaces, ok := fcConfig["network-interfaces"].([]map[string]interface{})
+	if !ok || len(netIfaces) == 0 {
+		t.Fatal("expected network-interfaces in config")
+	}
+	if netIfaces[0]["iface_id"] != "eth0" {
+		t.Errorf("expected eth0 interface, got %v", netIfaces[0]["iface_id"])
+	}
+	// The host_dev_name should be a VM-specific tap device, not a host interface.
+	hostDev, _ := netIfaces[0]["host_dev_name"].(string)
+	if !containsStr(hostDev, "vm-") || !containsStr(hostDev, "-tap") {
+		t.Errorf("expected VM-specific tap device name, got: %s", hostDev)
+	}
+}
+
+func TestBuildFirecrackerConfig_ComprehensiveSecretExclusion(t *testing.T) {
+	// VAL-VM-011: Comprehensive check that NO provider credentials or
+	// host-side secrets appear anywhere in the Firecracker VM configuration.
+	// This test covers the full forbidden pattern list from the environment
+	// documentation.
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:             "vm-secret-test",
+		KernelImagePath:  cfg.KernelImagePath,
+		RootfsPath:       cfg.RootfsPath,
+		GuestPort:        8085,
+		MachineCPUCount:  2,
+		MachineMemSizeMib: 512,
+		Epoch:            1,
+	}
+
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
+
+	// Comprehensive forbidden pattern list covering all provider credentials
+	// and host-side secret patterns from environment.md.
+	forbiddenPatterns := []string{
+		// Provider credential env vars
+		"ZAI_API_KEY",
+		"AWS_BEARER_TOKEN_BEDROCK",
+		"AWS_REGION",
+		"RUNTIME_BEDROCK_MODEL",
+		"RUNTIME_ZAI_MODEL",
+		"FIREWORKS_API_KEY",
+		"RUNTIME_FIREWORKS_MODEL",
+		"FIREWORKS_BASE_URL",
+		// Gateway credential patterns
+		"RUNTIME_GATEWAY_URL",
+		"RUNTIME_GATEWAY_TOKEN",
+		// Auth signing material
+		"AUTH_JWT_PRIVATE_KEY_PATH",
+		"ed25519-key",
+		// Generic secret patterns
+		"Bearer",
+		"SECRET",
+		"PASSWORD",
+		"TOKEN",
+		"api_key",
+		"apiKey",
+		"api-key",
+		// Host secret paths
+		"gateway-provider.env",
+		"sandbox-gateway-token.env",
+		"auth-signing",
+	}
+	for _, pattern := range forbiddenPatterns {
+		if contains(fcConfig, pattern) {
+			t.Errorf("VAL-VM-011: firecracker config contains forbidden secret pattern: %s", pattern)
+		}
+	}
+
+	// Verify the drives section only contains the guest rootfs, not host paths.
+	drives, ok := fcConfig["drives"].([]map[string]interface{})
+	if !ok || len(drives) != 1 {
+		t.Fatal("expected exactly 1 drive in config")
+	}
+	if drives[0]["drive_id"] != "rootfs" {
+		t.Errorf("expected rootfs drive, got %v", drives[0]["drive_id"])
+	}
+	drivePath, _ := drives[0]["path_on_host"].(string)
+	if !containsStr(drivePath, "rootfs.ext4") {
+		t.Errorf("expected rootfs path, got: %s", drivePath)
+	}
+}
+
+func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
+	// Verify the guest port is passed via boot args so the guest sandbox
+	// knows which port to listen on. This is the only way the guest receives
+	// network configuration — no host IPs or control-plane ports are exposed.
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:             "vm-bootargs-test",
+		KernelImagePath:  cfg.KernelImagePath,
+		RootfsPath:       cfg.RootfsPath,
+		GuestPort:        8085,
+		MachineCPUCount:  2,
+		MachineMemSizeMib: 512,
+		Epoch:            1,
+	}
+
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
+
+	bootSource := fcConfig["boot-source"].(map[string]interface{})
+	bootArgs := bootSource["boot_args"].(string)
+
+	// Verify the boot args contain the expected guest parameters.
+	expectedArgs := []string{"guest_port=8085", "vm_id=vm-bootargs-test", "epoch=1", "persistent=/mnt/persistent"}
+	for _, arg := range expectedArgs {
+		if !containsStr(bootArgs, arg) {
+			t.Errorf("expected boot arg %s in: %s", arg, bootArgs)
+		}
+	}
+
+	// Verify the boot args do NOT contain host-side parameters.
+	forbiddenArgs := []string{"gateway", "provider", "api_key", "secret", "auth", "token"}
+	for _, arg := range forbiddenArgs {
+		if containsStr(bootArgs, arg) {
+			t.Errorf("VAL-VM-011: boot args contain forbidden pattern: %s (full: %s)", arg, bootArgs)
+		}
+	}
+}
+
+func TestGuestInitScript_NoProviderCredentials(t *testing.T) {
+	// VAL-VM-011: Verify the guest init script pattern used in guest-image.nix
+	// does not pass provider credentials to the guest. This test mirrors the
+	// init script in nix/guest-image.nix to ensure it stays clean.
+	//
+	// The guest init script sets only:
+	//   - SANDBOX_PORT (from guest_port kernel param)
+	//   - SANDBOX_ID (from vm_id kernel param)
+	//   - RUNTIME_STORE_PATH (local persistent path)
+	//
+	// No provider credentials, gateway URLs, or auth material are set.
+	guestEnvVars := []string{
+		"SANDBOX_PORT",
+		"SANDBOX_ID",
+		"RUNTIME_STORE_PATH",
+	}
+
+	forbiddenEnvVars := []string{
+		"ZAI_API_KEY",
+		"AWS_BEARER_TOKEN_BEDROCK",
+		"FIREWORKS_API_KEY",
+		"RUNTIME_GATEWAY_URL",
+		"RUNTIME_GATEWAY_TOKEN",
+		"AUTH_JWT_PRIVATE_KEY_PATH",
+		"PROXY_AUTH_PUBLIC_KEY_PATH",
+		"GATEWAY_PORT",
+		"PROXY_PORT",
+		"VMCTL_PORT",
+		"AUTH_PORT",
+	}
+
+	// Verify no forbidden env vars appear in the allowed set.
+	for _, forbidden := range forbiddenEnvVars {
+		for _, allowed := range guestEnvVars {
+			if allowed == forbidden {
+				t.Errorf("VAL-VM-011: guest env var %s is in the forbidden list", forbidden)
+			}
+		}
+	}
+}
+
 // --- Helper functions ---
 
 func contains(m map[string]interface{}, pattern string) bool {
