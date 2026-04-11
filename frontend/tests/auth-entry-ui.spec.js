@@ -104,6 +104,19 @@ test('login view has a clear primary action to begin passkey flow', async ({
 });
 
 // ---------------------------------------------------------------
+// Test: signed-out root does not show the authenticated shell
+// ---------------------------------------------------------------
+test('signed-out root does not show the authenticated shell', async ({
+  page,
+}) => {
+  await page.goto(BASE_URL);
+
+  // The shell should NOT be visible while signed out.
+  const shell = page.locator('[data-shell]');
+  await expect(shell).not.toBeVisible();
+});
+
+// ---------------------------------------------------------------
 // Test: signed-out initial render does not spam failing protected calls
 // ---------------------------------------------------------------
 test('signed-out render does not repeatedly fire failing protected requests', async ({

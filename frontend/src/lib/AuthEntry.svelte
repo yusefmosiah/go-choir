@@ -5,15 +5,22 @@
   action to begin the passkey flow. Does not call any protected
   (/api/shell/bootstrap, /api/ws) routes while signed out.
 
+  Displays passkey ceremony errors (cancel/failure) from the parent
+  component via the `passkeyError` prop, keeping the user in a
+  retryable guest auth state.
+
   Data attributes for test targeting:
     data-auth-entry       — root container
     data-register-toggle  — control to switch to register view
     data-login-toggle     — control to switch to login view
     data-register-view    — register view container
     data-login-view       — login view container
+    data-passkey-error    — passkey ceremony error message area
 -->
 <script>
   import { createEventDispatcher } from 'svelte';
+
+  export let passkeyError = '';
 
   const dispatch = createEventDispatcher();
 
@@ -23,13 +30,18 @@
   /** Username input for the current view. */
   let username = '';
 
-  /** Error message from auth attempts. */
+  /** Validation error message (empty username etc). */
   let error = '';
+
+  /** Combined error to display: validation error takes precedence, then passkeyError. */
+  $: displayError = error || passkeyError;
 
   function switchView(newView) {
     view = newView;
     username = '';
     error = '';
+    // Clear passkeyError when switching views so the user gets a clean retry state.
+    dispatch('clearpasskeyerror');
   }
 
   function handleRegister() {
@@ -117,8 +129,8 @@
       </div>
     {/if}
 
-    {#if error}
-      <p class="error" role="alert">{error}</p>
+    {#if displayError}
+      <p class="error" role="alert" data-passkey-error>{displayError}</p>
     {/if}
   </div>
 </div>
