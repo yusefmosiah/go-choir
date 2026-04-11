@@ -18,10 +18,10 @@ let
   # the guest can't mount its rootfs without an initrd. By building
   # ext4 into the kernel, we avoid needing an initrd entirely.
   guestKernelPackage = pkgs.linuxKernel.kernels.linux_6_1.override {
-    structuredExtraConfig = with pkgs.kernelPatches.config; {
+    structuredExtraConfig = with pkgs.lib.kernel; {
       EXT4_FS = yes;
       JBD2 = yes;
-      MB_CACHE = yes;  # mbcache - needed by ext4
+      MB_CACHE = yes;
       CRC16 = yes;
       NET = yes;
       INET = yes;
