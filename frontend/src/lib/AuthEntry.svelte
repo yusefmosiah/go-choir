@@ -22,6 +22,9 @@
 
   export let passkeyError = '';
 
+  /** Whether a passkey ceremony is in progress (disables the form). */
+  export let ceremonyInProgress = false;
+
   const dispatch = createEventDispatcher();
 
   /** @type {'register' | 'login'} */
@@ -74,6 +77,7 @@
         class:active={view === 'register'}
         data-register-toggle
         on:click={() => switchView('register')}
+        disabled={ceremonyInProgress}
       >
         Register
       </button>
@@ -82,6 +86,7 @@
         class:active={view === 'login'}
         data-login-toggle
         on:click={() => switchView('login')}
+        disabled={ceremonyInProgress}
       >
         Sign In
       </button>
@@ -100,10 +105,15 @@
             bind:value={username}
             placeholder="Choose a username"
             autocomplete="username"
+            disabled={ceremonyInProgress}
             required
           />
-          <button type="submit" class="primary-action">
-            Register with Passkey
+          <button type="submit" class="primary-action" disabled={ceremonyInProgress} data-auth-submit>
+            {#if ceremonyInProgress}
+              Creating passkey…
+            {:else}
+              Register with Passkey
+            {/if}
           </button>
         </form>
       </div>
@@ -120,10 +130,15 @@
             bind:value={username}
             placeholder="Enter your username"
             autocomplete="username"
+            disabled={ceremonyInProgress}
             required
           />
-          <button type="submit" class="primary-action">
-            Sign In with Passkey
+          <button type="submit" class="primary-action" disabled={ceremonyInProgress} data-auth-submit>
+            {#if ceremonyInProgress}
+              Signing in…
+            {:else}
+              Sign In with Passkey
+            {/if}
           </button>
         </form>
       </div>

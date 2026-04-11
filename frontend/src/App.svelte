@@ -108,6 +108,7 @@
 {:else if authState === 'signed_out'}
   <AuthEntry
     {passkeyError}
+    {ceremonyInProgress}
     on:authbegin={handleAuthBegin}
     on:clearpasskeyerror={handleClearPasskeyError}
   />
