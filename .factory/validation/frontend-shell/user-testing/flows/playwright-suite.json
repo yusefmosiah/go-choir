@@ -1,0 +1,112 @@
+{
+  "groupId": "playwright-suite",
+  "testedAt": "2026-04-10T22:15:00Z",
+  "isolation": {
+    "tool": "playwright",
+    "workers": 1,
+    "url": "http://localhost:4173",
+    "directory": "frontend"
+  },
+  "toolsUsed": ["frontend-e2e (Playwright)"],
+  "assertions": [
+    {
+      "id": "VAL-FRONTEND-001",
+      "title": "Signed-out root shows auth UI instead of the desktop shell and does not eagerly boot protected shell traffic",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-FRONTEND-002",
+      "title": "Guest users can reach both register and login views and each exposes a clear start action",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-FRONTEND-003",
+      "title": "The authenticated shell is visually distinct and exposes session-aware shell UI",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-FRONTEND-004",
+      "title": "Cancelled or failed passkey ceremonies stay in a retryable guest auth state",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "title": "A first-time user can register a passkey and land in the authenticated shell on draft.choir-ip.com",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "title": "A returning user can log in from a fresh signed-out state and land in the authenticated shell",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-003",
+      "title": "Same-origin secure auth cookies automatically authorize documented shell bootstrap HTTP and protected WebSocket traffic",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-004",
+      "title": "Expired access state renews through refresh rotation without a new passkey ceremony",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-005",
+      "title": "Hard reload or a new tab at / rehydrates the authenticated shell from valid same-origin cookies",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-006",
+      "title": "Logout revokes shell, session, HTTP, and WebSocket access across refresh and back navigation",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-007",
+      "title": "Switching from user A to user B does not leak stale shell, proxy, or live-channel state",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    },
+    {
+      "id": "VAL-CROSS-008",
+      "title": "When refresh can no longer renew, the browser falls back cleanly to the guest auth state",
+      "status": "pass",
+      "evidence": {
+        "executionLog": "frontend-shell/playwright-suite/playwright-stdout.txt"
+      }
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Ran 58 tests in Playwright suite using 1 worker. All tests passed, successfully validating all assigned assertions."
+}
