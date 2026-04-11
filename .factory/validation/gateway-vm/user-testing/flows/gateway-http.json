@@ -1,0 +1,206 @@
+{
+  "groupId": "gateway-http",
+  "testedAt": "2026-04-11T17:20:00Z",
+  "isolation": {
+    "target": "https://draft.choir-ip.com",
+    "tool": "curl",
+    "evidenceDirectory": "/Users/wiz/.factory/missions/969491ec-3df3-47c7-b9bf-8e384615819d/evidence/gateway-vm/gateway-http"
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-GATEWAY-002",
+      "title": "Public provider routes are not usable as raw browser inference proxies",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "GET /provider/v1/inference with Mozilla User-Agent",
+          "expected": "403 Forbidden - provider routes deny browser callers",
+          "observed": "404 Not Found - provider endpoint not reachable"
+        },
+        {
+          "action": "GET /provider/v1/inference without User-Agent",
+          "expected": "403 Forbidden or 401 Unauthorized",
+          "observed": "404 Not Found - gateway service not deployed"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [
+          "gateway-vm/gateway-http/VAL-GATEWAY-002-browser-ua.txt",
+          "gateway-vm/gateway-http/VAL-GATEWAY-003-no-auth.txt"
+        ],
+        "network": "GET /provider/v1/inference -> 404"
+      },
+      "issues": "Gateway service returning 404 on all provider routes. Backend services may not be deployed or running on Node B."
+    },
+    {
+      "id": "VAL-GATEWAY-003",
+      "title": "Gateway denies unauthenticated or forged callers",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "POST /provider/v1/inference without Authorization header",
+          "expected": "401 Unauthorized with 'authentication required' error",
+          "observed": "404 Not Found - endpoint not available"
+        },
+        {
+          "action": "POST /provider/v1/inference with forged Bearer token",
+          "expected": "401 Unauthorized with 'authentication required' error",
+          "observed": "404 Not Found - endpoint not available"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [
+          "gateway-vm/gateway-http/VAL-GATEWAY-003-no-auth.txt",
+          "gateway-vm/gateway-http/VAL-GATEWAY-003-forged-token.txt"
+        ],
+        "network": "POST /provider/v1/inference -> 404"
+      },
+      "issues": "Cannot test authentication denial - gateway endpoint returns 404, indicating service not deployed."
+    },
+    {
+      "id": "VAL-GATEWAY-005",
+      "title": "Rate limiting is enforced per sandbox identity",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Send multiple rapid requests from same sandbox identity",
+          "expected": "429 Too Many Requests after limit exceeded",
+          "observed": "404 Not Found - cannot reach gateway endpoint"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "N/A - service unavailable"
+      },
+      "issues": "Cannot test rate limiting - gateway service not reachable on public origin."
+    },
+    {
+      "id": "VAL-GATEWAY-006",
+      "title": "Unsupported provider or model requests fail closed",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "POST /provider/v1/inference with unsupported provider",
+          "expected": "400 Bad Request with 'unsupported provider' error",
+          "observed": "404 Not Found - endpoint not available"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [
+          "gateway-vm/gateway-http/VAL-GATEWAY-006-unsupported.txt"
+        ],
+        "network": "POST /provider/v1/inference with provider=unsupported -> 404"
+      },
+      "issues": "Cannot test unsupported provider rejection - gateway service returning 404."
+    },
+    {
+      "id": "VAL-GATEWAY-007",
+      "title": "Upstream provider failures are sanitized",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Trigger provider failure and inspect response",
+          "expected": "Sanitized error without credentials or stack traces",
+          "observed": "Cannot test - gateway not deployed"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "N/A - service unavailable"
+      },
+      "issues": "Cannot test upstream failure sanitization - prerequisite gateway service not available."
+    },
+    {
+      "id": "VAL-GATEWAY-008",
+      "title": "Stale or replaced sandbox credentials stop working",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Use credential after rotation/revocation",
+          "expected": "401 Unauthorized - credential no longer valid",
+          "observed": "Cannot test - gateway not deployed"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "N/A - service unavailable"
+      },
+      "issues": "Cannot test stale credential invalidation - gateway service not available."
+    },
+    {
+      "id": "VAL-CROSS-110",
+      "title": "Invalid auth is denied before downstream side effects",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Send invalid auth to protected runtime endpoint",
+          "expected": "401 before any runtime/VM/gateway side effects",
+          "observed": "404 on /api/health - proxy also not fully deployed"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "GET /api/health -> 404"
+      },
+      "issues": "Backend services (auth, proxy, gateway) appear not deployed or misconfigured."
+    },
+    {
+      "id": "VAL-CROSS-114",
+      "title": "Provider credentials stay outside browser and guest VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Inspect browser responses for credential leakage",
+          "expected": "No provider credentials in headers/body",
+          "observed": "Cannot test - provider routes not reachable"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "N/A - service unavailable"
+      },
+      "issues": "Cannot verify credential absence - gateway service not deployed."
+    },
+    {
+      "id": "VAL-CROSS-123",
+      "title": "Upstream provider failure is isolated per sandbox",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Cause provider failure for one sandbox, verify other sandbox unaffected",
+          "expected": "Sandbox A failure does not affect Sandbox B",
+          "observed": "Cannot test - gateway not deployed"
+        }
+      ],
+      "evidence": {
+        "consoleOutput": [],
+        "network": "N/A - service unavailable"
+      },
+      "issues": "Cannot test failure isolation - prerequisite gateway service not available."
+    }
+  ],
+  "frictions": [],
+  "blockers": [
+    {
+      "description": "Gateway service (port 8084) not deployed or not responding on Node B. All /provider/* routes return 404.",
+      "affectedAssertions": [
+        "VAL-GATEWAY-002",
+        "VAL-GATEWAY-003",
+        "VAL-GATEWAY-005",
+        "VAL-GATEWAY-006",
+        "VAL-GATEWAY-007",
+        "VAL-GATEWAY-008"
+      ],
+      "quickFixAttempted": "Tested multiple endpoints: /provider/v1/inference, /provider/health, /auth/health, /api/health. All return 404. Frontend SPA loads correctly (built assets served), indicating Caddy is running but backend services are not deployed or not healthily responding."
+    },
+    {
+      "description": "Auth service (port 8081) also not responding on /auth/* routes, returning 404.",
+      "affectedAssertions": [
+        "VAL-CROSS-110"
+      ],
+      "quickFixAttempted": "Tested /auth/health and /auth/register/options - both return 404."
+    }
+  ],
+  "summary": "Tested 9 assertions: 0 passed, 0 failed, 9 blocked. The gateway-vm milestone backend services (gateway, auth) are not deployed or not healthy on https://draft.choir-ip.com. Frontend SPA serves correctly, but all backend API endpoints return 404."
+}

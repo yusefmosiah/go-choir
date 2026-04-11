@@ -1,0 +1,184 @@
+{
+  "milestone": "gateway-vm",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 28,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 28
+  },
+  "passedAssertions": [],
+  "failedAssertions": [],
+  "blockedAssertions": [
+    {
+      "id": "VAL-GATEWAY-001",
+      "blockedBy": "Runtime API endpoints (/api/agent/task) return 404 on deployed origin. Backend services not fully deployed on Node B.",
+      "evidence": "Shell bootstrap works (returns sandbox-m1), but task submission endpoint unavailable."
+    },
+    {
+      "id": "VAL-GATEWAY-002",
+      "blockedBy": "Gateway service (port 8084) not deployed or not responding on Node B. All /provider/* routes return 404.",
+      "evidence": "Tested /provider/v1/inference, /provider/health - all 404. Frontend SPA serves correctly."
+    },
+    {
+      "id": "VAL-GATEWAY-003",
+      "blockedBy": "Gateway service returning 404 - cannot test authentication denial",
+      "evidence": "POST /provider/v1/inference returns 404, not 401/403."
+    },
+    {
+      "id": "VAL-GATEWAY-004",
+      "blockedBy": "Provider credentials not verifiable - gateway service not reachable",
+      "evidence": "Cannot inspect guest VM or gateway responses for credential leakage."
+    },
+    {
+      "id": "VAL-GATEWAY-005",
+      "blockedBy": "Cannot test rate limiting - gateway service not reachable on public origin",
+      "evidence": "No gateway endpoint to send rapid requests to."
+    },
+    {
+      "id": "VAL-GATEWAY-006",
+      "blockedBy": "Cannot test unsupported provider rejection - gateway service returning 404",
+      "evidence": "POST with unsupported provider returns 404, not 400."
+    },
+    {
+      "id": "VAL-GATEWAY-007",
+      "blockedBy": "Cannot test upstream failure sanitization - prerequisite gateway service not available",
+      "evidence": "No gateway to trigger upstream failures against."
+    },
+    {
+      "id": "VAL-GATEWAY-008",
+      "blockedBy": "Cannot test stale credential invalidation - gateway service not available",
+      "evidence": "No gateway endpoint to test credential rotation."
+    },
+    {
+      "id": "VAL-VM-001",
+      "blockedBy": "vmctl service on node-b is from older commit (032ae6c9) that predates VM routing implementation",
+      "evidence": "Deployed commit 032ae6c9 (Apr 10), latest is 4b0233c (Apr 11). No /internal/vmctl/* routes."
+    },
+    {
+      "id": "VAL-VM-002",
+      "blockedBy": "Proxy service missing PROXY_VMCTL_URL environment variable",
+      "evidence": "Proxy health lacks vmctl_routing field. Requires service config update."
+    },
+    {
+      "id": "VAL-VM-003",
+      "blockedBy": "Implementation verified via unit tests, but cannot validate on node-b due to missing vmctl endpoints",
+      "evidence": "TestOwnershipRegistry_ResolveOrAssignReturnsSameVM: PASS (local)"
+    },
+    {
+      "id": "VAL-VM-004",
+      "blockedBy": "Implementation verified via unit tests. Pending node-b deployment for live validation",
+      "evidence": "TestOwnershipRegistry_ConcurrentRequestsCollapseToOneVM: PASS (local)"
+    },
+    {
+      "id": "VAL-VM-005",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestOwnershipRegistry_DifferentUsersGetDifferentVMs: PASS (local)"
+    },
+    {
+      "id": "VAL-VM-006",
+      "blockedBy": "Implementation verified via unit tests. Needs node-b deployment",
+      "evidence": "TestVMctlRouting_BootstrapRoutesThroughVM: PASS (local)"
+    },
+    {
+      "id": "VAL-VM-007",
+      "blockedBy": "Guest image correctly configured. Firecracker VMs not yet running on node-b",
+      "evidence": "nix/guest-image.nix verified, TestManagerBuildFirecrackerConfig_NoSecrets: PASS"
+    },
+    {
+      "id": "VAL-VM-008",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestOwnershipRegistry_LogoutStopsOnlyCurrentUser: PASS, TestOwnershipRegistry_IdleTimeoutChecks: PASS"
+    },
+    {
+      "id": "VAL-VM-009",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestOwnershipRegistry_RecoverIncrementsEpoch: PASS, TestOwnershipRegistry_MarkUnhealthy: PASS"
+    },
+    {
+      "id": "VAL-VM-010",
+      "blockedBy": "Guest image build is implemented but not deployed on Node B",
+      "evidence": "/var/lib/go-choir/vms/ not found. Build: nix build .#guest-image, deploy to node-b."
+    },
+    {
+      "id": "VAL-VM-011",
+      "blockedBy": "Implementation verified. Blocked on node-b deployment",
+      "evidence": "nix/guest-image.nix excludes credentials, boot_args have no secrets."
+    },
+    {
+      "id": "VAL-VM-012",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestHandler_ResolveDeniesExternalCallers: PASS, TestIsInternalCaller: PASS"
+    },
+    {
+      "id": "VAL-CROSS-110",
+      "blockedBy": "Backend services (auth, proxy, gateway) return 404 - appear not deployed or misconfigured on Node B",
+      "evidence": "GET /api/health -> 404. Cannot test auth denial before side effects."
+    },
+    {
+      "id": "VAL-CROSS-112",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "ownership.go user-scoped ownerships map ensures isolation."
+    },
+    {
+      "id": "VAL-CROSS-113",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestClient_DifferentUsersIsolatedVMs: PASS, TestVMctlRouting_DifferentUsersGetDifferentVMs: PASS"
+    },
+    {
+      "id": "VAL-CROSS-114",
+      "blockedBy": "Cannot verify credential absence - gateway service not deployed on Node B",
+      "evidence": "Cannot inspect browser responses or guest VMs for credential leakage."
+    },
+    {
+      "id": "VAL-CROSS-115",
+      "blockedBy": "Gateway rate limiting exists but needs VM integration for full validation. Blocked on node-b deployment",
+      "evidence": "Per-sandbox rate limiting implemented but cannot test with VM-backed sandboxes."
+    },
+    {
+      "id": "VAL-CROSS-116",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestOwnershipRegistry_HibernateAndResume: PASS, TestOwnershipRegistry_StoppedVMGetsResumed: PASS"
+    },
+    {
+      "id": "VAL-CROSS-117",
+      "blockedBy": "Implementation verified via unit tests. Blocked on node-b deployment",
+      "evidence": "TestOwnershipRegistry_RecoverIncrementsEpoch: PASS - epoch tracking prevents duplicate effects"
+    },
+    {
+      "id": "VAL-CROSS-123",
+      "blockedBy": "Cannot test failure isolation - prerequisite gateway service not available on Node B",
+      "evidence": "No gateway to cause/trigger provider failures for isolation testing."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added 'Flow Validator Guidance: gateway-vm' section with Node B SSH testing approach, concurrency limits, and isolation boundaries for VM/gateway validation",
+      "source": "setup analysis"
+    }
+  ],
+  "previousRound": null,
+  "deploymentRequired": {
+    "nodeBCommit": "032ae6c9b60354fcc18bbc9d47e3312945879a66",
+    "requiredCommit": "4b0233cedca107b3119453d7d30feee02f1fcfae",
+    "steps": [
+      "Build guest images: nix build .#guest-image",
+      "Deploy kernel (vmlinux) and rootfs (rootfs.ext4) to /var/lib/go-choir/guest/ on node-b",
+      "Update go-choir-vmctl.service with Firecracker env vars (VM_FIRECRACKER_BIN, VM_KERNEL_IMAGE, VM_ROOTFS_IMAGE, VM_STATE_DIR, VM_HOST_BASE_PORT)",
+      "Update go-choir-proxy.service with PROXY_VMCTL_URL=http://127.0.0.1:8083",
+      "Run nixos-rebuild switch --flake .#go-choir-b on node-b",
+      "Restart services"
+    ],
+    "localTestsPass": true,
+    "localTestSummary": "38 vmctl tests PASS, 14 vmmanager tests PASS, 31 proxy tests PASS (including 8 VM-specific routing tests)"
+  },
+  "notes": [
+    "All 28 gateway-vm assertions are BLOCKED due to deployment gap between local implementation and Node B",
+    "Implementation is complete and verified via comprehensive local unit tests",
+    "Node B requires redeploy of latest commit to enable VM/gateway validation",
+    "Frontend SPA serves correctly from Node B, confirming Caddy is operational",
+    "Auth service on Node B works for basic auth (registration/login/session), but runtime/gateway APIs return 404"
+  ]
+}

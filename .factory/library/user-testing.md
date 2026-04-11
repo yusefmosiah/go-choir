@@ -110,6 +110,33 @@ Do not rely on local direct-port browser flows for acceptance.
 - Node B SSH-based validation touches shared remote system state; keep it single-threaded.
 - Do not access Node A or any host other than `node-b`.
 
+## Flow Validator Guidance: gateway-vm
+
+**Surface:** Node B deployed origin `https://draft.choir-ip.com` plus SSH access for VM/guest inspection
+
+**Concurrency limit:** 1 for Node B SSH-based validation (VM ownership, guest isolation, lifecycle)
+
+**Isolation boundaries:**
+- Use separate user accounts for multi-user isolation tests (create test users via auth API)
+- VM ownership state is global on Node B - serialize all VM-related assertions
+- Guest VM state is ephemeral - document VM IDs used for cross-assertion correlation
+
+**Testing approach by assertion:**
+- **Gateway HTTP assertions (VAL-GATEWAY-002 through 008):** Use `curl` against deployed public routes `/provider/*`, `/auth/*`, `/api/*`
+- **Gateway end-to-end (VAL-GATEWAY-001):** Requires `agent-browser` with authenticated session to verify real provider response flows through `login → proxy → runtime → gateway → Bedrock/Z.AI → UI`
+- **VM assertions (VAL-VM-001 through 012):** Requires SSH to Node B for `vmctl` state inspection, VM lifecycle management, and guest isolation verification
+- **Cross assertions (VAL-CROSS-110, 112-117, 123):** Mix of `curl` (auth denial) and SSH (VM isolation, crash recovery)
+
+**Required credentials/data for validation:**
+- Node B SSH access available via `ssh node-b` alias
+- Provider credentials are host-side only (validate absence from guest VMs via SSH)
+- Test users must be created via auth registration API (WebAuthn requires Playwright virtual authenticator)
+
+**Guest VM inspection commands:**
+- `ssh node-b "cat /var/lib/go-choir/vmctl/ownership.json"` - VM ownership state
+- `ssh node-b "ls -la /var/lib/go-choir/vms/"` - VM image directory
+- Guest inspection requires VM boot completion and SSH into guest (if available)
+
 ## Notes
 
 - Browser validations must prove the frontend uses same-origin cookies only; no bearer-token injection, `localhost`, or direct service ports

@@ -1,0 +1,427 @@
+{
+  "groupId": "vm-assertions",
+  "testedAt": "2026-04-11T17:20:00Z",
+  "isolation": {
+    "target": "Node B via SSH",
+    "sshHost": "node-b",
+    "tool": "SSH + curl + local Go tests"
+  },
+  "toolsUsed": ["ssh", "curl", "go test"],
+  "assertions": [
+    {
+      "id": "VAL-VM-001",
+      "title": "First protected runtime request resolves to caller's VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Check deployed vmctl version on node-b",
+          "expected": "vmctl exposes /internal/vmctl/resolve endpoint",
+          "observed": "vmctl service returns 404 for all /internal/vmctl/* routes"
+        },
+        {
+          "action": "Verify git commit of deployed binary",
+          "expected": "Deployed version matches latest VM implementation",
+          "observed": "Deployed: 032ae6c9b60354fcc18bbc9d47e3312945879a66, Latest: 4b0233cedca107b3119453d7d30feee02f1fcfae"
+        }
+      ],
+      "evidence": {
+        "logs": ["node-b-vmctl-routes-404.log"],
+        "testResults": "vmctl unit tests: PASS (local)"
+      },
+      "issues": "vmctl service on node-b is from older commit (032ae6c9) that predates the VM routing implementation. Requires redeploy to test."
+    },
+    {
+      "id": "VAL-VM-002",
+      "title": "No static host sandbox fallback - proxy routes to VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Test proxy health endpoint for vmctl routing status",
+          "expected": "Proxy reports 'vmctl_routing: enabled' in health response",
+          "observed": "Proxy health returns: {\"status\":\"ok\",\"service\":\"proxy\"} - no vmctl_routing field"
+        },
+        {
+          "action": "Check proxy service environment for VMCTL_URL",
+          "expected": "PROXY_VMCTL_URL=http://127.0.0.1:8083",
+          "observed": "Environment not visible in systemctl status - likely not configured"
+        }
+      ],
+      "evidence": {
+        "network": "GET http://localhost:8082/health -> 200 OK (no vmctl routing field)",
+        "testResults": "proxy VM routing tests: PASS (local)"
+      },
+      "issues": "Proxy service may be missing PROXY_VMCTL_URL environment variable. Requires service config update and redeploy."
+    },
+    {
+      "id": "VAL-VM-003",
+      "title": "Same user stays pinned to same VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_ResolveOrAssignReturnsSameVM",
+          "expected": "Multiple resolves return same VM ID for same user",
+          "observed": "Local test PASS: same user gets same VM on subsequent resolves"
+        }
+      ],
+      "evidence": {
+        "testResults": "TestOwnershipRegistry_ResolveOrAssignReturnsSameVM: PASS",
+        "testOutput": "vmctl: assigned VM vm-e3a8548581bda37cd9f0a9b13ecbe51b to user user-1"
+      },
+      "issues": "Implementation verified via unit tests, but cannot validate on node-b due to missing vmctl endpoints."
+    },
+    {
+      "id": "VAL-VM-004",
+      "title": "Concurrent first requests collapse to one VM assignment",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_ConcurrentRequestsCollapseToOneVM",
+          "expected": "Concurrent requests for same user get same VM ID",
+          "observed": "Local test PASS: 10 concurrent requests all received same VM"
+        },
+        {
+          "action": "Run TestClient_ConcurrentResolveSameUser",
+          "expected": "Client-level concurrent resolves collapse correctly",
+          "observed": "Local test PASS: concurrent resolves collapsed"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestOwnershipRegistry_ConcurrentRequestsCollapseToOneVM: PASS",
+          "TestClient_ConcurrentResolveSameUser: PASS"
+        ]
+      },
+      "issues": "Implementation verified via unit tests. Pending node-b deployment for live validation."
+    },
+    {
+      "id": "VAL-VM-005",
+      "title": "Different users get distinct VMs and isolated state",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_DifferentUsersGetDifferentVMs",
+          "expected": "Users alice and bob get different VM IDs",
+          "observed": "Local test PASS: alice=vm-047819bae16dd26bb7a31ad042c19f48, bob=vm-dc5af3b5b27ee365b3812ed146ecf450"
+        },
+        {
+          "action": "Run TestVMctlRouting_DifferentUsersGetDifferentVMs",
+          "expected": "Proxy routes different users to different sandbox URLs",
+          "observed": "Local test PASS: different VMs assigned to different users"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestOwnershipRegistry_DifferentUsersGetDifferentVMs: PASS",
+          "TestVMctlRouting_DifferentUsersGetDifferentVMs: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-VM-006",
+      "title": "Live traffic survives VM hop with trusted identity injection",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run proxy WebSocket routing tests",
+          "expected": "WS traffic routes through VM with X-Authenticated-User header",
+          "observed": "Local test PASS: WS relay works with identity injection"
+        }
+      ],
+      "evidence": {
+        "testResults": "TestVMctlRouting_BootstrapRoutesThroughVM: PASS"
+      },
+      "issues": "Implementation verified. Needs node-b deployment."
+    },
+    {
+      "id": "VAL-VM-007",
+      "title": "Guest workloads cannot reach host control-plane surfaces",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Verify guest image configuration excludes host secrets",
+          "expected": "Guest rootfs has no provider credentials, no auth keys",
+          "observed": "nix/guest-image.nix correctly excludes secrets - only sandbox binary included"
+        },
+        {
+          "action": "Run vmmanager config tests for no secrets",
+          "expected": "Firecracker config has no credential injection",
+          "observed": "TestManagerBuildFirecrackerConfig_NoSecrets: PASS"
+        }
+      ],
+      "evidence": {
+        "testResults": "TestManagerBuildFirecrackerConfig_NoSecrets: PASS",
+        "sourceInspection": "nix/guest-image.nix explicitly excludes provider credentials from guest"
+      },
+      "issues": "Guest image is correctly configured. Firecracker VMs not yet running on node-b. Need: (1) Build guest image with 'nix build .#guest-image', (2) Deploy to /var/lib/go-choir/guest/, (3) Update vmctl service env vars."
+    },
+    {
+      "id": "VAL-VM-008",
+      "title": "Logout/idle transitions only current user's VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_LogoutStopsOnlyCurrentUser",
+          "expected": "Alice logout stops only alice's VM, bob's VM remains active",
+          "observed": "Local test PASS: alice's VM stopped (reason=logout), bob's VM active"
+        },
+        {
+          "action": "Run TestOwnershipRegistry_IdleTimeoutChecks",
+          "expected": "Idle VMs hibernated, active VMs remain running",
+          "observed": "Local test PASS: user-idle VM hibernated, user-active VM stays active"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestOwnershipRegistry_LogoutStopsOnlyCurrentUser: PASS",
+          "TestOwnershipRegistry_IdleTimeoutChecks: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-VM-009",
+      "title": "vmctl detects unhealthy guests and recovers",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_RecoverIncrementsEpoch",
+          "expected": "Recovery creates fresh boot with new epoch",
+          "observed": "Local test PASS: VM recovered with new_epoch=3 (fresh-boot)"
+        },
+        {
+          "action": "Run TestOwnershipRegistry_MarkUnhealthy",
+          "expected": "VM can be marked unhealthy",
+          "observed": "Local test PASS: VM marked as degraded"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestOwnershipRegistry_RecoverIncrementsEpoch: PASS",
+          "TestOwnershipRegistry_MarkUnhealthy: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-VM-010",
+      "title": "Firecracker guest images built from repo on Node B",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Check /var/lib/go-choir/vms/ on node-b",
+          "expected": "Directory exists with repo-built vmlinux and rootfs.ext4",
+          "observed": "VM directory not found - guest images not deployed"
+        },
+        {
+          "action": "Inspect nix/guest-image.nix build configuration",
+          "expected": "Nix expression builds kernel and ext4 rootfs from repo",
+          "observed": "guest-image.nix correctly defines: guestRootfs (256MB ext4), guestKernel (vmlinux)"
+        },
+        {
+          "action": "Check nix build availability",
+          "expected": "nix build .#guest-image produces reproducible artifacts",
+          "observed": "flake.nix exposes guest-image, guestRootfs, guestKernel packages"
+        }
+      ],
+      "evidence": {
+        "sourceInspection": "nix/guest-image.nix builds repo-built artifacts",
+        "nodeBInspection": "/var/lib/go-choir/vms/ not found - images not deployed"
+      },
+      "issues": "Guest image build is implemented but not deployed. Build command: 'nix build .#guest-image' then deploy kernel and rootfs to /var/lib/go-choir/guest/ on node-b."
+    },
+    {
+      "id": "VAL-VM-011",
+      "title": "Provider secrets absent from guest VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Inspect guest-image.nix for credential exclusion",
+          "expected": "No AWS keys, no auth signing material, no gateway secrets",
+          "observed": "Verified: guest rootfs contains ONLY sandbox binary; init script has no credential env vars"
+        },
+        {
+          "action": "Inspect vmmanager Firecracker config builder",
+          "expected": "boot_args contain no credentials",
+          "observed": "buildFirecrackerConfig: bootArgs only contain guest_port, persistent path, vm_id, epoch"
+        }
+      ],
+      "evidence": {
+        "sourceInspection": [
+          "nix/guest-image.nix: guest receives only minimum bootstrap material",
+          "internal/vmmanager/manager.go: No secrets in guest environment, config files, or process args"
+        ],
+        "testResults": "TestManagerBuildFirecrackerConfig_NoSecrets: PASS"
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-VM-012",
+      "title": "vmctl remains internal-only control plane",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestHandler_ResolveDeniesExternalCallers",
+          "expected": "External callers get 403 Forbidden",
+          "observed": "Local test PASS: external requests denied"
+        },
+        {
+          "action": "Run TestIsInternalCaller",
+          "expected": "localhost, 127.0.0.1, ::1, X-Internal-Caller header allowed",
+          "observed": "Local test PASS: all internal caller patterns recognized"
+        },
+        {
+          "action": "Run TestVMctlDeny_PublicVMctlBlocked",
+          "expected": "Proxy denies /internal/vmctl/* to public callers",
+          "observed": "Local test PASS: public vmctl access blocked at proxy"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestHandler_ResolveDeniesExternalCallers: PASS",
+          "TestIsInternalCaller: PASS",
+          "TestVMctlDeny_PublicVMctlBlocked: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-CROSS-112",
+      "title": "Sequential user switch doesn't attach to prior warm VM",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Verify ownership registry isolates users",
+          "expected": "User B cannot access User A's VM",
+          "observed": "Implementation uses user-scoped ownerships map - each user has distinct VM entry"
+        }
+      ],
+      "evidence": {
+        "sourceInspection": "ownership.go: ownerships map[userID]*VMOwnership ensures isolation",
+        "testResults": "TestOwnershipRegistry_DifferentUsersGetDifferentVMs: PASS"
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-CROSS-113",
+      "title": "Concurrent users receive isolated VM ownership",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run concurrent user assignment tests",
+          "expected": "Concurrent alice and bob get different VMs",
+          "observed": "Local test PASS: concurrent users get isolated VMs"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestClient_DifferentUsersIsolatedVMs: PASS",
+          "TestVMctlRouting_DifferentUsersGetDifferentVMs: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-CROSS-115",
+      "title": "Provider throttling isolated per sandbox",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Inspect gateway rate limiting implementation",
+          "expected": "Per-sandbox rate limiting with sandbox credential scope",
+          "observed": "Gateway tests show rate limiting exists, need to verify with VM-backed sandboxes"
+        }
+      ],
+      "evidence": {
+        "sourceInspection": "Gateway has per-sandbox rate limiting (implemented in earlier milestone)"
+      },
+      "issues": "Gateway rate limiting exists but needs VM integration for full validation. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-CROSS-116",
+      "title": "Idle stop/hibernate resumes same user's state",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_HibernateAndResume",
+          "expected": "Resume keeps same epoch, VM ID, and user state",
+          "observed": "Local test PASS: resumed VM vm-36ea2412088bc662b9b98cf1eb96e832 with same epoch=2"
+        },
+        {
+          "action": "Run TestOwnershipRegistry_StoppedVMGetsResumed",
+          "expected": "Resolve of stopped VM triggers resume",
+          "observed": "Local test PASS: stopped VM resumed on resolve"
+        }
+      ],
+      "evidence": {
+        "testResults": [
+          "TestOwnershipRegistry_HibernateAndResume: PASS",
+          "TestOwnershipRegistry_StoppedVMGetsResumed: PASS"
+        ]
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    },
+    {
+      "id": "VAL-CROSS-117",
+      "title": "Crash recovery avoids duplicate canonical effects",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Run TestOwnershipRegistry_RecoverIncrementsEpoch",
+          "expected": "Recovery increments epoch (fresh boot), resume keeps epoch",
+          "observed": "Local test PASS: recovery -> new_epoch=3 (fresh-boot), hibernate/resume -> same epoch=2"
+        },
+        {
+          "action": "Verify epoch tracking prevents duplicate effects",
+          "expected": "Epoch change signals callers not to retry in-flight work",
+          "observed": "Epoch is monotonically increasing; logged as 'new_epoch' on recovery vs 'same-epoch' on resume"
+        }
+      ],
+      "evidence": {
+        "testResults": "TestOwnershipRegistry_RecoverIncrementsEpoch: PASS",
+        "logOutput": "vmctl: recovered VM vm-b559759e6273e72b8bca30651aa92386 for user user-1 (new_epoch=3, fresh-boot)"
+      },
+      "issues": "Implementation verified. Blocked on node-b deployment."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Deployed vmctl binary on node-b predates VM implementation - git commit mismatch",
+      "resolved": false,
+      "affectedAssertions": [
+        "VAL-VM-001", "VAL-VM-002", "VAL-VM-003", "VAL-VM-004", "VAL-VM-005",
+        "VAL-VM-006", "VAL-VM-007", "VAL-VM-008", "VAL-VM-009", "VAL-VM-010",
+        "VAL-VM-011", "VAL-VM-012", "VAL-CROSS-112", "VAL-CROSS-113",
+        "VAL-CROSS-115", "VAL-CROSS-116", "VAL-CROSS-117"
+      ]
+    },
+    {
+      "description": "Guest images not built or deployed on node-b - missing /var/lib/go-choir/guest/ directory",
+      "resolved": false,
+      "affectedAssertions": ["VAL-VM-010", "VAL-VM-011"]
+    },
+    {
+      "description": "vmctl service missing required environment variables for Firecracker integration",
+      "resolved": false,
+      "affectedAssertions": ["VAL-VM-001", "VAL-VM-002", "VAL-VM-009", "VAL-VM-010"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Node B is running older go-choir deployment (commit 032ae6c9) that predates the VM ownership registry and Firecracker integration (commit 4b0233c). The vmctl service is in host-process sandbox mode and does not expose /internal/vmctl/* routes.",
+      "affectedAssertions": [
+        "VAL-VM-001", "VAL-VM-002", "VAL-VM-003", "VAL-VM-004", "VAL-VM-005",
+        "VAL-VM-006", "VAL-VM-007", "VAL-VM-008", "VAL-VM-009", "VAL-VM-010",
+        "VAL-VM-011", "VAL-VM-012", "VAL-CROSS-112", "VAL-CROSS-113",
+        "VAL-CROSS-115", "VAL-CROSS-116", "VAL-CROSS-117"
+      ],
+      "quickFixAttempted": "Verified local implementation via comprehensive unit tests (all PASS). Cannot deploy to node-b as that requires CI/CD pipeline execution."
+    },
+    {
+      "description": "Firecracker guest images need to be built via Nix and deployed to /var/lib/go-choir/guest/ on node-b. The nix/guest-image.nix is configured but images have not been produced.",
+      "affectedAssertions": ["VAL-VM-010", "VAL-VM-011"],
+      "quickFixAttempted": "N/A - requires Nix build on Linux/x86_64 host"
+    }
+  ],
+  "summary": "All 17 assigned assertions are BLOCKED pending deployment to node-b. The VM ownership registry, Firecracker integration, and guest image infrastructure have been implemented (verified via comprehensive local unit tests: 38 vmctl tests PASS, 14 vmmanager tests PASS, 31 proxy tests PASS including 8 VM-specific routing tests). However, node-b is running an older deployment (commit 032ae6c9 from April 10) that predates the VM implementation (commit 4b0233c from April 11). To validate on node-b, the following deployment steps are required: (1) Build guest images: 'nix build .#guest-image', (2) Deploy kernel and rootfs to /var/lib/go-choir/guest/ on node-b, (3) Update go-choir-vmctl.service with Firecracker env vars (VM_FIRECRACKER_BIN, VM_KERNEL_IMAGE, VM_ROOTFS_IMAGE, VM_STATE_DIR, VM_HOST_BASE_PORT), (4) Update go-choir-proxy.service with PROXY_VMCTL_URL, (5) Restart services."
+}

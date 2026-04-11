@@ -1,0 +1,95 @@
+{
+  "groupId": "gateway-e2e",
+  "testedAt": "2026-04-11T20:45:00Z",
+  "isolation": {
+    "target": "https://draft.choir-ip.com",
+    "tool": "agent-browser",
+    "sessionId": "74d5df63df2d__gateway1",
+    "testUser": "gatewaytest74d5df63"
+  },
+  "toolsUsed": ["agent-browser"],
+  "assertions": [
+    {
+      "id": "VAL-GATEWAY-001",
+      "title": "Authenticated requests receive a Bedrock or Z.AI response through the gateway",
+      "status": "blocked",
+      "steps": [
+        {
+          "action": "Navigate to https://draft.choir-ip.com/",
+          "expected": "Auth entry page loads with Register/Sign In options",
+          "observed": "Auth entry page loaded successfully showing Register, Sign In, and Register with Passkey buttons"
+        },
+        {
+          "action": "Set up WebAuthn virtual authenticator via CDP",
+          "expected": "Virtual authenticator created and available for passkey registration",
+          "observed": "Virtual authenticator created with ID e9cdab83-3f8d-40f5-9b86-ce748078523b on CDP port 9223"
+        },
+        {
+          "action": "Enter username 'gatewaytest74d5df63' and click Register with Passkey",
+          "expected": "WebAuthn registration ceremony completes and session is established",
+          "observed": "Registration completed successfully. User authenticated and shell UI displayed with Sign Out button"
+        },
+        {
+          "action": "Verify shell bootstrap loads via /api/shell/bootstrap",
+          "expected": "Bootstrap returns sandbox assignment and user context",
+          "observed": "Bootstrap returned: sandbox_id 'sandbox-m1', user '4902af67-0d15-449c-98f9-1e20ab59ba07', status_code 200"
+        },
+        {
+          "action": "Verify live channel WebSocket connection",
+          "expected": "Live channel shows 'Connected' status",
+          "observed": "Live Channel shows 'Connected' - WebSocket through proxy is working"
+        },
+        {
+          "action": "Submit prompt via POST /api/agent/task",
+          "expected": "Task accepted and routed through gateway to provider",
+          "observed": "Endpoint returned HTTP 404 with error 'not found'. Runtime API not available on deployed origin"
+        },
+        {
+          "action": "Verify response path through gateway (proxy → runtime/VM → gateway → provider → UI)",
+          "expected": "Response returns through proper path without direct browser-to-provider calls",
+          "observed": "Could not verify - runtime task endpoint unavailable. Network trace shows only draft.choir-ip.com traffic (no direct provider calls attempted)"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-initial-page.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-cdp-connected.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-after-registration.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-shell-full.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-final-state.png"
+        ],
+        "consoleErrors": "none",
+        "network": [
+          "POST https://draft.choir-ip.com/api/agent/task -> 404 (not found)",
+          "POST https://draft.choir-ip.com/auth/register/begin -> 200",
+          "POST https://draft.choir-ip.com/auth/register/finish -> 200",
+          "GET https://draft.choir-ip.com/api/shell/bootstrap -> 200",
+          "GET https://draft.choir-ip.com/auth/session -> 200 (authenticated)"
+        ]
+      },
+      "issues": "Runtime task API endpoints (/api/agent/task, /api/events) return 404 on deployed origin. Shell bootstrap works (sandbox-m1 assigned) but runtime/gateway flow cannot be tested due to missing backend. This appears to be a deployment/infrastructure issue where the runtime/sandbox services are not fully deployed or the VM routing is not configured on Node B."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "WebAuthn virtual authenticator setup required CDP connection - standard agent-browser session doesn't support WebAuthn without external Chromium with CDP",
+      "resolved": true,
+      "resolution": "Launched separate Chromium with --remote-debugging-port=9223, set up virtual authenticator via CDP, then connected agent-browser to that port",
+      "affectedAssertions": ["VAL-GATEWAY-001"]
+    },
+    {
+      "description": "Runtime task endpoints (/api/agent/task) return 404 instead of accepting task submissions",
+      "resolved": false,
+      "resolution": "Identified as deployment issue - runtime/sandbox not fully deployed on Node B origin",
+      "affectedAssertions": ["VAL-GATEWAY-001"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Runtime API endpoints (/api/agent/task, /api/agent/status, /api/events) return 404 on deployed origin https://draft.choir-ip.com. Shell bootstrap works (returns sandbox-m1 assignment), but task submission endpoints are not available. This prevents testing the full gateway flow: proxy → runtime/VM → gateway → Bedrock/Z.AI → UI response.",
+      "affectedAssertions": ["VAL-GATEWAY-001"],
+      "quickFixAttempted": "Verified auth is working (bootstrap returns user context), verified proxy routing exists in code (HandleProtectedAPI), checked service health endpoints (all 404). Issue appears to be that runtime/sandbox services are not deployed or configured on Node B."
+    }
+  ],
+  "summary": "Partially tested VAL-GATEWAY-001. Successfully demonstrated: (1) WebAuthn passkey authentication working through deployed origin, (2) Shell bootstrap returning sandbox assignment through proxy, (3) Live WebSocket channel connecting through proxy, (4) Network traffic limited to draft.choir-ip.com (no direct provider calls). However, the test is blocked because runtime task API endpoints (/api/agent/task) return 404, preventing verification of the full gateway flow to upstream providers. The proxy auth gating and routing logic works, but the backend runtime/gateway services appear not fully deployed on Node B."
+}
