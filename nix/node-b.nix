@@ -98,6 +98,9 @@ in
         handle /auth/* {
           reverse_proxy 127.0.0.1:8081
         }
+        handle /health {
+          reverse_proxy 127.0.0.1:8082
+        }
         handle /api/* {
           reverse_proxy 127.0.0.1:8082
         }
