@@ -2,7 +2,7 @@
 
 ## Flake Structure
 
-- `flake.nix` — Root flake with `buildGoModule` for each Go service and a `stdenv.mkDerivation` for the frontend
+- `flake.nix` — Root flake with `buildGoModule` for each Go service and `buildNpmPackage` for the frontend
 - `nix/hardware.nix` — OVH bare metal hardware config (shared between Node A and B patterns)
 - `nix/disks.nix` — Node B disk layout with UUID-based mounts
 - `nix/node-b.nix` — Full Node B system configuration
@@ -13,10 +13,18 @@
 Each Go service is built with `buildGoModule` using `subPackages` to select the specific `cmd/` directory. The `commonGoArgs` attrset provides shared configuration (src filter, vendorHash, doCheck).
 
 ### vendorHash
-Currently set to `null` because go.mod has no external dependencies. When dependencies are added, the first build will fail with a hash mismatch error — the correct hash will be shown in the error message and should be pasted into `vendorHash`.
+Set to `sha256-2Rg6bOMu4Ypi7C0NmwmG1Gv2h1/2oTn4z75yTwS3B6Q=`. When Go dependencies change, the first build will fail with a hash mismatch error — the correct hash will be shown in the error message and should be pasted into `vendorHash`.
 
 ### Frontend Package
-Uses `pkgs.runCommand` to generate a placeholder `index.html` with "go-choir" text. This avoids network access in the Nix sandbox (pnpm install would fail). The real Svelte build pipeline with pnpm will be added in Mission 2 when the frontend has real content.
+Uses `pkgs.buildNpmPackage` to build the Svelte SPA with Vite. Local development uses pnpm (`pnpm-lock.yaml`); the Nix build uses npm with a checked-in `package-lock.json` for reproducibility in the Nix sandbox.
+
+Key configuration:
+- `npmDepsHash` — Hash of npm dependencies. Initially empty (`""`); on first Nix build the error message provides the correct hash (same pattern as Go's `vendorHash`). Update the hash and rebuild.
+- `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"` — Prevents Playwright from downloading browser binaries during `npm install` (not needed for the build step, only for e2e tests).
+- Source filter excludes `node_modules/`, `test-results/`, and `.cache/`.
+- `installPhase` copies `dist/` to `$out` so Caddy's `file_server` can serve the built SPA assets.
+
+The built `dist/` contains hashed asset references (e.g., `assets/index-4UYezCQ3.js`) rather than placeholder HTML, proving the public root serves the real SPA.
 
 ### nixosConfigurations.go-choir-b
 The NixOS system config is built from 3 modules passed as `specialArgs.goChoirPackages` so systemd services and Caddy can reference the built packages.

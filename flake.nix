@@ -28,30 +28,41 @@
         doCheck = false; # Tests run separately in CI
       };
 
-      # Frontend package — placeholder index.html for Caddy to serve.
-      # The real Svelte build pipeline with pnpm will be added in Mission 2
-      # when the frontend has real content. For now, Nix just needs to produce
-      # an index.html with "go-choir" for Caddy's file_server.
-      frontendPkg = pkgs.runCommand "go-choir-frontend" {
+      # Frontend package — built Svelte SPA via buildNpmPackage.
+      # Local development uses pnpm (pnpm-lock.yaml); the Nix build uses npm
+      # with a checked-in package-lock.json for reproducibility in the sandbox.
+      # npmDepsHash will be updated on first Nix build on Node B (the error
+      # message provides the correct hash, just like Go's vendorHash).
+      frontendPkg = pkgs.buildNpmPackage {
         pname = "go-choir-frontend";
         version = goModuleVersion;
-      } ''
-        mkdir -p $out
-        cat > $out/index.html <<'EOF'
-        <!DOCTYPE html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <title>go-choir</title>
-          </head>
-          <body>
-            <h1>go-choir</h1>
-            <p>Distributed multiagent operating system</p>
-          </body>
-        </html>
-        EOF
-      '';
+        src = pkgs.lib.cleanSourceWith {
+          src = ./frontend;
+          filter = path: type:
+            let
+              base = baseNameOf path;
+            in
+            if type == "directory" then
+              base != "node_modules" && base != "test-results" && base != ".cache"
+            else
+              (pkgs.lib.hasSuffix ".js" path) ||
+              (pkgs.lib.hasSuffix ".svelte" path) ||
+              (pkgs.lib.hasSuffix ".css" path) ||
+              (pkgs.lib.hasSuffix ".html" path) ||
+              base == "package.json" ||
+              base == "package-lock.json" ||
+              base == "svelte.config.js" ||
+              base == "vite.config.js";
+        };
+        npmDepsHash = "";
+        npmBuildScript = "build";
+        # Playwright downloads browsers during postinstall, which fails in the
+        # Nix sandbox.  We only need it for e2e tests (not the build), so skip.
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+        installPhase = ''
+          cp -r dist $out
+        '';
+      };
 
       # Build a single Go service binary
       mkGoService = { pname, subPackage }:
