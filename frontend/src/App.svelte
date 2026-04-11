@@ -119,6 +119,36 @@
   import { onMount } from 'svelte';
   onMount(() => {
     checkSession();
+
+    // Prevent bfcache from resurrecting an authenticated shell after
+    // logout. When the page is restored from back/forward cache, the
+    // old JavaScript state may still show the shell even though the
+    // server-side session has been invalidated. Re-check the session
+    // on pageshow to catch this case (VAL-CROSS-006).
+    function handlePageShow(event) {
+      if (event.persisted) {
+        // Page was restored from bfcache — re-verify auth state.
+        checkSession();
+      }
+    }
+    window.addEventListener('pageshow', handlePageShow);
+
+    // Also listen for focus events as a secondary guard: if the user
+    // switches back to this tab after logging out in another tab or
+    // context, we re-check the session.
+    function handleFocus() {
+      if (authState === 'signed_in') {
+        // Only re-check if we think we're signed in — avoids
+        // unnecessary session checks while already signed out.
+        checkSession();
+      }
+    }
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('focus', handleFocus);
+    };
   });
 </script>
 

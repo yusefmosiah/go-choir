@@ -231,11 +231,35 @@
     dispatch('logout');
   }
 
+  /**
+   * Tears down the live channel when the Shell component is destroyed.
+   *
+   * Defense in depth: even if handleLogout was not called (e.g., the
+   * App transitions away from the shell due to authexpiry), the
+   * WebSocket must be closed and reconnection prevented so no stale
+   * live channel survives into a new user's session (VAL-CROSS-007).
+   */
+  function teardownLiveChannel() {
+    wsClosedByLogout = true; // Prevent any reconnection attempts.
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+  }
+
   import { onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
+
   onMount(() => {
     // Boot the shell — fetch bootstrap data and open live channel.
     fetchBootstrap();
     connectLiveChannel();
+  });
+
+  onDestroy(() => {
+    // Ensure the live channel is always torn down when the Shell is
+    // destroyed, regardless of why (logout, authexpiry, navigation).
+    teardownLiveChannel();
   });
 </script>
 
