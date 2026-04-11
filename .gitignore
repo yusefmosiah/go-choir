@@ -21,6 +21,9 @@
 # Dolt databases (per-user, not committed)
 *.dolt/
 
+# Go vendor (Nix handles vendoring via vendorHash)
+vendor/
+
 # Frontend
 node_modules/
 frontend/dist/
