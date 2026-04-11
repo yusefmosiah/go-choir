@@ -197,6 +197,15 @@ in
     mkdir -p $out
     cp ${guestRootfs} $out/rootfs.ext4
     cp ${guestKernel}/vmlinux $out/vmlinux
-    cp ${guestInitrd} $out/initrd.cpio.gz
+    cp -r ${guestInitrd}/ $out/initrd-files
+    # makeInitrdNG produces a directory; find the actual initrd file.
+    INITRD_FILE=$(find ${guestInitrd} -name '*.cpio*' -o -name initrd 2>/dev/null | head -1)
+    if [ -n "$INITRD_FILE" ]; then
+      cp "$INITRD_FILE" $out/initrd.cpio.gz
+    else
+      # If makeInitrdNG produces a single file, copy it.
+      cp -r ${guestInitrd}/* $out/
+      [ -f $out/initrd ] && mv $out/initrd $out/initrd.cpio.gz
+    fi
   '';
 }
