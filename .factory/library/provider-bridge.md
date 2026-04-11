@@ -57,10 +57,36 @@ When providers return HTTP errors, the response body is drained and discarded bu
 
 This feature preserves the later gateway boundary: the runtime uses provider credentials internally but never exposes them to the browser or sandbox-visible APIs. The full gateway milestone will move credential injection behind an explicit gateway service boundary with per-sandbox identity, rate limiting, and credential rotation.
 
+## Tool-Calling Support
+
+The provider package now supports structured tool_use content blocks end-to-end:
+
+### Response Parsing
+- `parseBedrockResponse` and `parseAnthropicResponse` extract `tool_use` content blocks from the Anthropic Messages API response into `LLMResponse.ToolCalls` (type `[]ContentToolCall`)
+- `anthropicResponseBlock` includes `ID`, `Name`, `Input` fields for tool_use blocks
+- Tool calls are extracted alongside text content; `StopReason` is preserved as "tool_use"
+
+### Bridge Layer
+- `BridgeProvider.CallWithTools` passes tool definitions through `LLMRequest.Tools` (type `[]ToolDef`) to the provider
+- `extractToolCalls` converts `LLMResponse.ToolCalls` → `[]types.ToolCall` for the runtime loop (previously returned nil)
+- `convertToolLoopDefs` bridges `runtime.ToolDefinition` → `provider.ToolDef` with `InputSchema` mapping
+
+### Content Block Round-Tripping
+- `Block` type carries `ID`, `Name`, `Input` (tool_use) and `ToolUseID`, `IsError` (tool_result)
+- `convertRawMessages` preserves all structured fields when converting conversation history
+- `convertMessages` preserves tool_use/tool_result fields in outbound API requests
+- `anthropicContent` includes all fields; tool_result uses `content` field (not `text`) per Anthropic API convention
+
+### Tool Definitions in API Requests
+- `LLMRequest.Tools` carries tool definitions as `[]ToolDef` with `InputSchema` (Anthropic format)
+- `anthropicRequest.Tools` serializes as `[]anthropicTool` with `input_schema`
+- Both Bedrock and Z.AI `buildRequestBody` include tools when non-empty
+
+This means the real runtime loop can execute provider-requested tools without relying on the adapter fallback path.
+
 ## Future Work
 
 - Streaming support (SSE for Z.AI, EventStream for Bedrock)
-- Tool calling / agentic loop support
 - Per-sandbox identity for gateway authentication
 - Gateway-mediated credential injection instead of direct env vars
 - Provider fallback chain (e.g., try Z.AI if Bedrock fails)
