@@ -28,6 +28,7 @@ Environment variables, external dependencies, and setup notes.
 ### Proxy runtime
 - `PROXY_AUTH_PUBLIC_KEY_PATH` — Ed25519 public key used to verify auth-issued access JWTs
 - `PROXY_SANDBOX_URL` — hardcoded placeholder sandbox base URL for Milestone 1
+- Local proxy startup may omit `PROXY_AUTH_PUBLIC_KEY_PATH` because `internal/proxy/config.go` defaults it to `/tmp/go-choir-m2/auth-signing-key.pub`, which `.factory/init.sh` generates from the local auth signing key
 
 ### Placeholder sandbox runtime
 - `SANDBOX_ID` — stable identity string returned by the placeholder sandbox for validation
