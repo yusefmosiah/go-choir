@@ -1,13 +1,13 @@
 {
   "groupId": "gateway-e2e",
-  "testedAt": "2026-04-11T20:45:00Z",
+  "testedAt": "2026-04-11T20:03:30Z",
   "isolation": {
-    "target": "https://draft.choir-ip.com",
-    "tool": "agent-browser",
-    "sessionId": "74d5df63df2d__gateway1",
-    "testUser": "gatewaytest74d5df63"
+    "sessionId": "86f2369e5855",
+    "testUser": "gateway-e2e-86f2369e5855",
+    "userId": "53f4de37-de6e-43a5-954d-22439d71ce4f",
+    "targetOrigin": "https://draft.choir-ip.com"
   },
-  "toolsUsed": ["agent-browser"],
+  "toolsUsed": ["agent-browser", "playwright", "curl"],
   "assertions": [
     {
       "id": "VAL-GATEWAY-001",
@@ -15,81 +15,77 @@
       "status": "blocked",
       "steps": [
         {
-          "action": "Navigate to https://draft.choir-ip.com/",
-          "expected": "Auth entry page loads with Register/Sign In options",
-          "observed": "Auth entry page loaded successfully showing Register, Sign In, and Register with Passkey buttons"
+          "action": "Register test user via WebAuthn using Playwright virtual authenticator",
+          "expected": "User registered and authenticated session established",
+          "observed": "Successfully registered user 'gateway-e2e-86f2369e5855' with userId '53f4de37-de6e-43a5-954d-22439d71ce4f'"
         },
         {
-          "action": "Set up WebAuthn virtual authenticator via CDP",
-          "expected": "Virtual authenticator created and available for passkey registration",
-          "observed": "Virtual authenticator created with ID e9cdab83-3f8d-40f5-9b86-ce748078523b on CDP port 9223"
+          "action": "Navigate to deployed origin with auth cookies",
+          "expected": "Authenticated shell displayed with prompt interface",
+          "observed": "Reached authenticated shell with 'Ask the runtime...' prompt textbox and launcher button"
         },
         {
-          "action": "Enter username 'gatewaytest74d5df63' and click Register with Passkey",
-          "expected": "WebAuthn registration ceremony completes and session is established",
-          "observed": "Registration completed successfully. User authenticated and shell UI displayed with Sign Out button"
+          "action": "Submit prompt through shell UI",
+          "expected": "Task submitted to /api/agent/task and processed through gateway",
+          "observed": "POST /api/agent/task returned task_id '2fac2458-2361-4b88-ba42-f999085e76ef'"
         },
         {
-          "action": "Verify shell bootstrap loads via /api/shell/bootstrap",
-          "expected": "Bootstrap returns sandbox assignment and user context",
-          "observed": "Bootstrap returned: sandbox_id 'sandbox-m1', user '4902af67-0d15-449c-98f9-1e20ab59ba07', status_code 200"
+          "action": "Monitor network traffic for direct provider calls",
+          "expected": "All traffic stays within draft.choir-ip.com origin, no direct browser→provider calls",
+          "observed": "All requests to draft.choir-ip.com: /api/agent/task, /api/events, /api/agent/status. No requests to bedrock.amazonaws.com, api.z.ai, or other provider origins."
         },
         {
-          "action": "Verify live channel WebSocket connection",
-          "expected": "Live channel shows 'Connected' status",
-          "observed": "Live Channel shows 'Connected' - WebSocket through proxy is working"
-        },
-        {
-          "action": "Submit prompt via POST /api/agent/task",
-          "expected": "Task accepted and routed through gateway to provider",
-          "observed": "Endpoint returned HTTP 404 with error 'not found'. Runtime API not available on deployed origin"
-        },
-        {
-          "action": "Verify response path through gateway (proxy → runtime/VM → gateway → provider → UI)",
-          "expected": "Response returns through proper path without direct browser-to-provider calls",
-          "observed": "Could not verify - runtime task endpoint unavailable. Network trace shows only draft.choir-ip.com traffic (no direct provider calls attempted)"
+          "action": "Verify task completion through same-origin response path",
+          "expected": "Response returned through gateway → runtime → proxy → UI",
+          "observed": "Task status returned 'completed' with result through /api/agent/status endpoint on same origin"
         }
       ],
       "evidence": {
         "screenshots": [
           "gateway-vm/gateway-e2e/VAL-GATEWAY-001-initial-page.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-cdp-connected.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-after-registration.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-shell-full.png",
-          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-final-state.png"
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-authenticated-shell.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-after-cookie-reload.png",
+          "gateway-vm/gateway-e2e/VAL-GATEWAY-001-prompt-response.png"
         ],
-        "consoleErrors": "none",
+        "consoleErrors": "[error] Failed to load resource: the server responded with a status of 502 () - occurred during initial prompt submission attempt",
         "network": [
-          "POST https://draft.choir-ip.com/api/agent/task -> 404 (not found)",
-          "POST https://draft.choir-ip.com/auth/register/begin -> 200",
-          "POST https://draft.choir-ip.com/auth/register/finish -> 200",
-          "GET https://draft.choir-ip.com/api/shell/bootstrap -> 200",
-          "GET https://draft.choir-ip.com/auth/session -> 200 (authenticated)"
-        ]
+          "POST https://draft.choir-ip.com/api/agent/task -> 200 (task_id: 2fac2458-2361-4b88-ba42-f999085e76ef)",
+          "GET https://draft.choir-ip.com/api/events -> EventSource connection established",
+          "GET https://draft.choir-ip.com/api/agent/status?task_id=2fac2458-2361-4b88-ba42-f999085e76ef -> 200 (state: completed)",
+          "No requests to external provider endpoints (bedrock.amazonaws.com, api.z.ai, etc.)"
+        ],
+        "taskIds": ["ac29d857-5950-41ea-8fe5-8522a9df769e", "2fac2458-2361-4b88-ba42-f999085e76ef"],
+        "correlationKey": "user:53f4de37-de6e-43a5-954d-22439d71ce4f -> sandbox:sandbox-m1 -> task:2fac2458-2361-4b88-ba42-f999085e76ef"
       },
-      "issues": "Runtime task API endpoints (/api/agent/task, /api/events) return 404 on deployed origin. Shell bootstrap works (sandbox-m1 assigned) but runtime/gateway flow cannot be tested due to missing backend. This appears to be a deployment/infrastructure issue where the runtime/sandbox services are not fully deployed or the VM routing is not configured on Node B."
+      "issues": "Gateway provider integration is not yet complete. The runtime returns stub responses 'Task completed successfully (stub provider)' rather than routing through Bedrock/Z.AI. The path login → proxy → runtime → UI is working, but the gateway → provider segment returns stub responses. This is expected as the gateway milestone is still in progress."
     }
   ],
   "frictions": [
     {
-      "description": "WebAuthn virtual authenticator setup required CDP connection - standard agent-browser session doesn't support WebAuthn without external Chromium with CDP",
+      "description": "WebAuthn virtual authenticator requires Playwright CDP, not available directly in agent-browser",
       "resolved": true,
-      "resolution": "Launched separate Chromium with --remote-debugging-port=9223, set up virtual authenticator via CDP, then connected agent-browser to that port",
+      "resolution": "Used Playwright for WebAuthn registration, then transferred cookies to agent-browser for UI testing",
       "affectedAssertions": ["VAL-GATEWAY-001"]
     },
     {
-      "description": "Runtime task endpoints (/api/agent/task) return 404 instead of accepting task submissions",
+      "description": "Auth cookies expired quickly during browser session, causing repeated sign-outs",
+      "resolved": true,
+      "resolution": "Used curl with explicit cookie headers for API verification after browser session expired",
+      "affectedAssertions": ["VAL-GATEWAY-001"]
+    },
+    {
+      "description": "Runtime returns stub provider responses instead of real Bedrock/Z.AI responses",
       "resolved": false,
-      "resolution": "Identified as deployment issue - runtime/sandbox not fully deployed on Node B origin",
+      "resolution": "Pending gateway milestone completion - the routing path is established but provider integration is stubbed",
       "affectedAssertions": ["VAL-GATEWAY-001"]
     }
   ],
   "blockers": [
     {
-      "description": "Runtime API endpoints (/api/agent/task, /api/agent/status, /api/events) return 404 on deployed origin https://draft.choir-ip.com. Shell bootstrap works (returns sandbox-m1 assignment), but task submission endpoints are not available. This prevents testing the full gateway flow: proxy → runtime/VM → gateway → Bedrock/Z.AI → UI response.",
+      "description": "Gateway provider integration is incomplete - runtime returns stub responses 'Task completed successfully (stub provider)' rather than routing to Bedrock or Z.AI. The proxy health shows 'vmctl_routing: enabled' but sandbox is still 'sandbox-m1' (placeholder) rather than a VM with real gateway access.",
       "affectedAssertions": ["VAL-GATEWAY-001"],
-      "quickFixAttempted": "Verified auth is working (bootstrap returns user context), verified proxy routing exists in code (HandleProtectedAPI), checked service health endpoints (all 404). Issue appears to be that runtime/sandbox services are not deployed or configured on Node B."
+      "quickFixAttempted": "Verified the path login → proxy → runtime → UI works correctly. The missing piece is gateway → provider integration which is scheduled for the gateway milestone."
     }
   ],
-  "summary": "Partially tested VAL-GATEWAY-001. Successfully demonstrated: (1) WebAuthn passkey authentication working through deployed origin, (2) Shell bootstrap returning sandbox assignment through proxy, (3) Live WebSocket channel connecting through proxy, (4) Network traffic limited to draft.choir-ip.com (no direct provider calls). However, the test is blocked because runtime task API endpoints (/api/agent/task) return 404, preventing verification of the full gateway flow to upstream providers. The proxy auth gating and routing logic works, but the backend runtime/gateway services appear not fully deployed on Node B."
+  "summary": "Tested VAL-GATEWAY-001: The authenticated prompt flow through login → proxy → runtime → UI is working correctly with all network traffic staying within draft.choir-ip.com origin (no direct provider calls from browser). However, the gateway → Bedrock/Z.AI segment is not yet integrated - the runtime returns stub responses. The assertion is BLOCKED pending completion of the gateway provider integration milestone."
 }
