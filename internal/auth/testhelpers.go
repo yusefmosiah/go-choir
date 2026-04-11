@@ -21,7 +21,7 @@ func TestStore(t *testing.T) *Store {
 	}
 
 	t.Cleanup(func() {
-		store.Close()
+		_ = store.Close()
 	})
 
 	return store

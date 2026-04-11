@@ -168,11 +168,11 @@ func TestHandleWSUpgradesAndEchoes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial websocket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read the initial connected message.
 	var connected WSMessage
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("failed to read connected message: %v", err)
 	}
@@ -226,11 +226,11 @@ func TestHandleWSEchoesUserContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial websocket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read the initial connected message and check user context.
 	var connected WSMessage
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("failed to read connected message: %v", err)
 	}
@@ -289,10 +289,10 @@ func TestHandleWSNoUserContextWithoutHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial websocket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var connected WSMessage
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("failed to read connected message: %v", err)
 	}

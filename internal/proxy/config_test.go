@@ -8,9 +8,9 @@ import (
 
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear all PROXY_* env vars to test defaults.
-	os.Unsetenv("PROXY_PORT")
-	os.Unsetenv("PROXY_SANDBOX_URL")
-	os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+	_ = os.Unsetenv("PROXY_PORT")
+	_ = os.Unsetenv("PROXY_SANDBOX_URL")
+	_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -29,13 +29,13 @@ func TestLoadConfigDefaults(t *testing.T) {
 }
 
 func TestLoadConfigFromEnv(t *testing.T) {
-	os.Setenv("PROXY_PORT", "9999")
-	os.Setenv("PROXY_SANDBOX_URL", "http://example.com:8085")
-	os.Setenv("PROXY_AUTH_PUBLIC_KEY_PATH", "/tmp/test-pub.key")
+	_ = os.Setenv("PROXY_PORT", "9999")
+	_ = os.Setenv("PROXY_SANDBOX_URL", "http://example.com:8085")
+	_ = os.Setenv("PROXY_AUTH_PUBLIC_KEY_PATH", "/tmp/test-pub.key")
 	defer func() {
-		os.Unsetenv("PROXY_PORT")
-		os.Unsetenv("PROXY_SANDBOX_URL")
-		os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+		_ = os.Unsetenv("PROXY_PORT")
+		_ = os.Unsetenv("PROXY_SANDBOX_URL")
+		_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
 	}()
 
 	cfg, err := LoadConfig()
@@ -55,8 +55,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 }
 
 func TestLoadConfigRejectsEmptyPort(t *testing.T) {
-	os.Setenv("PROXY_PORT", "")
-	defer os.Unsetenv("PROXY_PORT")
+	_ = os.Setenv("PROXY_PORT", "")
+	defer func() { _ = os.Unsetenv("PROXY_PORT") }()
 
 	// When PROXY_PORT is empty, the default should be used, not rejected.
 	cfg, err := LoadConfig()

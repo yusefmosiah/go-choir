@@ -95,7 +95,7 @@ func readJSON(r *http.Request, dst interface{}) error {
 	if r.Body == nil {
 		return errors.New("request body is required")
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// Limit read to 1KB to prevent abuse.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1024))
@@ -121,7 +121,7 @@ func readBody(r *http.Request) ([]byte, error) {
 	if r.Body == nil {
 		return nil, errors.New("request body is required")
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// Limit to 64KB for WebAuthn responses (which can be larger than 1KB).
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
@@ -325,48 +325,6 @@ func (h *Handler) rotateRefreshSession(w http.ResponseWriter, oldSession *Refres
 
 	h.setAuthCookies(w, accessJWT, newRefresh)
 	return nil
-}
-
-// --- Challenge validation helpers ---
-
-// getAndValidateChallenge looks up the challenge state by ID, validates that
-// it hasn't expired, matches the expected type, and belongs to the expected
-// user. It returns the challenge state and the deserialized WebAuthn session
-// data. On any failure, it returns an appropriate error.
-func (h *Handler) getAndValidateChallenge(challengeID, expectedType, expectedUserID string) (*ChallengeState, *webauthn.SessionData, error) {
-	cs, err := h.store.GetChallengeStateByID(challengeID)
-	if err != nil {
-		return nil, nil, errors.New("challenge not found")
-	}
-
-	// Check type matches.
-	if cs.Type != expectedType {
-		return nil, nil, fmt.Errorf("challenge type mismatch: got %q, want %q", cs.Type, expectedType)
-	}
-
-	// Check user matches.
-	if cs.UserID != expectedUserID {
-		return nil, nil, errors.New("challenge user mismatch")
-	}
-
-	// Check not expired.
-	if time.Now().UTC().After(cs.ExpiresAt) {
-		// Clean up expired challenge.
-		_ = h.store.DeleteChallengeStateByID(cs.ID)
-		return nil, nil, errors.New("challenge expired")
-	}
-
-	// Deserialize the WebAuthn session data.
-	if cs.WebAuthnSessionData == "" {
-		return nil, nil, errors.New("challenge has no session data")
-	}
-
-	var sessionData webauthn.SessionData
-	if err := json.Unmarshal([]byte(cs.WebAuthnSessionData), &sessionData); err != nil {
-		return nil, nil, fmt.Errorf("deserialize session data: %w", err)
-	}
-
-	return cs, &sessionData, nil
 }
 
 // --- HTTP Handlers ---

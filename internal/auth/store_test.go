@@ -33,14 +33,14 @@ func TestOpenStoreIdempotentBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first OpenStore: %v", err)
 	}
-	store1.Close()
+	_ = store1.Close()
 
 	// Reopen the same database — bootstrap should be idempotent (IF NOT EXISTS).
 	store2, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("second OpenStore: %v", err)
 	}
-	store2.Close()
+	_ = store2.Close()
 }
 
 func TestOpenStoreInvalidPath(t *testing.T) {
@@ -929,14 +929,14 @@ func TestSessionDataSurvivesAuthRestart(t *testing.T) {
 	}
 
 	// Close the store (simulate auth shutdown).
-	store1.Close()
+	_ = store1.Close()
 
-	// --- Phase 2: Second "run" of auth — reopen the same DB, verify data persists.
+	// --- Phase 2: Second "run" of auth --- reopen the same DB, verify data persists.
 	store2, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("second OpenStore (after restart): %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	// Verify the user still exists.
 	foundUser, err := store2.GetUserByID(user.ID)
@@ -1008,14 +1008,14 @@ func TestRefreshRotationWorksAfterAuthRestart(t *testing.T) {
 		t.Fatalf("CreateRefreshSession: %v", err)
 	}
 
-	store1.Close()
+	_ = store1.Close()
 
 	// --- Phase 2: After restart, rotate the refresh session.
 	store2, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("second OpenStore (after restart): %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	// Look up the existing refresh session (simulating the browser's
 	// refresh cookie being presented for renewal).

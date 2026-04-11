@@ -22,7 +22,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("auth store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create the WebAuthn Relying Party instance bound to the configured RP ID.
 	wa, err := webauthn.New(&webauthn.Config{

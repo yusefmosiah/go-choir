@@ -15,10 +15,10 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	for _, v := range envVars {
 		orig := os.Getenv(v)
-		os.Unsetenv(v)
+		_ = os.Unsetenv(v)
 		t.Cleanup(func() {
 			if orig != "" {
-				os.Setenv(v, orig)
+				_ = os.Setenv(v, orig)
 			}
 		})
 	}
@@ -207,21 +207,21 @@ func TestLoadConfigFromEnv(t *testing.T) {
 				"AUTH_REFRESH_TOKEN_TTL", "AUTH_COOKIE_SECURE",
 			} {
 				saved[v] = os.Getenv(v)
-				os.Unsetenv(v)
+				_ = os.Unsetenv(v)
 			}
 			t.Cleanup(func() {
 				for k, v := range saved {
 					if v == "" {
-						os.Unsetenv(k)
+						_ = os.Unsetenv(k)
 					} else {
-						os.Setenv(k, v)
+						_ = os.Setenv(k, v)
 					}
 				}
 			})
 
 			// Set test env vars.
 			for k, v := range tt.env {
-				os.Setenv(k, v)
+				_ = os.Setenv(k, v)
 			}
 
 			cfg, err := LoadConfig()

@@ -126,17 +126,17 @@ func OpenStore(dbPath string) (*Store, error) {
 	// Enable WAL mode for better concurrent read performance and enable
 	// foreign keys so that CASCADE works.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("auth store: set WAL mode: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("auth store: enable foreign keys: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.bootstrap(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("auth store: bootstrap: %w", err)
 	}
 
@@ -264,7 +264,7 @@ func (s *Store) GetCredentialsByUserID(userID string) ([]Credential, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var creds []Credential
 	for rows.Next() {
@@ -333,7 +333,7 @@ func (s *Store) GetChallengeStatesByUserID(userID string) ([]ChallengeState, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []ChallengeState
 	for rows.Next() {

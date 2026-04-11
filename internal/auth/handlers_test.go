@@ -946,11 +946,6 @@ func TestRegisterBeginWithDeployedRPID(t *testing.T) {
 	}
 }
 
-// pemEncodeBlock encodes a *pem.Block to bytes.
-func pemEncodeBlock(block *pem.Block) []byte {
-	return pem.EncodeToMemory(block)
-}
-
 // writeTestKey writes an Ed25519 private key in OpenSSH PEM format to the given path.
 func writeTestKey(t *testing.T, path string, priv ed25519.PrivateKey) {
 	t.Helper()

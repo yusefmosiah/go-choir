@@ -41,7 +41,7 @@ func testProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Server)
 		}
 		user := r.Header.Get("X-Authenticated-User")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"sandbox_id":  "sandbox-test",
 			"user":        user,
 			"bootstrap":   "placeholder-shell-v1",
@@ -54,7 +54,7 @@ func testProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Server)
 	sandboxMux.HandleFunc("/api/shell/error", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"sandbox_id":  "sandbox-test",
 			"status_code": 500,
 			"error":       "deliberate sandbox error",
@@ -62,7 +62,7 @@ func testProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Server)
 	})
 	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
 	})
 	// WebSocket echo endpoint matching the real sandbox surface.
 	sandboxMux.HandleFunc("/api/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +74,7 @@ func testProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Server)
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send initial connected message.
 		connected := map[string]interface{}{
@@ -496,7 +496,7 @@ func TestBootstrapPreservesUpstreamNon2xx(t *testing.T) {
 	sandboxMux.HandleFunc("/api/shell/error", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"sandbox_id":  "sandbox-test",
 			"status_code": 500,
 			"error":       "deliberate sandbox error",
@@ -612,7 +612,7 @@ func TestBootstrapProxyDoesNotLeakToSignedOutUsers(t *testing.T) {
 
 	// Verify the error is not a sandbox payload (no sandbox_id field).
 	var raw map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&raw) // decode again from already-consumed body
+	_ = json.NewDecoder(w.Body).Decode(&raw) // decode again from already-consumed body
 	// The error response should only have "error", not sandbox fields.
 	_, hasSandboxID := raw["sandbox_id"]
 	if hasSandboxID {
@@ -923,11 +923,11 @@ func TestWSAuthenticatedUpgradesAndRelays(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-ws-relay")
 	conn := wsDialWithCookie(t, proxyServer.URL, accessToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read the initial connected message from the sandbox (relayed through proxy).
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -969,12 +969,12 @@ func TestWSAuthenticatedInjectsUserContext(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-ws-context")
 	conn := wsDialWithCookie(t, proxyServer.URL, accessToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// The connected message from the sandbox should contain the proxy-injected
 	// user context matching the JWT subject.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -1017,11 +1017,11 @@ func TestWSIgnoresClientSuppliedUserContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial proxy WS: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// The sandbox should see the JWT-verified user, not the spoofed header.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -1036,11 +1036,11 @@ func TestWSRelaysMultipleFramesBidirectionally(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-multi-frame")
 	conn := wsDialWithCookie(t, proxyServer.URL, accessToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read the initial connected message.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -1056,7 +1056,7 @@ func TestWSRelaysMultipleFramesBidirectionally(t *testing.T) {
 		}
 
 		var echo map[string]interface{}
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		if err := conn.ReadJSON(&echo); err != nil {
 			t.Fatalf("read echo %d: %v", i, err)
 		}
@@ -1078,11 +1078,11 @@ func TestWSProxyPreservesSinglePublicEntrypoint(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-entrypoint")
 	conn := wsDialWithCookie(t, proxyServer.URL, accessToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// The connection should succeed on /api/ws.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -1097,11 +1097,11 @@ func TestWSRelaysBinaryFrames(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-binary")
 	conn := wsDialWithCookie(t, proxyServer.URL, accessToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Read the initial connected message.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected message: %v", err)
 	}
@@ -1135,23 +1135,23 @@ func TestWSClosePropagates(t *testing.T) {
 
 	// Read the initial connected message.
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatalf("read connected message: %v", err)
 	}
 
 	// Client closes the connection with a normal close message.
 	if err := conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatalf("write close message: %v", err)
 	}
 
 	// Subsequent reads should indicate the connection is closed.
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	_, _, err := conn.ReadMessage()
-	conn.Close()
+	_ = conn.Close()
 	if err == nil {
 		t.Error("expected error reading after close, but got none")
 	}
@@ -1299,7 +1299,7 @@ func TestBootstrapStripsAdditionalSpoofedIdentityHeaders(t *testing.T) {
 	sandboxMux := http.NewServeMux()
 	sandboxMux.HandleFunc("/api/shell/bootstrap", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"sandbox_id":          "sandbox-test",
 			"user":                r.Header.Get("X-Authenticated-User"),
 			"x_user_id":          r.Header.Get("X-User-Id"),
@@ -1362,10 +1362,10 @@ func TestWSAuthenticatedTwoDistinctUsersSameSandboxDifferentContext(t *testing.T
 	// User A connects via WS.
 	accessTokenA := issueTestAccessJWT(priv, "user-ws-alice")
 	connA := wsDialWithCookie(t, proxyServer.URL, accessTokenA)
-	defer connA.Close()
+	defer func() { _ = connA.Close() }()
 
 	var connectedA map[string]interface{}
-	connA.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = connA.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := connA.ReadJSON(&connectedA); err != nil {
 		t.Fatalf("user A: read connected: %v", err)
 	}
@@ -1373,10 +1373,10 @@ func TestWSAuthenticatedTwoDistinctUsersSameSandboxDifferentContext(t *testing.T
 	// User B connects via WS.
 	accessTokenB := issueTestAccessJWT(priv, "user-ws-bob")
 	connB := wsDialWithCookie(t, proxyServer.URL, accessTokenB)
-	defer connB.Close()
+	defer func() { _ = connB.Close() }()
 
 	var connectedB map[string]interface{}
-	connB.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = connB.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := connB.ReadJSON(&connectedB); err != nil {
 		t.Fatalf("user B: read connected: %v", err)
 	}
@@ -1408,22 +1408,22 @@ func TestWSNoStaleIdentityLeakBetweenUsers(t *testing.T) {
 	connA := wsDialWithCookie(t, proxyServer.URL, accessTokenA)
 
 	var connectedA map[string]interface{}
-	connA.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = connA.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := connA.ReadJSON(&connectedA); err != nil {
-		connA.Close()
+		_ = connA.Close()
 		t.Fatalf("user A: read connected: %v", err)
 	}
 
 	// Close user A's connection.
-	connA.Close()
+	_ = connA.Close()
 
 	// User B connects on the same proxy.
 	accessTokenB := issueTestAccessJWT(priv, "user-ws-second")
 	connB := wsDialWithCookie(t, proxyServer.URL, accessTokenB)
-	defer connB.Close()
+	defer func() { _ = connB.Close() }()
 
 	var connectedB map[string]interface{}
-	connB.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = connB.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := connB.ReadJSON(&connectedB); err != nil {
 		t.Fatalf("user B: read connected: %v", err)
 	}
@@ -1450,7 +1450,7 @@ func TestWSSpoofedIdentityHeadersDoNotReachSandbox(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Echo all identity headers we received.
 		connected := map[string]interface{}{
@@ -1494,10 +1494,10 @@ func TestWSSpoofedIdentityHeadersDoNotReachSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial proxy WS: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var connected map[string]interface{}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := conn.ReadJSON(&connected); err != nil {
 		t.Fatalf("read connected: %v", err)
 	}
@@ -1804,7 +1804,7 @@ func TestProxyHealthReportsDegradedWhenUpstreamIsUnreachable(t *testing.T) {
 	sandboxMux := http.NewServeMux()
 	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
 	})
 	sandboxServer := httptest.NewServer(sandboxMux)
 
@@ -1922,7 +1922,7 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 	sandboxMux := http.NewServeMux()
 	sandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
 	})
 
 	// Start the sandbox, create proxy pointing at it.
@@ -1938,7 +1938,7 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.HandleHealth(w, req)
 	var resp1 proxyHealthResponse
-	json.NewDecoder(w.Body).Decode(&resp1)
+	_ = json.NewDecoder(w.Body).Decode(&resp1)
 	if resp1.Status != "ok" {
 		t.Fatalf("initial status: got %q, want %q", resp1.Status, "ok")
 	}
@@ -1952,7 +1952,7 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	handler.HandleHealth(w2, req2)
 	var resp2 proxyHealthResponse
-	json.NewDecoder(w2.Body).Decode(&resp2)
+	_ = json.NewDecoder(w2.Body).Decode(&resp2)
 	if resp2.Status != "degraded" {
 		t.Fatalf("degraded status: got %q, want %q", resp2.Status, "degraded")
 	}
@@ -1963,7 +1963,7 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 	newSandboxMux := http.NewServeMux()
 	newSandboxMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "sandbox"})
 	})
 	newSandboxServer := httptest.NewServer(newSandboxMux)
 	defer newSandboxServer.Close()
@@ -1986,7 +1986,7 @@ func TestProxyHealthRecoversAfterUpstreamRestart(t *testing.T) {
 	w3 := httptest.NewRecorder()
 	handler2.HandleHealth(w3, req3)
 	var resp3 proxyHealthResponse
-	json.NewDecoder(w3.Body).Decode(&resp3)
+	_ = json.NewDecoder(w3.Body).Decode(&resp3)
 	if resp3.Status != "ok" {
 		t.Fatalf("recovered status: got %q, want %q", resp3.Status, "ok")
 	}

@@ -112,8 +112,8 @@ func TestHealthHandlerMethodNotAllowed(t *testing.T) {
 
 func TestPortFromEnv(t *testing.T) {
 	envVar := "TEST_PORT_FOR_ENV"
-	os.Setenv(envVar, "9999")
-	defer os.Unsetenv(envVar)
+	_ = os.Setenv(envVar, "9999")
+	defer func() { _ = os.Unsetenv(envVar) }()
 
 	port := PortFromEnv(envVar, "8081")
 	if port != "9999" {
@@ -123,7 +123,7 @@ func TestPortFromEnv(t *testing.T) {
 
 func TestPortDefault(t *testing.T) {
 	envVar := "TEST_PORT_DEFAULT_UNSET"
-	os.Unsetenv(envVar)
+	_ = os.Unsetenv(envVar)
 
 	port := PortFromEnv(envVar, "8081")
 	if port != "8081" {
@@ -132,7 +132,7 @@ func TestPortDefault(t *testing.T) {
 }
 
 func TestBindHostDefault(t *testing.T) {
-	os.Unsetenv("SERVER_HOST")
+	_ = os.Unsetenv("SERVER_HOST")
 
 	host := BindHostFromEnv()
 	if host != "127.0.0.1" {
@@ -141,8 +141,8 @@ func TestBindHostDefault(t *testing.T) {
 }
 
 func TestBindHostFromEnv(t *testing.T) {
-	os.Setenv("SERVER_HOST", "0.0.0.0")
-	defer os.Unsetenv("SERVER_HOST")
+	_ = os.Setenv("SERVER_HOST", "0.0.0.0")
+	defer func() { _ = os.Unsetenv("SERVER_HOST") }()
 
 	host := BindHostFromEnv()
 	if host != "0.0.0.0" {
@@ -151,7 +151,7 @@ func TestBindHostFromEnv(t *testing.T) {
 }
 
 func TestNewServerBindsToLocalhostByDefault(t *testing.T) {
-	os.Unsetenv("SERVER_HOST")
+	_ = os.Unsetenv("SERVER_HOST")
 
 	s := NewServer("test-localhost", "0")
 
@@ -178,7 +178,7 @@ func TestNewServerBindsToLocalhostByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reach /health on localhost: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -208,7 +208,7 @@ func TestServerStartAndAcceptsRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reach /health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -237,11 +237,11 @@ func TestGracefulShutdownOnSIGTERM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server not reachable before SIGTERM: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Send SIGTERM to ourselves
 	p, _ := os.FindProcess(os.Getpid())
-	p.Signal(syscall.SIGTERM)
+	_ = p.Signal(syscall.SIGTERM)
 
 	// Wait for server to shut down with a timeout
 	done := make(chan struct{})
@@ -275,10 +275,10 @@ func TestGracefulShutdownOnSIGINT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server not reachable before SIGINT: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	p, _ := os.FindProcess(os.Getpid())
-	p.Signal(syscall.SIGINT)
+	_ = p.Signal(syscall.SIGINT)
 
 	done := make(chan struct{})
 	go func() {
@@ -301,7 +301,7 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 	s.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("done"))
+		_, _ = w.Write([]byte("done"))
 	})
 
 	var wg sync.WaitGroup
@@ -323,7 +323,7 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 			close(slowDone)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("slow request got status %d, expected 200", resp.StatusCode)
 		}
@@ -336,7 +336,7 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 	// Trigger shutdown while slow request is in flight
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s.httpServer.Shutdown(ctx)
+	_ = s.httpServer.Shutdown(ctx)
 
 	// The slow request should still complete
 	select {

@@ -6,8 +6,8 @@ import (
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
-	os.Unsetenv("SANDBOX_PORT")
-	os.Unsetenv("SANDBOX_ID")
+	_ = os.Unsetenv("SANDBOX_PORT")
+	_ = os.Unsetenv("SANDBOX_ID")
 
 	cfg := LoadConfig()
 
@@ -20,10 +20,10 @@ func TestLoadConfigDefaults(t *testing.T) {
 }
 
 func TestLoadConfigFromEnv(t *testing.T) {
-	os.Setenv("SANDBOX_PORT", "9090")
-	os.Setenv("SANDBOX_ID", "custom-sandbox-42")
-	defer os.Unsetenv("SANDBOX_PORT")
-	defer os.Unsetenv("SANDBOX_ID")
+	_ = os.Setenv("SANDBOX_PORT", "9090")
+	_ = os.Setenv("SANDBOX_ID", "custom-sandbox-42")
+	defer func() { _ = os.Unsetenv("SANDBOX_PORT") }()
+	defer func() { _ = os.Unsetenv("SANDBOX_ID") }()
 
 	cfg := LoadConfig()
 

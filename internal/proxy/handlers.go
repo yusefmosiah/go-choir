@@ -293,7 +293,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 		// an HTTP error response.
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Step 3: Dial the sandbox WebSocket endpoint.
 	sandboxWSURL := h.sandboxWSURL()
@@ -306,11 +306,11 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("proxy WS: dial sandbox %s: %v", sandboxWSURL, err)
 		// Close the client connection since we can't reach the sandbox.
-		clientConn.WriteMessage(websocket.CloseMessage,
+		_ = clientConn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "upstream unavailable"))
 		return
 	}
-	defer sandboxConn.Close()
+	defer func() { _ = sandboxConn.Close() }()
 
 	// Step 4: Relay frames bidirectionally until either side closes or errors.
 	relayDone := make(chan struct{}, 2)
@@ -331,9 +331,9 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 	<-relayDone
 
 	// Send close messages to both sides to unblock the other relay goroutine.
-	clientConn.WriteMessage(websocket.CloseMessage,
+	_ = clientConn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	sandboxConn.WriteMessage(websocket.CloseMessage,
+	_ = sandboxConn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 
 	// Wait briefly for the second goroutine to finish.
@@ -406,7 +406,7 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(proxyHealthResponse{
+	_ = json.NewEncoder(w).Encode(proxyHealthResponse{
 		Status:   status,
 		Service:  "proxy",
 		Upstream: upstreamStatus,
@@ -423,7 +423,7 @@ func (h *Handler) checkUpstreamHealth() bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 

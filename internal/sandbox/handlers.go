@@ -79,7 +79,7 @@ func (h *Handler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleError returns a deliberate 500 response for proxy passthrough testing.
@@ -92,7 +92,7 @@ func (h *Handler) HandleError(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleWS upgrades the connection to WebSocket and echoes messages back.
@@ -105,7 +105,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send initial connected message with sandbox identity and user context.
 	connected := WSMessage{
