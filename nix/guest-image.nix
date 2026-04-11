@@ -21,7 +21,7 @@ let
     structuredExtraConfig = with pkgs.kernelPatches.config; {
       EXT4_FS = yes;
       JBD2 = yes;
-      MB CACHE = yes;  # mbcache - needed by ext4
+      MB_CACHE = yes;  # mbcache - needed by ext4
       CRC16 = yes;
       NET = yes;
       INET = yes;
