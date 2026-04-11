@@ -1,0 +1,37 @@
+{
+  "featureId": "runtime-bedrock-zai-provider-bridge",
+  "reviewedAt": "2026-04-11T07:45:00.000Z",
+  "commitId": "e959850",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The provider bridge implementation is well-structured and comprehensive. It correctly implements Bedrock and Z.AI provider support with proper credential handling, error sanitization, and observability. The bridge adapter pattern cleanly separates the runtime.Provider interface from the LLM provider implementation. All expected behaviors from the feature description are met.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The provider bridge architecture is well-documented in .factory/library/provider-bridge.md with clear diagrams showing the relationship between runtime engine, bridge provider, concrete providers, and upstream APIs. The credential resolution order is explicitly documented.",
+      "evidence": ".factory/library/provider-bridge.md: Architecture section shows clear component boundaries"
+    },
+    {
+      "area": "conventions",
+      "observation": "Environment variable naming follows consistent patterns: AWS_BEARER_TOKEN_BEDROCK, AWS_REGION, RUNTIME_BEDROCK_MODEL, ZAI_API_KEY, RUNTIME_ZAI_MODEL. All documented in .factory/library/environment.md.",
+      "evidence": ".factory/library/environment.md: Gateway/provider runtime section documents all 5 environment variables"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The worker correctly identified and preserved the security boundary: credentials are only read from environment variables, never committed to repo, never baked into Nix store or guest images. Error sanitization ensures raw response bodies are never included in error messages.",
+      "evidence": "internal/provider/provider.go:460-462 (parseBedrockResponse) and 498-500 (parseAnthropicResponse) drain and discard error bodies without including in error messages"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The implementation uses Bearer auth for Bedrock (not SigV4) matching the choiros-rs pattern. This is documented as a design decision in the package comments.",
+      "evidence": "internal/provider/provider.go:14-17 (package comment) and .factory/library/provider-bridge.md:31 (Bedrock auth details)"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The runtime-bedrock-zai-provider-bridge feature has been successfully implemented with 31 total tests covering all critical paths. The implementation correctly handles: (1) Bedrock provider with Bearer auth and proper endpoint construction, (2) Z.AI provider with Anthropic-compatible API, (3) BridgeProvider adapter pattern translating between runtime and LLM provider interfaces, (4) Credential resolution with fallback to stub provider, (5) Error sanitization preventing credential leakage, (6) Redacted logging for model IDs, (7) Health endpoint reporting active provider, (8) Event markers distinguishing real from stub providers. The code follows all security conventions from AGENTS.md: credentials stay in environment variables only, never in code/repo/Nix store/guest. All tests pass and the implementation is ready for production use."
+}
+</invoke>

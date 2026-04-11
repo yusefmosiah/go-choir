@@ -1,0 +1,26 @@
+{
+  "featureId": "runtime-api-status-events-recovery",
+  "reviewedAt": "2026-04-11T07:35:00Z",
+  "commitId": "4ffd8a6",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The runtime-api-status-events-recovery feature implements a comprehensive authenticated runtime API trio with proper RESTful design, defense-in-depth authentication, caller scoping, incremental SSE event streaming, and restart-safe task recovery. All validation contract assertions (VAL-RUNTIME-001 through VAL-RUNTIME-010, excluding VAL-RUNTIME-007 which requires the provider bridge) are satisfied with appropriate test coverage.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The worker correctly followed the go-worker skill procedure: read the feature/contract first, examined existing code, wrote tests before implementation, and ran validators before handoff. The transcript skeleton shows proper skill adherence.",
+      "evidence": "worker-transcripts.jsonl shows the worker started with Skill(mission-worker-base), then Skill(go-worker), followed by reading mission.md, validation-contract.md, AGENTS.md, architecture.md before implementing. The handoff.skillFeedback.followedProcedure is true."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The feature added excellent library documentation in .factory/library/runtime-api-events-recovery.md that documents the API contract, package layout, key design decisions, and what's not yet implemented. This is a good pattern for future features.",
+      "evidence": "The handoff file shows 86 lines of library documentation were added, and the content includes the API contract with request/response formats, design decisions, and explicit notes about what's deferred to future features."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "This feature passes scrutiny review. The implementation correctly provides: (1) Authenticated API trio with POST /api/agent/task, GET /api/agent/status, and GET /api/events SSE endpoint; (2) Defense-in-depth auth gating via X-Authenticated-User header at both proxy and sandbox levels; (3) Proper caller scoping that filters tasks and events by owner to prevent cross-user data leakage; (4) Incremental SSE streaming with proxy FlushInterval=-1 for real-time event delivery; (5) Restart-safe task recovery that resolves interrupted pending/running tasks to explicit failed state on startup; (6) Runtime health states (ready/degraded/failed) with external visibility via events and HTTP status codes; (7) Supervisor that publishes health transitions for external observability; (8) Structured provider failure handling that surfaces errors without crashing the runtime. All 41 runtime tests pass, covering the validation contract assertions as documented in the handoff."
+}

@@ -1,0 +1,46 @@
+{
+  "featureId": "runtime-tool-calling-loop-and-channels",
+  "reviewedAt": "2026-04-11T03:45:00Z",
+  "commitId": "9f9e8fe52b70c0bb60b46ce147d548879716b4c0",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The runtime-tool-calling-loop-and-channels feature implements a comprehensive tool-calling execution loop and channel/message plumbing system adapted from Cogent's native implementation. The code is well-structured, thread-safe, and includes extensive test coverage. Key components include: ToolRegistry with Go function-based tools (not CLI subprocesses), RunToolLoop for LLM tool-calling iteration, AgentChannel/ChannelManager for in-process coordination, and new event kinds (tool.invoked, tool.result, channel.message) for observable progress.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The feature establishes a clear pattern for tool registration that starts empty and grows as features add tools. The registry is conditionally enabled via RUNTIME_ENABLE_TOOLS environment variable in cmd/sandbox/main.go, which is a good migration strategy.",
+      "evidence": "cmd/sandbox/main.go:78-86 shows conditional tool registry setup. The implementation defaults to empty registry, allowing future features (e-text appagent, terminal, files) to register their tools."
+    },
+    {
+      "area": "conventions",
+      "observation": "The tool-calling loop correctly implements the Anthropic Messages API convention for tool results, where tool results are appended as user messages with role='user' and content containing tool_result blocks.",
+      "evidence": "internal/runtime/toolloop.go:145-150 appends tool results as user messages per Anthropic convention. This is critical for correct LLM provider interaction."
+    },
+    {
+      "area": "conventions",
+      "observation": "The maxToolLoopIterations constant (25) provides a safety limit against infinite loops but may need tuning based on real-world usage patterns with complex multi-step agent workflows.",
+      "evidence": "internal/runtime/toolloop.go:87 defines maxToolLoopIterations = 25. This is currently hardcoded; future features may need to expose this as configuration."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The AgentChannel implementation uses in-memory storage only (no persistence), which is documented but worth noting for future features requiring durable message queuing across restarts.",
+      "evidence": "internal/runtime/channels.go:45-48 documents that AgentChannel has 'No persistent storage (messages exist only in memory)'. ChannelManager at lines 207-210 also notes this simplification from Cogent's design."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The toolLoopAdapter in internal/runtime/toolloop.go provides a clean bridge between the basic Provider interface and the ToolLoopProvider interface, enabling gradual migration of provider implementations without breaking existing code.",
+      "evidence": "internal/runtime/toolloop.go:269-296 shows the toolLoopAdapter wrapping any Provider to provide ToolLoopProvider capabilities. The asToolLoopProvider helper at lines 298-306 handles both direct casts and automatic wrapping."
+    },
+    {
+      "area": "skills",
+      "observation": "The go-worker skill was followed correctly. The worker read all documentation first, examined existing code, wrote comprehensive tests (571 lines for tools_test.go, 664 for toolloop_test.go, 541 for channels_test.go), and ran all validators before handoff.",
+      "evidence": "Handoff shows skillFeedback.followedProcedure: true with no deviations. Test coverage is extensive with 36+ test cases covering registration, execution, parallel execution, context cancellation, error handling, and integration scenarios."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS: The runtime-tool-calling-loop-and-channels feature is comprehensive and well-implemented. It adds 3,187 lines across 12 files including 1,776 lines of tests. The implementation correctly adapts Cogent's native loop/tools/channel patterns while simplifying for go-choir's constraints (no CLI subprocesses, no persistent channel storage, no session history management in the loop). Key strengths: (1) Tools are Go function calls meeting the mission constraint, not CLI subprocesses; (2) Thread-safe ToolRegistry with sorted deterministic output; (3) RunToolLoop with proper iteration limits, token usage tracking, and context cancellation; (4) AgentChannel with cursor-based incremental reads and waiter-based blocking semantics; (5) ChannelManager with lazy channel creation; (6) Strong event emission for tool.invoked, tool.result, and channel.message; (7) ToolLoopProvider interface with adapter for backward compatibility; (8) Comprehensive test coverage with parallel execution, error, cancellation, and integration tests. All validators pass: go test, go vet, go build. No blocking or non-blocking issues found."
+}
