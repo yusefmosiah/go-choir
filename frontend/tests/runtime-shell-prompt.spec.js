@@ -17,14 +17,14 @@ import { registerPasskey, getSession } from './helpers/auth.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `runtime-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `runtime-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // Helper: register a passkey and get to the authenticated shell.
-async function registerAndLoadShell(page, authenticator, username) {
+async function registerAndLoadShell(page, authenticator, email) {
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the Svelte app calls checkSession() and renders the shell.
   await page.reload();
@@ -38,8 +38,8 @@ test('shell includes a prompt input for runtime task submission', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // The task runner (prompt input) should be visible.
   const taskRunner = page.locator('[data-task-runner]');
@@ -63,8 +63,8 @@ test('submitting a prompt sends POST /api/agent/task', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Listen for the task submission request.
   let taskSubmitted = false;
@@ -96,8 +96,8 @@ test('task submission returns a stable handle with status display', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Type a prompt and submit.
   const promptInput = page.locator('[data-prompt-input]');
@@ -126,8 +126,8 @@ test('completed task shows result in the shell', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Type a prompt and submit.
   const promptInput = page.locator('[data-prompt-input]');
@@ -157,8 +157,8 @@ test('prompt input is disabled while task is in progress', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Type a prompt and submit.
   const promptInput = page.locator('[data-prompt-input]');
@@ -187,8 +187,8 @@ test('reload during in-flight work reattaches without resubmitting', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Count task submission requests.
   let submissionCount = 0;
@@ -237,8 +237,8 @@ test('prompt input is re-enabled after task completes', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Type a prompt and submit.
   const promptInput = page.locator('[data-prompt-input]');
@@ -263,8 +263,8 @@ test('task events are displayed in the event log', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Type a prompt and submit.
   const promptInput = page.locator('[data-prompt-input]');
@@ -311,8 +311,8 @@ test('renewal and retries do not duplicate runtime task submission', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadShell(page, authenticator, email);
 
   // Count task submission requests.
   let submissionCount = 0;

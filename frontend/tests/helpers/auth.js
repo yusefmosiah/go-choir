@@ -20,20 +20,20 @@
  *     (http://localhost:4173 by default).
  *
  * @param {import('@playwright/test').Page} page
- * @param {string} username - The username to register.
+ * @param {string} email - The email address to register.
  * @param {string} [baseURL] - Base URL for auth API (default: http://localhost:4173).
- * @returns {Promise<{ok: boolean, user?: {id: string, username: string, created_at: string}}>}
+ * @returns {Promise<{ok: boolean, user?: {id: string, email: string, created_at: string}}>}
  */
-export async function registerPasskey(page, username, baseURL = 'http://localhost:4173') {
+export async function registerPasskey(page, email, baseURL = 'http://localhost:4173') {
   return page.evaluate(async (opts) => {
-    const { username, baseURL } = opts;
+    const { email, baseURL } = opts;
 
     // Step 1: Begin registration — get WebAuthn creation options.
     const beginRes = await fetch(`${baseURL}/auth/register/begin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ username }),
+      body: JSON.stringify({ email }),
     });
 
     if (!beginRes.ok) {
@@ -135,7 +135,7 @@ export async function registerPasskey(page, username, baseURL = 'http://localhos
     }
 
     return finishRes.json();
-  }, { username, baseURL });
+  }, { email, baseURL });
 }
 
 /**
@@ -147,20 +147,20 @@ export async function registerPasskey(page, username, baseURL = 'http://localhos
  *   - A WebAuthn virtual authenticator must be active on the page.
  *
  * @param {import('@playwright/test').Page} page
- * @param {string} username - The username to log in as.
+ * @param {string} email - The email address to log in as.
  * @param {string} [baseURL] - Base URL for auth API (default: http://localhost:4173).
- * @returns {Promise<{ok: boolean, user?: {id: string, username: string, created_at: string}}>}
+ * @returns {Promise<{ok: boolean, user?: {id: string, email: string, created_at: string}}>}
  */
-export async function loginPasskey(page, username, baseURL = 'http://localhost:4173') {
+export async function loginPasskey(page, email, baseURL = 'http://localhost:4173') {
   return page.evaluate(async (opts) => {
-    const { username, baseURL } = opts;
+    const { email, baseURL } = opts;
 
     // Step 1: Begin login — get WebAuthn assertion options.
     const beginRes = await fetch(`${baseURL}/auth/login/begin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ username }),
+      body: JSON.stringify({ email }),
     });
 
     if (!beginRes.ok) {
@@ -249,7 +249,7 @@ export async function loginPasskey(page, username, baseURL = 'http://localhost:4
     }
 
     return finishRes.json();
-  }, { username, baseURL });
+  }, { email, baseURL });
 }
 
 /**
@@ -261,7 +261,7 @@ export async function loginPasskey(page, username, baseURL = 'http://localhost:4
  *
  * @param {import('@playwright/test').Page} page
  * @param {string} [baseURL] - Base URL for auth API.
- * @returns {Promise<{authenticated: boolean, user?: {id: string, username: string, created_at: string}}>}
+ * @returns {Promise<{authenticated: boolean, user?: {id: string, email: string, created_at: string}}>}
  */
 export async function getSession(page, baseURL = 'http://localhost:4173') {
   return page.evaluate(async (baseURL) => {

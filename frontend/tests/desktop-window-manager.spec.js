@@ -19,14 +19,14 @@ import { registerPasskey, getSession } from './helpers/auth.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `desktop-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `desktop-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // Helper: register a passkey and get to the authenticated desktop.
-async function registerAndLoadDesktop(page, authenticator, username) {
+async function registerAndLoadDesktop(page, authenticator, email) {
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the Svelte app calls checkSession() and renders the desktop.
   await page.reload();
@@ -41,8 +41,8 @@ test('authenticated users reach a real desktop shell', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // The desktop container should be visible.
   const desktop = page.locator('[data-desktop]');
@@ -73,8 +73,8 @@ test('app launcher opens E-Text inside the desktop', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open the launcher.
   const launcherToggle = page.locator('[data-launcher-toggle]');
@@ -112,8 +112,8 @@ test('window focus changes raise the active window', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open two E-Text windows by launching the app twice.
   // First window.
@@ -153,8 +153,8 @@ test('windows support drag and resize', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open an E-Text window.
   await page.locator('[data-launcher-toggle]').click();
@@ -192,8 +192,8 @@ test('windows support minimize, maximize, and restore', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open an E-Text window.
   await page.locator('[data-launcher-toggle]').click();
@@ -257,8 +257,8 @@ test('window close and reopen updates desktop state cleanly', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open an E-Text window.
   await page.locator('[data-launcher-toggle]').click();
@@ -296,8 +296,8 @@ test('desktop restore preserves server-backed window state across fresh context'
   context,
   browser,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Open an E-Text window.
   await page.locator('[data-launcher-toggle]').click();
@@ -339,8 +339,8 @@ test('clicking logout returns to guest auth UI from desktop', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // Click logout.
   const logoutBtn = page.locator('[data-desktop-logout]');
@@ -381,8 +381,8 @@ test('desktop includes the runtime prompt UI', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
 
   // The task runner should be visible in the runtime panel.
   const taskRunner = page.locator('[data-task-runner]');

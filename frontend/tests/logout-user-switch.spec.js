@@ -19,8 +19,8 @@ import {
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `e2e-lo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `e2e-lo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,12 +54,12 @@ async function waitForLiveConnected(page, timeout = 10_000) {
 
 /**
  * Registers a user, lands in the shell, and waits for bootstrap + live
- * channel to be ready. Returns the username.
+ * channel to be ready. Returns the email.
  */
 async function setupAuthenticatedShell(page) {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -67,7 +67,7 @@ async function setupAuthenticatedShell(page) {
   await waitForBootstrapData(page);
   await waitForLiveConnected(page);
 
-  return username;
+  return email;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ test('logout tears down the open live channel', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Verify live channel is connected before logout.
   const liveStatusBefore = page.locator('[data-shell-live-status]');
@@ -102,7 +102,7 @@ test('after logout, GET /api/shell/bootstrap fails', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -129,7 +129,7 @@ test('after logout, GET /api/ws cannot reconnect', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -176,7 +176,7 @@ test('back navigation after logout does not resurrect the authenticated shell', 
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Navigate away to a simple page first (so there's a history entry).
   await page.goto('about:blank');
@@ -211,7 +211,7 @@ test('refresh after logout does not resurrect the authenticated shell', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -247,7 +247,7 @@ test('user A -> logout -> user B produces only user-B shell state', async ({
   authenticator,
 }) => {
   // Register user A.
-  const userA = uniqueUsername();
+  const userA = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userA, BASE_URL);
 
@@ -280,7 +280,7 @@ test('user A -> logout -> user B produces only user-B shell state', async ({
   expect(sessionAfterLogout.authenticated).toBe(false);
 
   // Register user B in the same browser context.
-  const userB = uniqueUsername();
+  const userB = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userB, BASE_URL);
 
@@ -296,7 +296,7 @@ test('user A -> logout -> user B produces only user-B shell state', async ({
   // Session should report user B.
   const sessionB = await getSession(page, BASE_URL);
   expect(sessionB.authenticated).toBe(true);
-  expect(sessionB.user.username).toBe(userB);
+  expect(sessionB.user.email).toBe(userB);
 
   // Bootstrap data should work for user B.
   await waitForBootstrapData(page);
@@ -325,7 +325,7 @@ test('user A live channel does not leak into user B session', async ({
   context,
 }) => {
   // Register user A and get into the shell with a live channel.
-  const userA = uniqueUsername();
+  const userA = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userA, BASE_URL);
 
@@ -337,7 +337,7 @@ test('user A live channel does not leak into user B session', async ({
   // Capture user A's session data for comparison.
   const sessionA = await getSession(page, BASE_URL);
   expect(sessionA.authenticated).toBe(true);
-  expect(sessionA.user.username).toBe(userA);
+  expect(sessionA.user.email).toBe(userA);
 
   // Logout as user A.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -345,7 +345,7 @@ test('user A live channel does not leak into user B session', async ({
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible', timeout: 10_000 });
 
   // Register user B.
-  const userB = uniqueUsername();
+  const userB = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userB, BASE_URL);
 
@@ -359,8 +359,8 @@ test('user A live channel does not leak into user B session', async ({
   // Session must reflect user B, not user A.
   const sessionB = await getSession(page, BASE_URL);
   expect(sessionB.authenticated).toBe(true);
-  expect(sessionB.user.username).toBe(userB);
-  expect(sessionB.user.username).not.toBe(userA);
+  expect(sessionB.user.email).toBe(userB);
+  expect(sessionB.user.email).not.toBe(userA);
 
   // The user display in the shell must be user B.
   const userArea = page.locator('[data-shell-user]');
@@ -374,7 +374,7 @@ test('user A -> logout -> user B in separate browser contexts has no stale state
   browser,
 }) => {
   // Register user A in the first context.
-  const userA = uniqueUsername();
+  const userA = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userA, BASE_URL);
 
@@ -385,7 +385,7 @@ test('user A -> logout -> user B in separate browser contexts has no stale state
   // Verify user A is authenticated.
   const sessionA = await getSession(page, BASE_URL);
   expect(sessionA.authenticated).toBe(true);
-  expect(sessionA.user.username).toBe(userA);
+  expect(sessionA.user.email).toBe(userA);
 
   // Logout as user A.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -402,7 +402,7 @@ test('user A -> logout -> user B in separate browser contexts has no stale state
 
   try {
     // Register user B in the separate context.
-    const userB = uniqueUsername();
+    const userB = uniqueEmail();
     await pageB.goto(BASE_URL);
     await registerPasskey(pageB, userB, BASE_URL);
 
@@ -413,8 +413,8 @@ test('user A -> logout -> user B in separate browser contexts has no stale state
     // Verify user B is authenticated in their own context.
     const sessionB = await getSession(pageB, BASE_URL);
     expect(sessionB.authenticated).toBe(true);
-    expect(sessionB.user.username).toBe(userB);
-    expect(sessionB.user.username).not.toBe(userA);
+    expect(sessionB.user.email).toBe(userB);
+    expect(sessionB.user.email).not.toBe(userA);
 
     // The shell in context B must show user B, not user A.
     const userAreaB = pageB.locator('[data-shell-user]');
@@ -433,7 +433,7 @@ test('repeated logout does not cause errors and keeps the user in guest state', 
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Logout once.
   const logoutBtn = page.locator('[data-shell-logout]');

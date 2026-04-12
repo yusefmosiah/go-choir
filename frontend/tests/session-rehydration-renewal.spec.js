@@ -21,8 +21,8 @@ import {
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `e2e-rehy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `e2e-rehy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,11 +64,11 @@ test('hard reload at / rehydrates the authenticated shell from cookies', async (
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register via the test helper.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -81,7 +81,7 @@ test('hard reload at / rehydrates the authenticated shell from cookies', async (
   // The shell should show the current user (from cookie-backed rehydration).
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load after rehydration.
   await waitForBootstrapData(page);
@@ -95,11 +95,11 @@ test('new tab at / rehydrates the authenticated shell from cookies', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register in the first tab.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -115,7 +115,7 @@ test('new tab at / rehydrates the authenticated shell from cookies', async ({
   // Verify the current user is shown.
   const userArea = newPage.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load.
   await waitForBootstrapData(newPage);
@@ -136,11 +136,11 @@ test('expired access cookie renews through refresh rotation on reload', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and land in the shell.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -160,7 +160,7 @@ test('expired access cookie renews through refresh rotation on reload', async ({
   // The shell should show the current user (renewed, not re-logged-in).
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load after renewal (proves protected route works).
   await waitForBootstrapData(page, 15_000);
@@ -174,11 +174,11 @@ test('live channel reconnects after successful renewal following access expiry',
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register, land in shell, and wait for live channel to connect.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -210,7 +210,7 @@ test('live channel reconnects after successful renewal following access expiry',
   // Verify session is still valid (no new passkey was needed).
   const session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 test('replayed old refresh state cannot restore access after rotation', async ({
@@ -218,11 +218,11 @@ test('replayed old refresh state cannot restore access after rotation', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and get into the shell.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -277,11 +277,11 @@ test('failed renewal falls back to guest auth state on reload', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and land in the shell.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -310,11 +310,11 @@ test('mounted shell falls back to guest state when protected request fails and r
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and land in the shell.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -338,11 +338,11 @@ test('failed renewal does not leave stale live channel state', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register, land in shell, wait for live channel.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();

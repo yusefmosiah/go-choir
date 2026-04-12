@@ -14,8 +14,8 @@ import { test, expect } from '@playwright/test';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `err-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `err-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------
@@ -40,11 +40,11 @@ test('cancelled passkey ceremony shows error and stays in guest auth UI', async 
     });
   });
 
-  // Fill in the username and click the register button.
+  // Fill in the email and click the register button.
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  const username = uniqueUsername();
-  await usernameInput.fill(username);
+  const emailInput = registerView.locator('input[type="email"]');
+  const email = uniqueEmail();
+  await emailInput.fill(email);
 
   const submitBtn = registerView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -114,9 +114,9 @@ test('cancelled login passkey ceremony shows error and stays in guest auth UI', 
   await loginToggle.click();
 
   const loginView = page.locator('[data-login-view]');
-  const usernameInput = loginView.locator('input[type="text"]');
-  const username = uniqueUsername();
-  await usernameInput.fill(username);
+  const emailInput = loginView.locator('input[type="email"]');
+  const email = uniqueEmail();
+  await emailInput.fill(email);
 
   const submitBtn = loginView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -159,9 +159,9 @@ test('failed passkey ceremony shows error and stays in guest auth UI', async ({
   });
 
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  const username = uniqueUsername();
-  await usernameInput.fill(username);
+  const emailInput = registerView.locator('input[type="email"]');
+  const email = uniqueEmail();
+  await emailInput.fill(email);
 
   const submitBtn = registerView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -209,9 +209,9 @@ test('user can retry after a cancelled passkey ceremony', async ({
   });
 
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  const username = uniqueUsername();
-  await usernameInput.fill(username);
+  const emailInput = registerView.locator('input[type="email"]');
+  const email = uniqueEmail();
+  await emailInput.fill(email);
 
   const submitBtn = registerView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -224,8 +224,8 @@ test('user can retry after a cancelled passkey ceremony', async ({
   await expect(submitBtn).toBeEnabled();
 
   // The form input should still be present and editable.
-  await expect(usernameInput).toBeVisible();
-  await expect(usernameInput).toBeEditable();
+  await expect(emailInput).toBeVisible();
+  await expect(emailInput).toBeEditable();
 });
 
 // ---------------------------------------------------------------
@@ -249,8 +249,8 @@ test('switching between register and login views clears the passkey error', asyn
   });
 
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  await usernameInput.fill(uniqueUsername());
+  const emailInput = registerView.locator('input[type="email"]');
+  await emailInput.fill(uniqueEmail());
 
   const submitBtn = registerView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -284,14 +284,14 @@ test('auth begin endpoint failure shows error and stays in guest auth UI', async
     route.fulfill({
       status: 400,
       contentType: 'application/json',
-      body: JSON.stringify({ error: 'Username already taken' }),
+      body: JSON.stringify({ error: 'Email already taken' }),
     });
   });
 
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  const username = uniqueUsername();
-  await usernameInput.fill(username);
+  const emailInput = registerView.locator('input[type="email"]');
+  const email = uniqueEmail();
+  await emailInput.fill(email);
 
   const submitBtn = registerView.locator('button[type="submit"]');
   await submitBtn.click();

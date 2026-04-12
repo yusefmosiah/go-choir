@@ -22,9 +22,9 @@ import { getVirtualAuthenticatorCredentials } from './helpers/webauthn.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-// Generate a unique username per test to avoid DB collisions.
-function uniqueUsername() {
-  return `pw-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// Generate a unique email per test to avoid DB collisions.
+function uniqueEmail() {
+  return `pw-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------
@@ -34,19 +34,19 @@ test('passkey registration creates a credential and authenticated session', asyn
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Navigate to the frontend so the virtual authenticator is bound to the
   // correct origin before calling navigator.credentials.
   await page.goto(BASE_URL);
 
   // Register a new passkey.
-  const result = await registerPasskey(page, username, BASE_URL);
+  const result = await registerPasskey(page, email, BASE_URL);
 
   // Verify the registration succeeded and returned user info.
   expect(result.ok).toBe(true);
   expect(result.user).toBeDefined();
-  expect(result.user.username).toBe(username);
+  expect(result.user.email).toBe(email);
   expect(result.user.id).toBeTruthy();
 
   // Verify the virtual authenticator stored a credential.
@@ -60,7 +60,7 @@ test('passkey registration creates a credential and authenticated session', asyn
   const session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
   expect(session.user).toBeDefined();
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 // ---------------------------------------------------------------
@@ -70,12 +70,12 @@ test('passkey login returns assertion options and creates session', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
 
   // Register first so we have a passkey to log in with.
-  const regResult = await registerPasskey(page, username, BASE_URL);
+  const regResult = await registerPasskey(page, email, BASE_URL);
   expect(regResult.ok).toBe(true);
 
   // Log out to get a clean signed-out state.
@@ -86,16 +86,16 @@ test('passkey login returns assertion options and creates session', async ({
   expect(session.authenticated).toBe(false);
 
   // Log in with the passkey.
-  const loginResult = await loginPasskey(page, username, BASE_URL);
+  const loginResult = await loginPasskey(page, email, BASE_URL);
 
   expect(loginResult.ok).toBe(true);
   expect(loginResult.user).toBeDefined();
-  expect(loginResult.user.username).toBe(username);
+  expect(loginResult.user.email).toBe(email);
 
   // Verify /auth/session reports an authenticated user.
   session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 // ---------------------------------------------------------------
@@ -105,17 +105,17 @@ test('authenticated /auth/session returns user identity without secrets', async 
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   const session = await getSession(page, BASE_URL);
 
   // Must be authenticated.
   expect(session.authenticated).toBe(true);
   expect(session.user).toBeDefined();
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
   expect(session.user.id).toBeTruthy();
   expect(session.user.created_at).toBeTruthy();
 
@@ -134,10 +134,10 @@ test('logout invalidates session and is safe to repeat', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Verify we are authenticated.
   let session = await getSession(page, BASE_URL);
@@ -163,21 +163,21 @@ test('replayed registration finish payload does not create a session', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
 
   // Use page.evaluate to do a manual registration and capture the finish
   // body, then replay it.
   const replayResult = await page.evaluate(async (opts) => {
-    const { username, baseURL } = opts;
+    const { email, baseURL } = opts;
 
     // Begin registration.
     const beginRes = await fetch(`${baseURL}/auth/register/begin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ username }),
+      body: JSON.stringify({ email }),
     });
     if (!beginRes.ok) throw new Error('begin failed');
     const creationOptions = await beginRes.json();
@@ -253,7 +253,7 @@ test('replayed registration finish payload does not create a session', async ({
     const session = await sessionRes.json();
 
     return { firstOk: firstResult.ok, replayStatus, session };
-  }, { username, baseURL: BASE_URL });
+  }, { email, baseURL: BASE_URL });
 
   // First registration succeeded.
   expect(replayResult.firstOk).toBe(true);

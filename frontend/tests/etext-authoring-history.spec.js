@@ -22,14 +22,14 @@ import { registerPasskey, getSession, loginPasskey } from './helpers/auth.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `etext-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `etext-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // Helper: register a passkey and get to the authenticated desktop.
-async function registerAndLoadDesktop(page, authenticator, username) {
+async function registerAndLoadDesktop(page, authenticator, email) {
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
@@ -47,8 +47,8 @@ async function openEText(page) {
 // Test: user can create a document (VAL-ETEXT-001)
 // ---------------------------------------------------------------
 test('user can create a document', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Click the "New Document" button.
@@ -79,8 +79,8 @@ test('user can create a document', async ({ page, authenticator }) => {
 // (VAL-ETEXT-002)
 // ---------------------------------------------------------------
 test('direct user edits create canonical user-authored revisions', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document.
@@ -115,9 +115,9 @@ test('direct user edits create canonical user-authored revisions', async ({ page
   const authorEl = historyEntries.first().locator('[data-etext-history-author-kind]');
   await expect(authorEl).toHaveAttribute('data-etext-history-author-kind', 'user');
 
-  // The author label should contain the username.
+  // The author label should contain the email.
   const authorText = await authorEl.textContent();
-  expect(authorText).toContain(username);
+  expect(authorText).toContain(email);
 });
 
 // ---------------------------------------------------------------
@@ -125,8 +125,8 @@ test('direct user edits create canonical user-authored revisions', async ({ page
 // same user (VAL-ETEXT-005)
 // ---------------------------------------------------------------
 test('latest revision survives reload', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with content.
@@ -178,8 +178,8 @@ test('latest revision survives reload', async ({ page, authenticator }) => {
 // metadata (VAL-ETEXT-006)
 // ---------------------------------------------------------------
 test('version history lists revisions with explicit attribution', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with two user revisions.
@@ -211,10 +211,10 @@ test('version history lists revisions with explicit attribution', async ({ page,
   const authorElements = page.locator('[data-etext-history-author-kind="user"]');
   await expect(authorElements).toHaveCount(2);
 
-  // Each should show the username.
+  // Each should show the email.
   for (const el of await authorElements.all()) {
     const text = await el.textContent();
-    expect(text).toContain(username);
+    expect(text).toContain(email);
   }
 });
 
@@ -223,8 +223,8 @@ test('version history lists revisions with explicit attribution', async ({ page,
 // (VAL-ETEXT-007)
 // ---------------------------------------------------------------
 test('historical snapshots can be opened without mutating head', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with two revisions.
@@ -277,8 +277,8 @@ test('historical snapshots can be opened without mutating head', async ({ page, 
 // (VAL-ETEXT-008)
 // ---------------------------------------------------------------
 test('diff view compares selected revisions', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with two revisions.
@@ -323,8 +323,8 @@ test('diff view compares selected revisions', async ({ page, authenticator }) =>
 // Test: blame identifies the last editor per section (VAL-ETEXT-009)
 // ---------------------------------------------------------------
 test('blame identifies the last editor per section', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with content.
@@ -369,8 +369,8 @@ test('blame identifies the last editor per section', async ({ page, authenticato
 // (VAL-ETEXT-010)
 // ---------------------------------------------------------------
 test('citations and metadata persist with document history', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with citations and metadata.
@@ -426,8 +426,8 @@ test('citations and metadata persist with document history', async ({ page, auth
 // Test: latest revision survives a fresh login session (VAL-ETEXT-005)
 // ---------------------------------------------------------------
 test('latest revision survives a fresh login session', async ({ page, authenticator, context, browser }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with content.
@@ -449,7 +449,7 @@ test('latest revision survives a fresh login session', async ({ page, authentica
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible', timeout: 5000 });
 
   // Log back in as the same user.
-  await loginPasskey(page, username, BASE_URL);
+  await loginPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 

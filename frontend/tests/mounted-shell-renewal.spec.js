@@ -27,8 +27,8 @@ import {
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `e2e-mr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `e2e-mr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +62,12 @@ async function waitForLiveConnected(page, timeout = 10_000) {
 
 /**
  * Registers a user, lands in the shell, and waits for bootstrap + live
- * channel to be ready. Returns the username.
+ * channel to be ready. Returns the email.
  */
 async function setupAuthenticatedShell(page) {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -75,7 +75,7 @@ async function setupAuthenticatedShell(page) {
   await waitForBootstrapData(page);
   await waitForLiveConnected(page);
 
-  return username;
+  return email;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ test('in-shell refresh action renews expired access through refresh rotation', a
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Remove the access cookie to simulate an expired access JWT.
   // The refresh cookie remains, allowing the server to rotate refresh
@@ -117,12 +117,12 @@ test('in-shell refresh action renews expired access through refresh rotation', a
 
   // The current user should still be shown — no new passkey was needed.
   const userArea = page.locator('[data-shell-user]');
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Verify the session is still authenticated via /auth/session.
   const session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 test('successful mounted-shell renewal keeps the shell stable without forcing a full reload', async ({
@@ -130,7 +130,7 @@ test('successful mounted-shell renewal keeps the shell stable without forcing a 
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Record the current bootstrap data to verify it updates after refresh.
   const bootstrapBefore = await page.evaluate(() => {
@@ -183,7 +183,7 @@ test('mounted-shell renewal falls back cleanly to guest state when refresh canno
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Remove BOTH auth cookies — access and refresh are both invalid.
   await context.clearCookies({ name: 'choir_access' });
@@ -208,7 +208,7 @@ test('in-shell refresh action does not introduce a new auth mechanism or bypass 
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Expire the access cookie.
   await context.clearCookies({ name: 'choir_access' });
@@ -249,7 +249,7 @@ test('in-shell refresh action does not introduce a new auth mechanism or bypass 
   // Verify the session is still valid.
   const session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 test('in-shell refresh works even when the live channel is already connected', async ({
@@ -257,7 +257,7 @@ test('in-shell refresh works even when the live channel is already connected', a
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Verify the live channel is connected before we start.
   await waitForLiveConnected(page);

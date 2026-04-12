@@ -21,8 +21,8 @@ import {
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `e2e-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `e2e-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------------------
@@ -34,16 +34,16 @@ test('first-time user registers and lands in the shell without page reload', asy
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Navigate to the root — should show the guest auth entry.
   await page.goto(BASE_URL);
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible' });
 
-  // Fill in the username in the register view.
+  // Fill in the email in the register view.
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  await usernameInput.fill(username);
+  const emailInput = registerView.locator('input[type="email"]');
+  await emailInput.fill(email);
 
   // Click "Register with Passkey" — this triggers the full WebAuthn
   // ceremony through the virtual authenticator, which calls
@@ -64,18 +64,18 @@ test('first-time user registers and lands in the shell without page reload', asy
   // The shell should show the current user.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 });
 
 test('registered user sees bootstrap data after shell mount', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register via the test helper for reliability.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the app re-checks auth and renders the shell.
   await page.reload();
@@ -111,11 +111,11 @@ test('registered user has live channel connected in the shell', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register via the test helper.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -149,16 +149,16 @@ test('returning user logs in from signed-out state and lands in the shell', asyn
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Step 1: Register the user first.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Verify we're in the shell after registration.
   let session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 
   // Step 2: Log out to get a clean signed-out state.
   await logout(page, BASE_URL);
@@ -180,8 +180,8 @@ test('returning user logs in from signed-out state and lands in the shell', asyn
   await loginToggle.click();
 
   const loginView = page.locator('[data-login-view]');
-  const usernameInput = loginView.locator('input[type="text"]');
-  await usernameInput.fill(username);
+  const emailInput = loginView.locator('input[type="email"]');
+  await emailInput.fill(email);
 
   const submitBtn = loginView.locator('button[type="submit"]');
   await submitBtn.click();
@@ -196,18 +196,18 @@ test('returning user logs in from signed-out state and lands in the shell', asyn
   // The shell should show the current user.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 });
 
 test('returning user sees bootstrap data after login', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and log out.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await logout(page, BASE_URL);
 
   // Log in via the UI.
@@ -215,7 +215,7 @@ test('returning user sees bootstrap data after login', async ({
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible' });
 
   // Use the loginPasskey helper for reliability.
-  await loginPasskey(page, username, BASE_URL);
+  await loginPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -241,16 +241,16 @@ test('returning user has live channel connected after login', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and log out.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await logout(page, BASE_URL);
 
   // Log in via the helper.
   await page.goto(BASE_URL);
-  await loginPasskey(page, username, BASE_URL);
+  await loginPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -278,11 +278,11 @@ test('auth cookies are HttpOnly and have SameSite attribute', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register via the helper.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Inspect the cookies.
   const cookies = await context.cookies();
@@ -319,11 +319,11 @@ test('no auth tokens in localStorage or sessionStorage', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register via the helper.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Check localStorage for any token-like entries.
   const localStorageKeys = await page.evaluate(() =>
@@ -355,7 +355,7 @@ test('no direct service port calls in the browser traffic', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Track all requests the browser makes.
   const requestedUrls = [];
@@ -365,7 +365,7 @@ test('no direct service port calls in the browser traffic', async ({
 
   // Register and let the shell boot.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell and trigger bootstrap + WS.
   await page.reload();
@@ -408,11 +408,11 @@ test('shell bootstrap and WS work with cookie auth only (no bearer token)', asyn
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and let the shell boot.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -463,10 +463,10 @@ test('auth form controls are disabled during passkey ceremony', async ({
   await page.goto(BASE_URL);
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible' });
 
-  // Fill in the username.
+  // Fill in the email.
   const registerView = page.locator('[data-register-view]');
-  const usernameInput = registerView.locator('input[type="text"]');
-  await usernameInput.fill(uniqueUsername());
+  const emailInput = registerView.locator('input[type="email"]');
+  await emailInput.fill(uniqueEmail());
 
   // Click the submit button to start the ceremony.
   const submitBtn = registerView.locator('button[type="submit"]');

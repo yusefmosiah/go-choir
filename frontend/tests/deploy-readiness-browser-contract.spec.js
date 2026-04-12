@@ -31,8 +31,8 @@ import {
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `contract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `contract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,17 +66,17 @@ async function waitForLiveConnected(page, timeout = 10_000) {
 
 /**
  * Registers a user, lands in the shell, and waits for bootstrap + live
- * channel to be ready. Returns the username.
+ * channel to be ready. Returns the email.
  */
 async function setupAuthenticatedShell(page) {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
   await waitForBootstrapData(page);
   await waitForLiveConnected(page);
-  return username;
+  return email;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,14 +129,14 @@ test('VAL-CROSS-101: new user registers and lands in the shell without page relo
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible' });
 
-  // Fill in the username in the register view.
+  // Fill in the email in the register view.
   const registerView = page.locator('[data-register-view]');
-  await registerView.locator('input[type="text"]').fill(username);
+  await registerView.locator('input[type="email"]').fill(email);
 
   // Click "Register with Passkey".
   await registerView.locator('button[type="submit"]').click();
@@ -151,7 +151,7 @@ test('VAL-CROSS-101: new user registers and lands in the shell without page relo
   // Shell should show the current user.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 });
 
 test('VAL-CROSS-101: new user receives same-origin auth cookies after registration', async ({
@@ -159,10 +159,10 @@ test('VAL-CROSS-101: new user receives same-origin auth cookies after registrati
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Verify auth cookies were set.
   const cookies = await context.cookies();
@@ -189,10 +189,10 @@ test('VAL-CROSS-101: new user sees bootstrap data and live channel after registr
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -213,11 +213,11 @@ test('VAL-CROSS-102: returning user logs in from signed-out state and lands in t
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register first.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Log out.
   await logout(page, BASE_URL);
@@ -232,7 +232,7 @@ test('VAL-CROSS-102: returning user logs in from signed-out state and lands in t
   // Switch to login view and log in.
   await page.locator('[data-login-toggle]').click();
   const loginView = page.locator('[data-login-view]');
-  await loginView.locator('input[type="text"]').fill(username);
+  await loginView.locator('input[type="email"]').fill(email);
   await loginView.locator('button[type="submit"]').click();
 
   // Shell should appear after login.
@@ -245,23 +245,23 @@ test('VAL-CROSS-102: returning user logs in from signed-out state and lands in t
   // Shell should show the current user.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 });
 
 test('VAL-CROSS-102: returning user sees bootstrap data and live channel after login', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register and log out.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await logout(page, BASE_URL);
 
   // Log in via the helper.
   await page.goto(BASE_URL);
-  await loginPasskey(page, username, BASE_URL);
+  await loginPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell.
   await page.reload();
@@ -282,10 +282,10 @@ test('VAL-CROSS-103: no auth tokens in localStorage or sessionStorage', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Check localStorage for any token-like entries.
   const localStorageKeys = await page.evaluate(() =>
@@ -316,10 +316,10 @@ test('VAL-CROSS-103: protected bootstrap request uses cookie auth only — no be
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Capture bootstrap request headers.
   let bootstrapRequestHeaders = null;
@@ -346,7 +346,7 @@ test('VAL-CROSS-103: no direct service port calls in browser traffic', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   const requestedUrls = [];
   page.on('request', (req) => {
@@ -354,7 +354,7 @@ test('VAL-CROSS-103: no direct service port calls in browser traffic', async ({
   });
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload to enter the shell and trigger bootstrap + WS.
   await page.reload();
@@ -394,10 +394,10 @@ test('VAL-CROSS-104: expired access cookie renews through refresh rotation on re
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
 
@@ -412,7 +412,7 @@ test('VAL-CROSS-104: expired access cookie renews through refresh rotation on re
   // The shell should show the current user (renewed, not re-logged-in).
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load after renewal.
   await waitForBootstrapData(page, 15_000);
@@ -426,7 +426,7 @@ test('VAL-CROSS-104: in-shell refresh action renews expired access', async ({
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Remove the access cookie.
   await context.clearCookies({ name: 'choir_access' });
@@ -452,7 +452,7 @@ test('VAL-CROSS-104: in-shell refresh action renews expired access', async ({
   // Session should still be valid — no new passkey needed.
   const session = await getSession(page, BASE_URL);
   expect(session.authenticated).toBe(true);
-  expect(session.user.username).toBe(username);
+  expect(session.user.email).toBe(email);
 });
 
 // ---------------------------------------------------------------------------
@@ -464,10 +464,10 @@ test('VAL-CROSS-105: hard reload rehydrates the authenticated shell from cookies
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
 
@@ -478,7 +478,7 @@ test('VAL-CROSS-105: hard reload rehydrates the authenticated shell from cookies
   // The shell should show the current user.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load.
   await waitForBootstrapData(page);
@@ -492,10 +492,10 @@ test('VAL-CROSS-105: new tab rehydrates the authenticated shell from cookies', a
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
 
@@ -509,7 +509,7 @@ test('VAL-CROSS-105: new tab rehydrates the authenticated shell from cookies', a
   // Verify the current user is shown.
   const userArea = newPage.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 
   // Bootstrap data should load.
   await waitForBootstrapData(newPage);
@@ -528,7 +528,7 @@ test('VAL-CROSS-106: logout tears down the live channel', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Verify live channel is connected before logout.
   await expect(page.locator('[data-shell-live-status]')).toContainText('Connected');
@@ -549,7 +549,7 @@ test('VAL-CROSS-106: after logout, protected bootstrap route denies access', asy
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   await page.locator('[data-shell-logout]').click();
@@ -571,7 +571,7 @@ test('VAL-CROSS-106: after logout, WebSocket cannot reconnect', async ({
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   await page.locator('[data-shell-logout]').click();
@@ -614,7 +614,7 @@ test('VAL-CROSS-106: refresh after logout does not resurrect the shell', async (
   page,
   authenticator,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Click logout.
   await page.locator('[data-shell-logout]').click();
@@ -646,7 +646,7 @@ test('VAL-CROSS-107: user A logout then user B login shows only user B state', a
   authenticator,
 }) => {
   // Register user A.
-  const userA = uniqueUsername();
+  const userA = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userA, BASE_URL);
   await page.reload();
@@ -665,7 +665,7 @@ test('VAL-CROSS-107: user A logout then user B login shows only user B state', a
   await page.locator('[data-auth-entry]').waitFor({ state: 'visible', timeout: 10_000 });
 
   // Register user B.
-  const userB = uniqueUsername();
+  const userB = uniqueEmail();
   await page.goto(BASE_URL);
   await registerPasskey(page, userB, BASE_URL);
   await page.reload();
@@ -679,7 +679,7 @@ test('VAL-CROSS-107: user A logout then user B login shows only user B state', a
   // Session should report user B.
   const sessionB = await getSession(page, BASE_URL);
   expect(sessionB.authenticated).toBe(true);
-  expect(sessionB.user.username).toBe(userB);
+  expect(sessionB.user.email).toBe(userB);
 
   // Bootstrap data should not contain user A's ID.
   await waitForBootstrapData(page);
@@ -699,10 +699,10 @@ test('VAL-CROSS-108: failed renewal falls back to guest auth state on reload', a
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
 
@@ -727,7 +727,7 @@ test('VAL-CROSS-108: mounted shell falls back to guest state when renewal cannot
   authenticator,
   context,
 }) => {
-  const username = await setupAuthenticatedShell(page);
+  const email = await setupAuthenticatedShell(page);
 
   // Remove both auth cookies while the shell is mounted.
   await context.clearCookies({ name: 'choir_access' });
@@ -750,10 +750,10 @@ test('VAL-CROSS-108: failed renewal does not leave stale live channel', async ({
   authenticator,
   context,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-shell]').waitFor({ state: 'visible', timeout: 15_000 });
   await waitForLiveConnected(page);

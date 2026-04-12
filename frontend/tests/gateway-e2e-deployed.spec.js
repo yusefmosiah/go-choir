@@ -12,8 +12,8 @@ import { registerPasskey, getSession } from './helpers/auth.js';
 const BASE_URL = 'https://draft.choir-ip.com';
 const EVIDENCE_DIR = '/Users/wiz/.factory/missions/969491ec-3df3-47c7-b9bf-8e384615819d/evidence/gateway-vm/gateway-e2e';
 
-function uniqueUsername() {
-  return `gateway-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `gateway-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 const testResults = {
@@ -90,20 +90,20 @@ test('VAL-GATEWAY-001: Gateway end-to-end flow', async ({ browser }) => {
     testResults.steps[1].observed = `Virtual authenticator created: ${authenticatorId}`;
 
     // Step 3: Register a new user with passkey
-    const username = uniqueUsername();
+    const email = uniqueEmail();
     testResults.steps.push({
-      action: `Register new user: ${username}`,
+      action: `Register new user: ${email}`,
       expected: 'Passkey registration completes successfully',
       observed: 'In progress...'
     });
 
-    const registerResult = await registerPasskey(page, username, BASE_URL);
+    const registerResult = await registerPasskey(page, email, BASE_URL);
 
     if (!registerResult.ok) {
       throw new Error(`Registration failed: ${JSON.stringify(registerResult)}`);
     }
 
-    testResults.steps[2].observed = `Registration successful, user: ${registerResult.user?.username || username}`;
+    testResults.steps[2].observed = `Registration successful, user: ${registerResult.user?.email || email}`;
 
     await page.screenshot({ path: `${EVIDENCE_DIR}/08-playwright-registered.png` });
     testResults.evidence.screenshots.push('gateway-vm/gateway-e2e/08-playwright-registered.png');
@@ -121,7 +121,7 @@ test('VAL-GATEWAY-001: Gateway end-to-end flow', async ({ browser }) => {
       throw new Error('Session not authenticated after registration');
     }
 
-    testResults.steps[3].observed = `Session authenticated: ${session.authenticated}, user: ${session.user?.username}`;
+    testResults.steps[3].observed = `Session authenticated: ${session.authenticated}, user: ${session.user?.email}`;
 
     // Step 5: Reload to reach the authenticated shell
     testResults.steps.push({

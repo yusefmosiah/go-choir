@@ -27,14 +27,14 @@ import { registerPasskey, loginPasskey, getSession } from './helpers/auth.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `etext-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `etext-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // Helper: register a passkey and get to the authenticated desktop.
-async function registerAndLoadDesktop(page, authenticator, username) {
+async function registerAndLoadDesktop(page, authenticator, email) {
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
   await page.reload();
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
@@ -67,8 +67,8 @@ async function createDocWithUserContent(page, title, content) {
 // Test: agent revision prompt input is visible in the editor
 // ---------------------------------------------------------------
 test('agent revision prompt input is visible in the editor', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document so we land in the editor view.
@@ -94,8 +94,8 @@ test('agent revision prompt input is visible in the editor', async ({ page, auth
 // /api/etext/documents/{id}/agent-revision (VAL-ETEXT-003)
 // ---------------------------------------------------------------
 test('submitting an agent revision prompt sends the correct API request', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Agent Submit Test', 'Original content');
@@ -132,8 +132,8 @@ test('submitting an agent revision prompt sends the correct API request', async 
 // (VAL-ETEXT-004)
 // ---------------------------------------------------------------
 test('live progress updates appear while agent revision is running', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Progress Test', 'Content to revise');
@@ -176,8 +176,8 @@ test('live progress updates appear while agent revision is running', async ({ pa
 // without manual refresh (VAL-ETEXT-004)
 // ---------------------------------------------------------------
 test('agent revision completion updates document content without manual refresh', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   const originalContent = 'Short original text';
@@ -217,8 +217,8 @@ test('agent revision completion updates document content without manual refresh'
 // revision in history (VAL-ETEXT-003, VAL-CROSS-119)
 // ---------------------------------------------------------------
 test('completed agent revision creates canonical appagent-authored revision in history', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Attribution Test', 'User written text');
@@ -265,7 +265,7 @@ test('completed agent revision creates canonical appagent-authored revision in h
   const userAuthorKind = await userAuthorEl.getAttribute('data-etext-history-author-kind');
   expect(userAuthorKind).toBe('user');
   const userAuthorText = await userAuthorEl.textContent();
-  expect(userAuthorText).toContain(username);
+  expect(userAuthorText).toContain(email);
 });
 
 // ---------------------------------------------------------------
@@ -273,8 +273,8 @@ test('completed agent revision creates canonical appagent-authored revision in h
 // (VAL-CROSS-119)
 // ---------------------------------------------------------------
 test('end-to-end flow preserves user and appagent attribution in history', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   // Create a document with initial user content.
@@ -326,8 +326,8 @@ test('end-to-end flow preserves user and appagent attribution in history', async
 // authors (VAL-CROSS-120)
 // ---------------------------------------------------------------
 test('agent revision history never shows worker as canonical author', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Worker Authorship Test', 'Some content');
@@ -364,8 +364,8 @@ test('agent revision history never shows worker as canonical author', async ({ p
 // (VAL-CROSS-122)
 // ---------------------------------------------------------------
 test('rapid resubmission does not duplicate canonical agent revision', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Duplication Test', 'Content for dedup');
@@ -426,8 +426,8 @@ test('rapid resubmission does not duplicate canonical agent revision', async ({ 
 // canonical revision (VAL-CROSS-122)
 // ---------------------------------------------------------------
 test('reload during in-flight agent revision does not duplicate canonical revision', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Reload Dedup Test', 'Content before reload');
@@ -511,8 +511,8 @@ test('reload during in-flight agent revision does not duplicate canonical revisi
 // Test: prompt input is disabled while agent revision is in progress
 // ---------------------------------------------------------------
 test('prompt input is disabled while agent revision is in progress', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Disabled Input Test', 'Some content');
@@ -549,8 +549,8 @@ test('prompt input is disabled while agent revision is in progress', async ({ pa
 // Test: agent revision with empty prompt is rejected
 // ---------------------------------------------------------------
 test('agent revision with empty prompt is rejected', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Empty Prompt Test', 'Some content');
@@ -570,8 +570,8 @@ test('agent revision with empty prompt is rejected', async ({ page, authenticato
 // attribution (VAL-ETEXT-009, VAL-CROSS-119)
 // ---------------------------------------------------------------
 test('blame view shows appagent attribution for agent-revised sections', async ({ page, authenticator }) => {
-  const username = uniqueUsername();
-  await registerAndLoadDesktop(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
   await openEText(page);
 
   await createDocWithUserContent(page, 'Blame Attribution Test', 'Original user text');

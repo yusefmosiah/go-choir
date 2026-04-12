@@ -16,16 +16,16 @@ import { registerPasskey, getSession } from './helpers/auth.js';
 
 const BASE_URL = 'http://localhost:4173';
 
-function uniqueUsername() {
-  return `shell-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueEmail() {
+  return `shell-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 // Helper: register a passkey via the test helper (page.evaluate), then
 // reload the page so the Svelte app re-checks auth state via
 // GET /auth/session and transitions to the shell.
-async function registerAndReloadShell(page, authenticator, username) {
+async function registerAndReloadShell(page, authenticator, email) {
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Reload so the Svelte app calls checkSession() and renders the shell.
   await page.reload();
@@ -40,8 +40,8 @@ test('authenticated shell is visible and distinct from guest auth UI', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
   // The shell container should be visible.
   const shell = page.locator('[data-shell]');
@@ -59,8 +59,8 @@ test('authenticated shell includes a visible logout control', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
   // The logout button should be visible and enabled.
   const logoutBtn = page.locator('[data-shell-logout]');
@@ -75,13 +75,13 @@ test('authenticated shell exposes session-aware current user display', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
-  // The user area should show the current username.
+  // The user area should show the current email.
   const userArea = page.locator('[data-shell-user]');
   await expect(userArea).toBeVisible();
-  await expect(userArea).toContainText(username);
+  await expect(userArea).toContainText(email);
 });
 
 // ---------------------------------------------------------------
@@ -91,11 +91,11 @@ test('authenticated shell calls GET /api/shell/bootstrap on mount', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
+  const email = uniqueEmail();
 
   // Register the user first.
   await page.goto(BASE_URL);
-  await registerPasskey(page, username, BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
 
   // Listen for the bootstrap request after the reload.
   let bootstrapRequested = false;
@@ -122,8 +122,8 @@ test('authenticated shell shows bootstrap data section', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
   // The bootstrap section should be visible.
   const bootstrapSection = page.locator('[data-shell-bootstrap]');
@@ -137,8 +137,8 @@ test('authenticated shell shows live channel status indicator', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
   // The live channel status section should be visible.
   const liveStatus = page.locator('[data-shell-live-status]');
@@ -152,8 +152,8 @@ test('clicking logout returns to guest auth UI', async ({
   page,
   authenticator,
 }) => {
-  const username = uniqueUsername();
-  await registerAndReloadShell(page, authenticator, username);
+  const email = uniqueEmail();
+  await registerAndReloadShell(page, authenticator, email);
 
   // Click logout.
   const logoutBtn = page.locator('[data-shell-logout]');
