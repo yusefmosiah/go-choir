@@ -63,7 +63,9 @@ Environment variables, external dependencies, and setup notes.
 - vmctl lifecycle endpoints: `/internal/vmctl/hibernate`, `/internal/vmctl/resume`, `/internal/vmctl/recover`, `/internal/vmctl/logout`, `/internal/vmctl/idle-check`
 - `VM_FIRECRACKER_BIN` — path to Firecracker binary (default: `firecracker` in `$PATH`)
 - `VM_KERNEL_IMAGE` — path to repo-built guest kernel (vmlinux)
-- `VM_ROOTFS_IMAGE` — path to repo-built guest rootfs (ext4 image)
+- `VM_INITRD_IMAGE` — path to guest initrd (required for microvm.nix/systemd boot)
+- `VM_ROOTFS_IMAGE` — path to repo-built guest rootfs (legacy ext4 image; not used with microvm.nix approach)
+- `VM_STORE_DISK_IMAGE` — path to erofs store disk built by microvm.nix (shared nix store closure)
 - `VM_STATE_DIR` — directory for VM state, epoch tracking, and per-VM persistent data
 - `VM_HOST_BASE_PORT` — starting host port for VM sandbox listeners (default: `9000`)
 - `VM_CPU_COUNT` — vCPUs per VM (default: `2`)
@@ -71,7 +73,7 @@ Environment variables, external dependencies, and setup notes.
 - `VM_HEALTH_CHECK_INTERVAL` — health check interval (default: `15s`)
 - `VM_HEALTH_CHECK_TIMEOUT` — per-check HTTP timeout (default: `3s`)
 - `VMCTL_GATEWAY_URL` — gateway URL used by vmctl to issue sandbox credentials for VM guests before booting. The issued token is written to the VM's persistent directory and read by the guest init script (default: empty = no gateway token issuance)
-- Guest images are built via `nix build .#guest-image` and contain only the sandbox binary — no provider credentials (VAL-VM-010, VAL-VM-011)
+- Guest images are built via `nix build .#guest-image` using upstream microvm.nix. The output contains vmlinux, initrd, and storedisk.erofs — no provider credentials (VAL-VM-010, VAL-VM-011). The guest boots with systemd init (proper NixOS) instead of a custom init script.
 
 ### VM activation (Node B)
 

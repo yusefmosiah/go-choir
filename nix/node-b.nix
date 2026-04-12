@@ -13,7 +13,7 @@
 # - Auth persists sessions in SQLite, so sessions survive auth restarts
 # - Auth reuses the same signing key file across restarts, so existing
 #   access JWTs remain valid after auth restarts (VAL-CROSS-118)
-{ config, lib, pkgs, goChoirPackages, ... }:
+{ config, lib, pkgs, goChoirPackages, guestRunner ? null, ... }:
 let
   # Auth signing material lives in this writable runtime directory.
   # Using a let-binding so downstream env vars compose the key paths
@@ -224,9 +224,15 @@ in
         "VMCTL_PORT=8083"
         # Firecracker VM configuration (VAL-VM-010):
         # Guest images are built from the repo via `nix build .#guest-image`.
+        # The microvm.nix approach produces:
+        #   - vmlinux (kernel)
+        #   - initrd (for systemd module loading)
+        #   - storedisk.erofs (shared nix store)
+        # The old rootfs.ext4 is no longer used with the microvm.nix approach.
         "VM_FIRECRACKER_BIN=${pkgs.firecracker}/bin/firecracker"
         "VM_KERNEL_IMAGE=/var/lib/go-choir/guest/vmlinux"
-        "VM_ROOTFS_IMAGE=/var/lib/go-choir/guest/rootfs.ext4"
+        "VM_INITRD_IMAGE=/var/lib/go-choir/guest/initrd"
+        "VM_STORE_DISK_IMAGE=/var/lib/go-choir/guest/storedisk.erofs"
         "VM_STATE_DIR=/var/lib/go-choir/vm-state"
         "VM_HOST_BASE_PORT=9000"
         "VM_CPU_COUNT=2"
@@ -238,7 +244,7 @@ in
         # Gateway URL for issuing sandbox credentials to VM guests.
         # vmctl calls this endpoint to get a token before booting each VM.
         "VMCTL_GATEWAY_URL=http://127.0.0.1:8084"
-        # Path to system binaries (ip, iptables) for network setup.
+        # Path to system binaries (ip, iptables, mkfs.ext4) for network/disk setup.
         "PATH=/run/current-system/sw/bin:/bin:/usr/bin"
       ];
     };

@@ -31,6 +31,10 @@ func LoadConfigFromEnv() ManagerConfig {
 		cfg.RootfsPath = v
 	}
 
+	if v := os.Getenv("VM_STORE_DISK_IMAGE"); v != "" {
+		cfg.StoreDiskPath = v
+	}
+
 	if v := os.Getenv("VM_GUEST_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.GuestPort = n
@@ -79,9 +83,6 @@ func LoadConfigFromEnv() ManagerConfig {
 func (c ManagerConfig) Validate() error {
 	if c.KernelImagePath == "" {
 		return fmt.Errorf("VM_KERNEL_IMAGE is required for Firecracker VM management")
-	}
-	if c.RootfsPath == "" {
-		return fmt.Errorf("VM_ROOTFS_IMAGE is required for Firecracker VM management")
 	}
 	if c.StateDir == "" {
 		return fmt.Errorf("VM_STATE_DIR is required for Firecracker VM management")

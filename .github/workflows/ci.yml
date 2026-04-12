@@ -102,10 +102,11 @@ jobs:
             echo "==> Waiting for services to start"
             sleep 5
 
-            echo "==> Building guest images (kernel + rootfs)"
+            echo "==> Building guest images (kernel + initrd + store disk)"
             /run/current-system/sw/bin/nix build .#guest-image -o /tmp/guest-image-result
             cp -f /tmp/guest-image-result/vmlinux /var/lib/go-choir/guest/vmlinux
-            cp -f /tmp/guest-image-result/rootfs.ext4 /var/lib/go-choir/guest/rootfs.ext4
+            cp -f /tmp/guest-image-result/initrd /var/lib/go-choir/guest/initrd
+            cp -f /tmp/guest-image-result/storedisk.erofs /var/lib/go-choir/guest/storedisk.erofs
             echo "    Guest images deployed"
 
             echo "==> Restarting vmctl to pick up new guest images"

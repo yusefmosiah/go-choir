@@ -340,23 +340,28 @@ func TestConfigValidate(t *testing.T) {
 
 	cfg.KernelImagePath = "/path/to/kernel"
 
-	// Missing rootfs.
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for missing rootfs")
-	}
-
-	cfg.RootfsPath = "/path/to/rootfs"
-
-	// Missing state dir.
+	// Missing state dir (rootfs is no longer required with microvm.nix approach).
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing state dir")
 	}
 
 	cfg.StateDir = "/path/to/state"
 
-	// Valid config.
+	// Valid config with just kernel and state dir (microvm.nix approach).
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
+	}
+
+	// Also valid with rootfs (legacy approach).
+	cfg.RootfsPath = "/path/to/rootfs"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with rootfs: %v", err)
+	}
+
+	// Also valid with store disk (microvm.nix approach).
+	cfg.StoreDiskPath = "/path/to/storedisk.erofs"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with store disk: %v", err)
 	}
 }
 
@@ -518,17 +523,37 @@ func TestBuildFirecrackerConfig_ComprehensiveSecretExclusion(t *testing.T) {
 		}
 	}
 
-	// Verify the drives section only contains the guest rootfs, not host paths.
+	// Verify the drives section contains guest drives, not host paths.
+	// With the microvm.nix approach, we expect a store drive and a data drive.
+	// With the legacy approach, we expect a rootfs drive and a data drive.
 	drives, ok := fcConfig["drives"].([]map[string]interface{})
-	if !ok || len(drives) != 1 {
-		t.Fatal("expected exactly 1 drive in config")
+	if !ok || len(drives) < 1 {
+		t.Fatal("expected at least 1 drive in config")
 	}
-	if drives[0]["drive_id"] != "rootfs" {
-		t.Errorf("expected rootfs drive, got %v", drives[0]["drive_id"])
+	driveIDs := make([]string, len(drives))
+	for i, d := range drives {
+		driveIDs[i], _ = d["drive_id"].(string)
 	}
-	drivePath, _ := drives[0]["path_on_host"].(string)
-	if !containsStr(drivePath, "rootfs.ext4") {
-		t.Errorf("expected rootfs path, got: %s", drivePath)
+	hasStoreOrRootfs := false
+	for _, id := range driveIDs {
+		if id == "store" || id == "rootfs" {
+			hasStoreOrRootfs = true
+			break
+		}
+	}
+	if !hasStoreOrRootfs {
+		t.Errorf("expected store or rootfs drive, got drives: %v", driveIDs)
+	}
+	// Verify data drive is present (per-VM mutable state).
+	hasData := false
+	for _, id := range driveIDs {
+		if id == "data" {
+			hasData = true
+			break
+		}
+	}
+	if !hasData {
+		t.Errorf("expected data drive, got drives: %v", driveIDs)
 	}
 }
 

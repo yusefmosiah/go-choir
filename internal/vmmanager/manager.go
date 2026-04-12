@@ -70,7 +70,14 @@ type VMConfig struct {
 	InitrdPath string
 
 	// RootfsPath is the path to the repo-built guest root filesystem image.
+	// With the microvm.nix approach, this is optional — the root is a
+	// tmpfs and /nix/store comes from the erofs store disk.
 	RootfsPath string
+
+	// StoreDiskPath is the path to the erofs store disk image built by
+	// microvm.nix. When set, the Firecracker config includes this as a
+	// read-only virtio-blk drive that the NixOS init mounts at /nix/store.
+	StoreDiskPath string
 
 	// GuestPort is the port the guest sandbox runtime listens on inside
 	// the VM. The host-side vsock or tap networking maps this to a
@@ -152,8 +159,18 @@ type ManagerConfig struct {
 	InitrdPath string
 
 	// RootfsPath is the default rootfs image for all VMs.
-	// The manager creates per-VM copies for writable guest filesystems.
+	// With the microvm.nix approach, this is optional — the root is a
+	// tmpfs and /nix/store comes from the erofs store disk.
+	// Kept for backward compatibility with the old custom rootfs approach.
 	RootfsPath string
+
+	// StoreDiskPath is the path to the erofs store disk image built by
+	// microvm.nix. This disk contains the shared read-only nix store
+	// closure. All VMs reference the same store disk, and KSM on the
+	// host deduplicates identical pages across VMs.
+	// When set, the Firecracker config includes this as a virtio-blk drive
+	// mounted read-only at /nix/store by the guest init.
+	StoreDiskPath string
 
 	// GuestPort is the port the guest sandbox listens on.
 	GuestPort int
@@ -336,6 +353,9 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	if cfg.RootfsPath == "" {
 		cfg.RootfsPath = m.cfg.RootfsPath
 	}
+	if cfg.StoreDiskPath == "" {
+		cfg.StoreDiskPath = m.cfg.StoreDiskPath
+	}
 	if cfg.GuestPort == 0 {
 		cfg.GuestPort = m.cfg.GuestPort
 	}
@@ -346,16 +366,33 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 		cfg.MachineMemSizeMib = m.cfg.MachineMemSizeMib
 	}
 
-	// Create a per-VM writable copy of the rootfs image.
-	// The base rootfs image is read-only (from the Nix store or /var/lib/go-choir/guest/),
-	// but Firecracker needs write access to the drive. Each VM gets its own copy
-	// so VM state is isolated per-user (VAL-VM-005).
-	vmRootfs := filepath.Join(m.cfg.StateDir, cfg.VMID, "rootfs.ext4")
-	if err := m.copyFile(cfg.RootfsPath, vmRootfs); err != nil {
-		return nil, fmt.Errorf("copy rootfs for VM %s: %w", cfg.VMID, err)
+	// Prepare per-VM disk images.
+	if cfg.StoreDiskPath != "" {
+		// New microvm.nix approach: erofs store disk is shared and read-only.
+		// No need to copy it — all VMs reference the same file.
+		// Create a per-VM data.img for mutable sandbox state.
+		vmDataDir := filepath.Join(m.cfg.StateDir, cfg.VMID)
+		if err := os.MkdirAll(vmDataDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create VM data dir %s: %w", vmDataDir, err)
+		}
+		dataImg := filepath.Join(vmDataDir, "data.img")
+		if _, err := os.Stat(dataImg); os.IsNotExist(err) {
+			// Create a 64MB sparse ext4 data image for mutable state.
+			if err := m.createDataImage(dataImg, 64); err != nil {
+				return nil, fmt.Errorf("create data image for VM %s: %w", cfg.VMID, err)
+			}
+		}
+	} else if cfg.RootfsPath != "" {
+		// Legacy approach: create a per-VM writable copy of the rootfs.
+		// The base rootfs image is read-only (from the Nix store or
+		// /var/lib/go-choir/guest/), but Firecracker needs write access.
+		// Each VM gets its own copy so state is isolated per-user (VAL-VM-005).
+		vmRootfs := filepath.Join(m.cfg.StateDir, cfg.VMID, "rootfs.ext4")
+		if err := m.copyFile(cfg.RootfsPath, vmRootfs); err != nil {
+			return nil, fmt.Errorf("copy rootfs for VM %s: %w", cfg.VMID, err)
+		}
+		cfg.RootfsPath = vmRootfs
 	}
-	// Point the VM config to the per-VM writable copy.
-	cfg.RootfsPath = vmRootfs
 
 	// Build the Firecracker configuration.
 	// Provider credentials are explicitly NOT included here (VAL-VM-011).
@@ -633,26 +670,86 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	guestIP := fmt.Sprintf("172.%d.0.2", subnetIndex)
 	hostIP := fmt.Sprintf("172.%d.0.1", subnetIndex)
 
+	// Build drives list.
+	// With microvm.nix (new approach):
+	//   - Store disk (erofs) as read-only virtio-blk at /dev/vda
+	//   - Per-VM data volume at /dev/vdb (created at runtime)
+	// With legacy rootfs (old approach):
+	//   - Rootfs ext4 as writable virtio-blk at /dev/vda
+	var drives []map[string]interface{}
+
+	if cfg.StoreDiskPath != "" {
+		// New microvm.nix approach: erofs store disk as the root device.
+		// The NixOS init (systemd) mounts /nix/store from this erofs disk.
+		// The root filesystem itself is a tmpfs managed by the NixOS initrd.
+		drives = append(drives, map[string]interface{}{
+			"drive_id":      "store",
+			"path_on_host":  cfg.StoreDiskPath,
+			"is_root_device": true,
+			"is_read_only":  true,
+		})
+	} else if cfg.RootfsPath != "" {
+		// Legacy approach: ext4 rootfs as the writable root device.
+		// This is the old custom init script approach with init=/bin/init.
+		drives = append(drives, map[string]interface{}{
+			"drive_id":      "rootfs",
+			"path_on_host":  cfg.RootfsPath,
+			"is_root_device": true,
+			"is_read_only":  false,
+		})
+	}
+
+	// Per-VM data volume for mutable sandbox state (always present).
+	// vmmanager creates a data.img per-VM in the state directory.
+	dataImgPath := filepath.Join(m.cfg.StateDir, cfg.VMID, "data.img")
+	drives = append(drives, map[string]interface{}{
+		"drive_id":      "data",
+		"path_on_host":  dataImgPath,
+		"is_root_device": false,
+		"is_read_only":  false,
+	})
+
 	// Build the guest kernel boot arguments.
 	// These contain NO provider credentials (VAL-VM-011).
 	// Network config is passed via ip= kernel parameter so the guest
-	// can configure its network interface at boot time. The kernel must
-	// be compiled with CONFIG_IP_PNP=y for the ip= parameter to take effect.
-	// init=/bin/init tells the kernel to run our custom init script
-	// instead of searching for /sbin/init.
-	// root=/dev/vda points to the Firecracker virtio-block root drive.
-	bootArgs := fmt.Sprintf(
-		"console=ttyS0 reboot=k panic=1 pci=off "+
-			"root=/dev/vda rw init=/bin/init "+
-			"guest_port=%d persistent=/mnt/persistent "+
-			"vm_id=%s epoch=%d "+
-			"ip=%s::%s:255.255.255.252::eth0:off",
-		cfg.GuestPort, cfg.VMID, cfg.Epoch,
-		guestIP, hostIP,
-	)
+	// can configure its network interface at boot time.
+	//
+	// With microvm.nix (systemd init):
+	//   - No init= parameter needed, systemd is the default init
+	//   - bootimeType remains for legacy rootfs backward compatibility
+	//
+	// With legacy rootfs:
+	//   - init=/bin/init tells the kernel to run our custom init script
+	//   - root=/dev/vda points to the ext4 root drive
+	var bootArgs string
+	if cfg.StoreDiskPath != "" {
+		// New microvm.nix approach with systemd init.
+		// The NixOS initrd handles root mounting and module loading.
+		// Custom parameters are passed for vmmanager/guest communication.
+		bootArgs = fmt.Sprintf(
+			"console=ttyS0 reboot=k panic=1 pci=off "+
+				"guest_port=%d persistent=/mnt/persistent "+
+				"vm_id=%s epoch=%d "+
+				"ip=%s::%s:255.255.255.252::eth0:off",
+			cfg.GuestPort, cfg.VMID, cfg.Epoch,
+			guestIP, hostIP,
+		)
+	} else {
+		// Legacy approach with custom init script.
+		bootArgs = fmt.Sprintf(
+			"console=ttyS0 reboot=k panic=1 pci=off "+
+				"root=/dev/vda rw init=/bin/init "+
+				"guest_port=%d persistent=/mnt/persistent "+
+				"vm_id=%s epoch=%d "+
+				"ip=%s::%s:255.255.255.252::eth0:off",
+			cfg.GuestPort, cfg.VMID, cfg.Epoch,
+			guestIP, hostIP,
+		)
+	}
 
 	// Build boot-source config. If an initrd is available, include it
-	// so the kernel can load ext4 module before mounting rootfs.
+	// so the kernel can load ext4/erofs/virtio modules before mounting.
+	// With microvm.nix, the initrd is essential for systemd boot.
 	bootSource := map[string]interface{}{
 		"kernel_image_path": cfg.KernelImagePath,
 		"boot_args":         bootArgs,
@@ -665,14 +762,7 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// No secrets, no provider credentials, no host paths (VAL-VM-011).
 	fcConfig := map[string]interface{}{
 		"boot-source": bootSource,
-		"drives": []map[string]interface{}{
-			{
-				"drive_id":      "rootfs",
-				"path_on_host":  cfg.RootfsPath,
-				"is_root_device": true,
-				"is_read_only":  false,
-			},
-		},
+		"drives":       drives,
 		"machine-config": map[string]interface{}{
 			"vcpu_count":  cfg.MachineCPUCount,
 			"mem_size_mib": cfg.MachineMemSizeMib,
@@ -873,6 +963,28 @@ func (m *Manager) copyFile(src, dst string) error {
 	if _, err := out.ReadFrom(in); err != nil {
 		return fmt.Errorf("copy %s to %s: %w", src, dst, err)
 	}
+	return nil
+}
+
+// createDataImage creates a sparse ext4 filesystem image for per-VM
+// mutable state. The image size is specified in megabytes.
+// This is used by the microvm.nix approach where the rootfs is read-only
+// (erofs store disk) and per-VM mutable state goes on a separate volume.
+func (m *Manager) createDataImage(path string, sizeMB int) error {
+	// Create a sparse file of the desired size.
+	if err := os.Truncate(path, int64(sizeMB)*1024*1024); err != nil {
+		return fmt.Errorf("truncate data image %s: %w", path, err)
+	}
+
+	// Format as ext4 using mkfs.ext4.
+	// The -F flag forces creation without confirmation.
+	// The -L flag sets a filesystem label for easy identification.
+	mkfsBin := findBinary("mkfs.ext4", "/run/current-system/sw/bin/mkfs.ext4")
+	cmd := exec.Command(mkfsBin, "-F", "-L", "go-choir-data", path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkfs.ext4 data image %s: %w (%s)", path, err, string(output))
+	}
+
 	return nil
 }
 
