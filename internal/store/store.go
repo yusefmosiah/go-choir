@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS desktop_state (
 	active_window  TEXT NOT NULL DEFAULT '',
 	updated_at     DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS work_items (
+	id         TEXT PRIMARY KEY,
+	parent_id  TEXT NOT NULL DEFAULT '',
+	owner_id   TEXT NOT NULL,
+	objective  TEXT NOT NULL DEFAULT '',
+	state      TEXT NOT NULL DEFAULT 'pending',
+	result     TEXT NOT NULL DEFAULT '',
+	error      TEXT NOT NULL DEFAULT '',
+	created_at DATETIME NOT NULL,
+	updated_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_items_owner_id  ON work_items(owner_id);
+CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id);
+CREATE INDEX IF NOT EXISTS idx_work_items_state     ON work_items(state);
 `
 
 // Open opens (or creates) the SQLite database at dbPath and applies the
@@ -627,4 +643,162 @@ func (s *Store) SaveDesktopState(ctx context.Context, state types.DesktopState) 
 	return nil
 }
 
+// ----- Work registry (VAL-CHOIR-001, VAL-CHOIR-003) -----
 
+// CreateWorkItem inserts a new work item into the work registry.
+func (s *Store) CreateWorkItem(ctx context.Context, item types.WorkItem) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO work_items (id, parent_id, owner_id, objective, state, result, error, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID,
+		item.ParentID,
+		item.OwnerID,
+		item.Objective,
+		item.State,
+		item.Result,
+		item.Error,
+		item.CreatedAt.UTC().Format(time.RFC3339Nano),
+		item.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("insert work item: %w", err)
+	}
+	return nil
+}
+
+// GetWorkItem returns the work item with the given ID.
+func (s *Store) GetWorkItem(ctx context.Context, id string) (types.WorkItem, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, parent_id, owner_id, objective, state, result, error, created_at, updated_at
+		   FROM work_items
+		  WHERE id = ?`,
+		id,
+	)
+	return scanWorkItem(row)
+}
+
+// UpdateWorkItem updates an existing work item.
+func (s *Store) UpdateWorkItem(ctx context.Context, item types.WorkItem) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE work_items
+		    SET parent_id = ?,
+		        owner_id = ?,
+		        objective = ?,
+		        state = ?,
+		        result = ?,
+		        error = ?,
+		        updated_at = ?
+		  WHERE id = ?`,
+		item.ParentID,
+		item.OwnerID,
+		item.Objective,
+		item.State,
+		item.Result,
+		item.Error,
+		item.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		item.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update work item: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check updated work item rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: work item %s", ErrNotFound, item.ID)
+	}
+	return nil
+}
+
+// ListWorkItemsByOwner returns work items for the given owner, ordered by
+// created_at descending, limited to the given count.
+func (s *Store) ListWorkItemsByOwner(ctx context.Context, ownerID string, limit int) ([]types.WorkItem, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.listWorkItemsWhere(ctx, "owner_id = ?", []any{ownerID}, limit)
+}
+
+// ListWorkItemsByParent returns child work items of the given parent ID,
+// ordered by created_at descending, limited to the given count.
+func (s *Store) ListWorkItemsByParent(ctx context.Context, parentID string, limit int) ([]types.WorkItem, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.listWorkItemsWhere(ctx, "parent_id = ?", []any{parentID}, limit)
+}
+
+// ListWorkItemsByState returns work items in the given state, ordered by
+// created_at descending, limited to the given count.
+func (s *Store) ListWorkItemsByState(ctx context.Context, state types.TaskState, limit int) ([]types.WorkItem, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.listWorkItemsWhere(ctx, "state = ?", []any{string(state)}, limit)
+}
+
+func (s *Store) listWorkItemsWhere(ctx context.Context, where string, args []any, limit int) ([]types.WorkItem, error) {
+	query := `SELECT id, parent_id, owner_id, objective, state, result, error, created_at, updated_at
+	            FROM work_items`
+	if where != "" {
+		query += " WHERE " + where
+	}
+	query += " ORDER BY created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query work items: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var items []types.WorkItem
+	for rows.Next() {
+		item, err := scanWorkItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work items: %w", err)
+	}
+	return items, nil
+}
+
+// scanWorkItem scans a work item record from a single row.
+func scanWorkItem(row interface{ Scan(...any) error }) (types.WorkItem, error) {
+	var item types.WorkItem
+	var createdAt, updatedAt string
+
+	err := row.Scan(
+		&item.ID,
+		&item.ParentID,
+		&item.OwnerID,
+		&item.Objective,
+		&item.State,
+		&item.Result,
+		&item.Error,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.WorkItem{}, ErrNotFound
+		}
+		return types.WorkItem{}, fmt.Errorf("scan work item: %w", err)
+	}
+
+	item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return types.WorkItem{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	item.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return types.WorkItem{}, fmt.Errorf("parse updated_at: %w", err)
+	}
+
+	return item, nil
+}

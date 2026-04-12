@@ -262,6 +262,47 @@ type ChannelMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// WorkItem represents a tracked unit of work in the scheduler's work registry.
+// Work items track spawned tasks with parent-child relationships, enabling the
+// choir-in-choir pattern where appagents spawn worker agents and track their
+// progress. The work registry provides persistent tracking across restarts
+// (VAL-CHOIR-001, VAL-CHOIR-003).
+type WorkItem struct {
+	// ID is the stable unique identifier for this work item, matching the
+	// task_id of the associated task.
+	ID string `json:"id"`
+
+	// ParentID references the parent work item (or task) that spawned this
+	// item. Empty for root tasks. Enables parent-child relationships for
+	// worker spawning (VAL-CHOIR-004).
+	ParentID string `json:"parent_id,omitempty"`
+
+	// OwnerID is the authenticated user who owns this work item.
+	// Used for access scoping (VAL-CHOIR-002).
+	OwnerID string `json:"owner_id"`
+
+	// Objective is the goal or prompt for this work item.
+	Objective string `json:"objective"`
+
+	// State is the current lifecycle state of the work item, using the
+	// same TaskState vocabulary as tasks (pending, running, completed, etc.).
+	State TaskState `json:"state"`
+
+	// Result holds the final output when the work item completes.
+	// Empty until the work item reaches a terminal state with a result.
+	Result string `json:"result,omitempty"`
+
+	// Error holds an error message when the work item fails.
+	// Empty unless the work item is in TaskFailed or TaskBlocked state.
+	Error string `json:"error,omitempty"`
+
+	// CreatedAt is the time the work item was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// UpdatedAt is the time the work item state was last changed.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // RuntimeHealthState represents the health state of the runtime.
 type RuntimeHealthState string
 

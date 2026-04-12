@@ -210,6 +210,101 @@ func TestRuntimeHealthStateValues(t *testing.T) {
 	}
 }
 
+func TestWorkItemJSONRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	item := WorkItem{
+		ID:        "work-001",
+		ParentID:  "parent-001",
+		OwnerID:   "user-alice",
+		Objective: "research topic X",
+		State:     TaskCompleted,
+		Result:    "found 5 papers",
+		Error:     "",
+		CreatedAt: now,
+		UpdatedAt: now.Add(5 * time.Second),
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+
+	var decoded WorkItem
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal work item: %v", err)
+	}
+
+	if decoded.ID != item.ID {
+		t.Errorf("id: got %q, want %q", decoded.ID, item.ID)
+	}
+	if decoded.ParentID != item.ParentID {
+		t.Errorf("parent_id: got %q, want %q", decoded.ParentID, item.ParentID)
+	}
+	if decoded.OwnerID != item.OwnerID {
+		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, item.OwnerID)
+	}
+	if decoded.Objective != item.Objective {
+		t.Errorf("objective: got %q, want %q", decoded.Objective, item.Objective)
+	}
+	if decoded.State != item.State {
+		t.Errorf("state: got %q, want %q", decoded.State, item.State)
+	}
+	if decoded.Result != item.Result {
+		t.Errorf("result: got %q, want %q", decoded.Result, item.Result)
+	}
+	if !decoded.CreatedAt.Equal(item.CreatedAt) {
+		t.Errorf("created_at: got %v, want %v", decoded.CreatedAt, item.CreatedAt)
+	}
+	if !decoded.UpdatedAt.Equal(item.UpdatedAt) {
+		t.Errorf("updated_at: got %v, want %v", decoded.UpdatedAt, item.UpdatedAt)
+	}
+}
+
+func TestWorkItemOmitsEmptyFields(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	item := WorkItem{
+		ID:        "work-002",
+		ParentID:  "",
+		OwnerID:   "user-bob",
+		Objective: "root task",
+		State:     TaskPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+
+	// Verify parent_id is omitted when empty.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if _, ok := raw["parent_id"]; ok {
+		t.Error("expected parent_id to be omitted when empty")
+	}
+	if _, ok := raw["result"]; ok {
+		t.Error("expected result to be omitted when empty")
+	}
+	if _, ok := raw["error"]; ok {
+		t.Error("expected error to be omitted when empty")
+	}
+}
+
+func TestWorkItemUsesTaskState(t *testing.T) {
+	// Verify WorkItem uses the same TaskState vocabulary.
+	states := []TaskState{TaskPending, TaskRunning, TaskCompleted, TaskFailed, TaskCancelled}
+	for _, state := range states {
+		item := WorkItem{ID: "test", State: state}
+		if !item.State.Valid() {
+			t.Errorf("work item state %q should be valid", state)
+		}
+	}
+}
+
 func TestEtextAgentRevisionEventKinds(t *testing.T) {
 	// Verify the etext agent revision event kinds exist and are distinct.
 	eventKinds := []EventKind{
