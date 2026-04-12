@@ -45,6 +45,29 @@ When a `ToolRegistry` is configured on the Runtime (via `WithToolRegistry` optio
 
 The `BridgeProvider` now implements `ToolLoopProvider` via `CallWithTools`, enabling the tool-calling loop to work with real Bedrock/Z.AI providers.
 
+## Built-in Tools
+
+### file_read (Mission 4, LLM Validation milestone)
+
+The `file_read` tool is defined in `internal/runtime/toolloopvalidation_test.go` as `fileReadTool(baseDir)`. It reads a file from a base directory and returns its contents. This was the first real tool validated end-to-end through the tool-calling loop.
+
+**Usage in tests:**
+```go
+registry := NewToolRegistry()
+registry.Register(fileReadTool(t.TempDir()))
+```
+
+**Validates:** VAL-LLM-010 (tool_use response), VAL-LLM-011 (tool result fed back), VAL-LLM-012 (multi-tool sequential).
+
+**Key test file:** `internal/runtime/toolloopvalidation_test.go` — contains `TestToolLoop*` tests covering:
+- Tool registration and schema generation
+- Single tool execution with file I/O
+- Tool error handling (non-existent files)
+- Full runtime integration (SubmitTask → tool_use → file_read → result)
+- Tool result message verification (conversation history inspection)
+- Multi-tool sequential execution (read multiple files)
+- Event emission verification (tool.invoked, tool.result, task.progress)
+
 ## Future Work
 
 - The `extractToolCalls` function in `bridge.go` returns nil because the provider package's `LLMResponse` type doesn't yet carry structured tool call data. When the provider package is enhanced to parse `tool_use` content blocks from Anthropic/Bedrock responses, this function should extract them.
