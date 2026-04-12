@@ -175,6 +175,22 @@ func (m *mockProvider) Call(ctx context.Context, req provider.LLMRequest) (*prov
 	return m.response, nil
 }
 
+func (m *mockProvider) Stream(ctx context.Context, req provider.LLMRequest, onChunk func(provider.StreamChunk)) (*provider.LLMResponse, error) {
+	resp, err := m.Call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// Emit a single text delta chunk for the mock.
+	if resp.Text != "" {
+		onChunk(provider.StreamChunk{
+			Type:  "content_block_delta",
+			Delta: resp.Text,
+			Index: 0,
+		})
+	}
+	return resp, nil
+}
+
 func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) IsReal() bool { return m.real }
 
@@ -1350,5 +1366,287 @@ func TestMultiProvider_FireworksWithSystemPrompt(t *testing.T) {
 	}
 	if fireworksProvider.lastReq.System != "You are a pirate. Respond in pirate speak." {
 		t.Errorf("System = %q, want system prompt forwarded", fireworksProvider.lastReq.System)
+	}
+}
+
+// --- Gateway Streaming Tests (VAL-LLM-002, VAL-LLM-004) ---
+
+func TestHandleInference_StreamingZAI(t *testing.T) {
+	// VAL-LLM-004: Gateway routes streaming request to Z.AI provider.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "zai-stream-001",
+			Text:         "Hello from Z.AI streaming!",
+			Model:        "glm-5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "zai",
+			Usage:        provider.Usage{InputTokens: 10, OutputTokens: 8},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("zai", zaiProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-zai-stream")
+
+	payload := ProviderRequest{
+		Provider:  "zai",
+		Model:     "glm-5-turbo",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+		Stream:    true,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	// Verify SSE response headers.
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	// Verify SSE body contains data lines.
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "data: ") {
+		t.Errorf("expected SSE data lines in response, got: %s", respBody)
+	}
+	if !strings.Contains(respBody, "[DONE]") {
+		t.Errorf("expected [DONE] marker in SSE stream, got: %s", respBody)
+	}
+
+	// Verify the response contains the expected text delta.
+	if !strings.Contains(respBody, "Hello from Z.AI streaming!") {
+		t.Errorf("expected streaming text in SSE response, got: %s", respBody)
+	}
+}
+
+func TestHandleInference_StreamingFireworks(t *testing.T) {
+	// VAL-LLM-003: Gateway routes streaming request to Fireworks provider.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "fw-stream-001",
+			Text:         "Hello from Fireworks streaming!",
+			Model:        "kimi-k2p5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "fireworks",
+			Usage:        provider.Usage{InputTokens: 8, OutputTokens: 6},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-fw-stream")
+
+	payload := ProviderRequest{
+		Provider:  "fireworks",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+		Stream:    true,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "Hello from Fireworks streaming!") {
+		t.Errorf("expected streaming text in SSE response, got: %s", respBody)
+	}
+}
+
+func TestHandleInference_StreamingRequiresAuth(t *testing.T) {
+	// Streaming requests still require valid auth.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			Text:         "test",
+			ProviderName: "zai",
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("zai", zaiProvider)
+	h := NewMultiHandler(reg, mp)
+
+	payload := ProviderRequest{
+		Provider: "zai",
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		Stream:   true,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	// No auth header.
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleInference_StreamingProviderError(t *testing.T) {
+	// Verify that streaming provider errors are handled gracefully.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		err:  fmt.Errorf("zai: status 503 Service Unavailable (sanitized)"),
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("zai", zaiProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-zai-stream-err")
+
+	payload := ProviderRequest{
+		Provider: "zai",
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		Stream:   true,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	// SSE response should contain an error event.
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "data: ") {
+		t.Errorf("expected SSE data lines in error response, got: %s", respBody)
+	}
+}
+
+func TestHandleInference_NonStreamingStillWorks(t *testing.T) {
+	// Verify that non-streaming requests (stream=false or absent) still work.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "zai-nostream-001",
+			Text:         "Non-streaming response",
+			Model:        "glm-5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "zai",
+			Usage:        provider.Usage{InputTokens: 5, OutputTokens: 3},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("zai", zaiProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-nostream")
+
+	// Test with stream=false explicitly.
+	payload := ProviderRequest{
+		Provider:  "zai",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+		Stream:    false,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	// Verify JSON response (not SSE).
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Text != "Non-streaming response" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Non-streaming response")
+	}
+	if resp.ProviderName != "zai" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "zai")
+	}
+}
+
+func TestHandleInference_StreamingModelRoutingToZAI(t *testing.T) {
+	// VAL-LLM-006: Streaming request with glm-5-turbo model routes to Z.AI.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-zai-stream-model")
+
+	payload := ProviderRequest{
+		Model:     "glm-5-turbo",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+		Stream:    true,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	// Verify SSE response.
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "Hello from Z.AI!") {
+		t.Errorf("expected Z.AI streaming response, got: %s", respBody)
 	}
 }

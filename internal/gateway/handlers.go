@@ -252,14 +252,20 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		Messages:  req.Messages,
 		Tools:     req.Tools,
 		MaxTokens: req.MaxTokens,
-		Stream:    false, // gateway forces non-streaming
+		Stream:    req.Stream,
 	}
 
-	log.Printf("gateway: inference request from sandbox %s (provider=%s model=%s messages=%d)",
-		sandboxID, p.Name(), req.Model, len(req.Messages))
+	log.Printf("gateway: inference request from sandbox %s (provider=%s model=%s messages=%d stream=%v)",
+		sandboxID, p.Name(), req.Model, len(req.Messages), req.Stream)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+
+	// If the client requests streaming, use SSE streaming.
+	if req.Stream {
+		h.handleStreamingInference(w, r, p, llmReq, sandboxID)
+		return
+	}
 
 	resp, err := p.Call(ctx, llmReq)
 	if err != nil {
@@ -286,6 +292,61 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		ToolCalls:    resp.ToolCalls,
 		ProviderName: resp.ProviderName,
 	})
+}
+
+// handleStreamingInference handles streaming inference requests by setting up
+// an SSE response and forwarding chunks from the provider to the client in
+// real-time (VAL-LLM-003, VAL-LLM-004).
+func (h *Handler) handleStreamingInference(w http.ResponseWriter, r *http.Request, p provider.Provider, llmReq provider.LLMRequest, sandboxID string) {
+	// Set up SSE response headers.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
+	flusher, canFlush := w.(http.Flusher)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	resp, err := p.Stream(ctx, llmReq, func(chunk provider.StreamChunk) {
+		// Marshal the chunk as SSE data.
+		data, err := json.Marshal(chunk)
+		if err != nil {
+			log.Printf("gateway: marshal stream chunk: %v", err)
+			return
+		}
+
+		// Write SSE event.
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		if canFlush {
+			flusher.Flush()
+		}
+	})
+
+	if err != nil {
+		// If we haven't written any SSE data yet, we can return an HTTP error.
+		// Otherwise, send an error event.
+		sanitized := sanitizeError(err)
+		log.Printf("gateway: streaming provider call failed for sandbox %s: %v (sanitized: %s)",
+			sandboxID, err, sanitized)
+
+		errData, _ := json.Marshal(map[string]string{"error": sanitized})
+		fmt.Fprintf(w, "data: %s\n\n", errData)
+		if canFlush {
+			flusher.Flush()
+		}
+		return
+	}
+
+	// Send final [DONE] marker.
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	if canFlush {
+		flusher.Flush()
+	}
+
+	log.Printf("gateway: streaming inference succeeded for sandbox %s (provider=%s tokens=%d+%d text_len=%d)",
+		sandboxID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
 }
 
 // resolveProvider selects the appropriate provider for the given request.

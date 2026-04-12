@@ -46,6 +46,27 @@ The gateway entrypoint (`cmd/gateway/main.go`) uses `provider.ResolveAll()` to i
 4. **Errors sanitized** — upstream failures return bounded, sanitized messages without credentials, auth headers, or stack traces (VAL-GATEWAY-007).
 5. **Stale credentials invalidated** — revocation, rotation, and expiry all prevent further provider access (VAL-GATEWAY-008).
 
+## Streaming Support (VAL-LLM-003, VAL-LLM-004)
+
+The gateway now supports SSE streaming for LLM requests. When a request includes `"stream": true`:
+
+1. The gateway sets `Content-Type: text/event-stream` on the response
+2. Provider chunks are forwarded as `data: {...}\n\n` SSE events
+3. The stream terminates with `data: [DONE]\n\n`
+4. Provider errors during streaming are sent as error events
+
+The Provider interface now includes a `Stream()` method that accepts an `onChunk` callback:
+- Z.AI and Fireworks use real SSE streaming (Anthropic-compatible format)
+- Bedrock falls back to non-streaming Call (emits the response as a single chunk)
+
+SSE event types parsed from upstream:
+- `message_start` — response ID, model, initial usage
+- `content_block_start` — new content block (text or tool_use)
+- `content_block_delta` — incremental text_delta or input_json_delta
+- `content_block_stop` — end of content block
+- `message_delta` — stop_reason, cumulative output token count
+- `message_stop` — stream complete
+
 ## Sandbox Identity and Credentials
 
 The gateway manages per-sandbox credentials through an in-process `IdentityRegistry`:
@@ -79,7 +100,7 @@ Tokens are SHA-256 hashed at rest. The raw token is returned only once at issuan
 
 ## Future Work
 
-- SSE streaming support (VAL-LLM-003, VAL-LLM-004) — currently non-streaming only
 - Durable credential storage (currently in-memory; needs persistence for production)
 - VM lifecycle integration — vmctl should issue/rotate gateway credentials when VMs start/stop
 - The sandbox runtime can use GatewayClient instead of direct provider when the gateway is available
+- Streaming support for Bedrock (binary EventStream to SSE translation)

@@ -30,6 +30,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -90,11 +91,11 @@ type ToolDef struct {
 type Block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`         // tool_use: provider-assigned call ID
-	Name      string          `json:"name,omitempty"`       // tool_use: tool name to invoke
-	Input     json.RawMessage `json:"input,omitempty"`      // tool_use: tool arguments as JSON
+	ID        string          `json:"id,omitempty"`          // tool_use: provider-assigned call ID
+	Name      string          `json:"name,omitempty"`        // tool_use: tool name to invoke
+	Input     json.RawMessage `json:"input,omitempty"`       // tool_use: tool arguments as JSON
 	ToolUseID string          `json:"tool_use_id,omitempty"` // tool_result: ID of the originating tool call
-	IsError   bool            `json:"is_error,omitempty"`   // tool_result: true if result is an error
+	IsError   bool            `json:"is_error,omitempty"`    // tool_result: true if result is an error
 }
 
 // LLMResponse is the unified response shape from all provider backends.
@@ -148,6 +149,48 @@ type ContentToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// StreamChunk represents an incremental SSE chunk from a streaming LLM
+// response. The gateway and runtime use these to forward streaming data
+// to callers in real-time.
+type StreamChunk struct {
+	// Type is the SSE event type (e.g., "content_block_delta", "message_start",
+	// "message_delta", "message_stop").
+	Type string `json:"type"`
+
+	// Delta is the incremental text content from text_delta events.
+	Delta string `json:"delta,omitempty"`
+
+	// ToolCallDelta is partial JSON for tool_use input_json_delta events.
+	ToolCallDelta string `json:"tool_call_delta,omitempty"`
+
+	// ToolCallID is the tool call ID from content_block_start for tool_use blocks.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+
+	// ToolCallName is the tool name from content_block_start for tool_use blocks.
+	ToolCallName string `json:"tool_call_name,omitempty"`
+
+	// StopReason is set on message_delta events (e.g., "end_turn", "tool_use").
+	StopReason string `json:"stop_reason,omitempty"`
+
+	// Usage is the cumulative token usage from message_delta events.
+	Usage *StreamUsage `json:"usage,omitempty"`
+
+	// Index is the content block index for multi-block responses.
+	Index int `json:"index,omitempty"`
+
+	// Model is set on message_start events.
+	Model string `json:"model,omitempty"`
+
+	// ID is the response ID from message_start events.
+	ID string `json:"id,omitempty"`
+}
+
+// StreamUsage carries token counts for streaming responses.
+type StreamUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
 // Provider is the interface for executing LLM requests. Implementations
 // must not leak credentials in error messages or logs.
 type Provider interface {
@@ -155,6 +198,12 @@ type Provider interface {
 	// Implementations should return structured errors that the runtime
 	// can surface as task failures without crashing (VAL-RUNTIME-008).
 	Call(ctx context.Context, req LLMRequest) (*LLMResponse, error)
+
+	// Stream executes the LLM request with streaming (SSE) and calls
+	// onChunk for each incremental chunk. If the provider does not support
+	// streaming, it should fall back to Call and emit a single chunk.
+	// Returns the accumulated LLMResponse on completion.
+	Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error)
 
 	// Name returns the provider name for observability.
 	Name() string
@@ -196,11 +245,11 @@ type ProviderConfig struct {
 // Auth uses a bearer identity token (AWS_BEARER_TOKEN_BEDROCK) rather
 // than SigV4 signing, matching the pattern from choiros-rs.
 type BedrockProvider struct {
-	region      string
-	modelID     string
-	authToken   string // loaded at init time, never logged
-	httpClient  *http.Client
-	anthropicV  string // anthropic version header
+	region     string
+	modelID    string
+	authToken  string // loaded at init time, never logged
+	httpClient *http.Client
+	anthropicV string // anthropic version header
 }
 
 // BedrockConfig holds configuration for creating a BedrockProvider.
@@ -225,7 +274,7 @@ func NewBedrockProvider(cfg BedrockConfig) (*BedrockProvider, error) {
 
 	return &BedrockProvider{
 		region:     cfg.Region,
-		modelID:   cfg.ModelID,
+		modelID:    cfg.ModelID,
 		authToken:  cfg.AuthToken,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 		anthropicV: "bedrock-2023-05-31",
@@ -252,6 +301,35 @@ func NewBedrockProviderFromEnv(modelID string) (*BedrockProvider, error) {
 
 func (p *BedrockProvider) Name() string { return "bedrock" }
 func (p *BedrockProvider) IsReal() bool { return true }
+
+// Stream falls back to non-streaming Call because Bedrock uses binary
+// EventStream (not SSE). The response is emitted as a single chunk.
+func (p *BedrockProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	resp, err := p.Call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// Emit the complete response as a single chunk for consistency.
+	onChunk(StreamChunk{
+		Type:       "message_start",
+		ID:         resp.ID,
+		Model:      resp.Model,
+		StopReason: resp.StopReason,
+		Usage:      &StreamUsage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens},
+	})
+	if resp.Text != "" {
+		onChunk(StreamChunk{
+			Type:  "content_block_delta",
+			Delta: resp.Text,
+			Index: 0,
+		})
+	}
+	onChunk(StreamChunk{
+		Type:       "message_stop",
+		StopReason: resp.StopReason,
+	})
+	return resp, nil
+}
 
 // Call sends the request to Bedrock's invoke endpoint.
 // Bedrock uses the model ID in the URL path and forces non-streaming
@@ -309,7 +387,7 @@ func (p *BedrockProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 // Anthropic-compatible API at https://api.z.ai/api/anthropic.
 type ZAIProvider struct {
 	apiKey     string // loaded at init time, never logged
-	modelID   string
+	modelID    string
 	httpClient *http.Client
 	baseURL    string
 }
@@ -337,9 +415,9 @@ func NewZAIProvider(cfg ZAIConfig) (*ZAIProvider, error) {
 
 	return &ZAIProvider{
 		apiKey:     cfg.APIKey,
-		modelID:   cfg.ModelID,
+		modelID:    cfg.ModelID,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
-		baseURL:   strings.TrimRight(baseURL, "/"),
+		baseURL:    strings.TrimRight(baseURL, "/"),
 	}, nil
 }
 
@@ -392,6 +470,44 @@ func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, e
 	return parseAnthropicResponse(resp, p.modelID, "zai")
 }
 
+// Stream sends the request to Z.AI with stream=true and processes the
+// SSE response. It parses each event and calls onChunk for incremental
+// text deltas, tool use, and lifecycle events. Returns the accumulated
+// LLMResponse on completion.
+func (p *ZAIProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	endpoint := p.baseURL + "/v1/messages"
+
+	// Build streaming request.
+	req.Stream = true
+	body := p.buildRequestBody(req)
+	body.Stream = true
+
+	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("zai: build stream request: %w", err)
+	}
+
+	httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	log.Printf("provider: zai stream model=%s", p.modelID)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("zai: stream http call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("zai: status %s (sanitized)", resp.Status)
+	}
+
+	return parseSSEStream(resp.Body, p.modelID, "zai", onChunk)
+}
+
 func (p *ZAIProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	ar := anthropicRequest{
 		Model:            p.modelID,
@@ -416,7 +532,7 @@ func (p *ZAIProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 // using the Anthropic-compatible API at https://api.fireworks.ai/inference.
 type FireworksProvider struct {
 	apiKey     string // loaded at init time, never logged
-	modelID   string
+	modelID    string
 	httpClient *http.Client
 	baseURL    string
 }
@@ -444,9 +560,9 @@ func NewFireworksProvider(cfg FireworksConfig) (*FireworksProvider, error) {
 
 	return &FireworksProvider{
 		apiKey:     cfg.APIKey,
-		modelID:   cfg.ModelID,
+		modelID:    cfg.ModelID,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
-		baseURL:   strings.TrimRight(baseURL, "/"),
+		baseURL:    strings.TrimRight(baseURL, "/"),
 	}, nil
 }
 
@@ -498,6 +614,40 @@ func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespo
 	return parseAnthropicResponse(resp, p.modelID, "fireworks")
 }
 
+// Stream sends the request to Fireworks AI with stream=true and processes
+// the SSE response using the same Anthropic-compatible SSE format.
+func (p *FireworksProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	endpoint := p.baseURL + "/v1/messages"
+
+	req.Stream = true
+	body := p.buildRequestBody(req)
+	body.Stream = true
+
+	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("fireworks: build stream request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	log.Printf("provider: fireworks stream model=%s", p.modelID)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("fireworks: stream http call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fireworks: status %s (sanitized)", resp.Status)
+	}
+
+	return parseSSEStream(resp.Body, p.modelID, "fireworks", onChunk)
+}
+
 func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	ar := anthropicRequest{
 		Model:     p.modelID,
@@ -520,13 +670,13 @@ func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 // --- Shared types and helpers ---
 
 type anthropicRequest struct {
-	Model            string                 `json:"model,omitempty"` // empty for Bedrock (model in URL)
-	System           any                    `json:"system,omitempty"`
-	Messages         []anthropicMessage     `json:"messages"`
-	Tools            []anthropicTool        `json:"tools,omitempty"`
-	MaxTokens        int                    `json:"max_tokens"`
-	Stream           bool                   `json:"stream,omitempty"`
-	AnthropicVersion string                 `json:"anthropic_version,omitempty"`
+	Model            string             `json:"model,omitempty"` // empty for Bedrock (model in URL)
+	System           any                `json:"system,omitempty"`
+	Messages         []anthropicMessage `json:"messages"`
+	Tools            []anthropicTool    `json:"tools,omitempty"`
+	MaxTokens        int                `json:"max_tokens"`
+	Stream           bool               `json:"stream,omitempty"`
+	AnthropicVersion string             `json:"anthropic_version,omitempty"`
 }
 
 type anthropicSystemBlock struct {
@@ -543,19 +693,19 @@ type anthropicTool struct {
 }
 
 type anthropicMessage struct {
-	Role    string              `json:"role"`
-	Content []anthropicContent  `json:"content"`
+	Role    string             `json:"role"`
+	Content []anthropicContent `json:"content"`
 }
 
 type anthropicContent struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	ID        string          `json:"id,omitempty"`          // tool_use: call ID
-	Name      string          `json:"name,omitempty"`         // tool_use: tool name
-	Input     json.RawMessage `json:"input,omitempty"`        // tool_use: arguments
-	ToolUseID string          `json:"tool_use_id,omitempty"`  // tool_result: originating call ID
-	Content   string          `json:"content,omitempty"`      // tool_result: result content (when string)
-	IsError   bool            `json:"is_error,omitempty"`      // tool_result: error flag
+	Name      string          `json:"name,omitempty"`        // tool_use: tool name
+	Input     json.RawMessage `json:"input,omitempty"`       // tool_use: arguments
+	ToolUseID string          `json:"tool_use_id,omitempty"` // tool_result: originating call ID
+	Content   string          `json:"content,omitempty"`     // tool_result: result content (when string)
+	IsError   bool            `json:"is_error,omitempty"`    // tool_result: error flag
 }
 
 type anthropicResponse struct {
@@ -687,10 +837,10 @@ func parseBedrockResponse(resp *http.Response, modelID string) (*LLMResponse, er
 	}
 
 	result := &LLMResponse{
-		ID:          payload.ID,
-		Model:       coalesce(payload.Model, modelID),
-		StopReason:  payload.StopReason,
-		Usage:       Usage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
+		ID:           payload.ID,
+		Model:        coalesce(payload.Model, modelID),
+		StopReason:   payload.StopReason,
+		Usage:        Usage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
 		ProviderName: "bedrock",
 	}
 
@@ -787,6 +937,223 @@ func canonicalJSON(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	return b
+}
+
+// parseSSEStream reads an Anthropic-compatible SSE stream from the response
+// body, calling onChunk for each relevant event, and returns the accumulated
+// LLMResponse. This handles the standard Anthropic Messages API streaming
+// format used by both Z.AI and Fireworks AI.
+//
+// Event flow:
+//  1. message_start — contains response ID, model, initial usage
+//  2. content_block_start — indicates a new content block (text or tool_use)
+//  3. content_block_delta — incremental text (text_delta) or tool input (input_json_delta)
+//  4. content_block_stop — end of content block
+//  5. message_delta — final stop_reason and cumulative output token count
+//  6. message_stop — stream complete
+//
+// Unknown events (ping, error, etc.) are silently skipped.
+func parseSSEStream(body io.Reader, modelID string, providerName string, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	result := &LLMResponse{
+		Model:        modelID,
+		ProviderName: providerName,
+	}
+
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MB max line
+
+	var toolCallInputs map[int]*struct { // index → accumulated JSON
+		id   string
+		name string
+		json strings.Builder
+	}
+	toolCallInputs = make(map[int]*struct {
+		id   string
+		name string
+		json strings.Builder
+	})
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// SSE lines starting with "event: " set the event type.
+		// We don't need to track this — the event type is in the JSON data.
+		if strings.HasPrefix(line, "event: ") {
+			continue
+		}
+
+		// SSE lines starting with "data: " contain the payload.
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+
+		// "[DONE]" signals stream completion.
+		if data == "[DONE]" {
+			break
+		}
+
+		var event struct {
+			Type         string          `json:"type"`
+			Index        int             `json:"index"`
+			Model        string          `json:"model"`
+			ID           string          `json:"id"`
+			Delta        json.RawMessage `json:"delta"`
+			Message      json.RawMessage `json:"message"`
+			ContentBlock json.RawMessage `json:"content_block"`
+			Usage        struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			// Skip malformed events.
+			continue
+		}
+
+		switch event.Type {
+		case "message_start":
+			// Extract message fields.
+			var msg struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+				Usage struct {
+					InputTokens int `json:"input_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal(event.Message, &msg); err == nil {
+				result.ID = msg.ID
+				if msg.Model != "" {
+					result.Model = msg.Model
+				}
+				result.Usage.InputTokens = msg.Usage.InputTokens
+			}
+			onChunk(StreamChunk{
+				Type:  "message_start",
+				ID:    result.ID,
+				Model: result.Model,
+				Usage: &StreamUsage{InputTokens: result.Usage.InputTokens},
+			})
+
+		case "content_block_start":
+			// Check if this is a tool_use block.
+			var cb struct {
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			}
+			if err := json.Unmarshal(event.ContentBlock, &cb); err == nil {
+				if cb.Type == "tool_use" {
+					toolCallInputs[event.Index] = &struct {
+						id   string
+						name string
+						json strings.Builder
+					}{id: cb.ID, name: cb.Name}
+					onChunk(StreamChunk{
+						Type:         "content_block_start",
+						Index:        event.Index,
+						ToolCallID:   cb.ID,
+						ToolCallName: cb.Name,
+					})
+				} else {
+					onChunk(StreamChunk{
+						Type:  "content_block_start",
+						Index: event.Index,
+					})
+				}
+			}
+
+		case "content_block_delta":
+			// Parse delta based on type.
+			var delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJSON string `json:"partial_json"`
+			}
+			if err := json.Unmarshal(event.Delta, &delta); err == nil {
+				switch delta.Type {
+				case "text_delta":
+					result.Text += delta.Text
+					onChunk(StreamChunk{
+						Type:  "content_block_delta",
+						Delta: delta.Text,
+						Index: event.Index,
+					})
+				case "input_json_delta":
+					// Accumulate tool input JSON.
+					if tc, ok := toolCallInputs[event.Index]; ok {
+						tc.json.WriteString(delta.PartialJSON)
+					}
+					onChunk(StreamChunk{
+						Type:          "content_block_delta",
+						Index:         event.Index,
+						ToolCallDelta: delta.PartialJSON,
+					})
+				}
+			}
+
+		case "content_block_stop":
+			// Finalize any tool_use blocks.
+			if tc, ok := toolCallInputs[event.Index]; ok {
+				result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+					ID:        tc.id,
+					Name:      tc.name,
+					Arguments: canonicalJSON(json.RawMessage(tc.json.String())),
+				})
+			}
+			onChunk(StreamChunk{
+				Type:  "content_block_stop",
+				Index: event.Index,
+			})
+
+		case "message_delta":
+			var delta struct {
+				StopReason string `json:"stop_reason"`
+			}
+			if err := json.Unmarshal(event.Delta, &delta); err == nil {
+				result.StopReason = delta.StopReason
+			}
+			result.Usage.OutputTokens = event.Usage.OutputTokens
+			onChunk(StreamChunk{
+				Type:       "message_delta",
+				StopReason: result.StopReason,
+				Usage:      &StreamUsage{OutputTokens: result.Usage.OutputTokens},
+			})
+
+		case "message_stop":
+			onChunk(StreamChunk{
+				Type:       "message_stop",
+				StopReason: result.StopReason,
+			})
+
+		case "ping":
+			// Ignore ping events.
+
+		case "error":
+			var errData struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(data), &errData); err == nil {
+				log.Printf("provider: %s stream error: %s (sanitized)", providerName, errData.Error.Type)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("%s: read stream: %w", providerName, err)
+	}
+
+	log.Printf("provider: %s stream complete model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d tool_calls=%d",
+		providerName, result.Model, result.StopReason,
+		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text), len(result.ToolCalls))
+
+	return result, nil
 }
 
 // ModelInfo describes a supported model and its associated provider.

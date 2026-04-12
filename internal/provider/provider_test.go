@@ -83,7 +83,7 @@ func TestBedrockProviderCallSuccess(t *testing.T) {
 
 	p := &BedrockProvider{
 		region:     "us-east-1",
-		modelID:   "us.anthropic.claude-sonnet-4-6",
+		modelID:    "us.anthropic.claude-sonnet-4-6",
 		authToken:  "test-bearer-token",
 		httpClient: server.Client(),
 		anthropicV: "bedrock-2023-05-31",
@@ -127,9 +127,9 @@ func TestBedrockProviderCallError(t *testing.T) {
 	defer server.Close()
 
 	p := &BedrockProvider{
-		region:     "us-east-1",
+		region:    "us-east-1",
 		modelID:   "test-model",
-		authToken:  "test-token",
+		authToken: "test-token",
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
@@ -138,7 +138,7 @@ func TestBedrockProviderCallError(t *testing.T) {
 	}
 
 	_, err := p.Call(context.Background(), LLMRequest{
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
 		MaxTokens: 1024,
 	})
 	if err == nil {
@@ -219,7 +219,7 @@ func TestZAIProviderCallSuccess(t *testing.T) {
 
 	p := &ZAIProvider{
 		apiKey:     "test-zai-key",
-		modelID:   "glm-4.7",
+		modelID:    "glm-4.7",
 		httpClient: server.Client(),
 		baseURL:    server.URL,
 	}
@@ -255,13 +255,13 @@ func TestZAIProviderCallError(t *testing.T) {
 
 	p := &ZAIProvider{
 		apiKey:     "bad-key",
-		modelID:   "glm-4.7",
+		modelID:    "glm-4.7",
 		httpClient: server.Client(),
 		baseURL:    server.URL,
 	}
 
 	_, err := p.Call(context.Background(), LLMRequest{
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
 		MaxTokens: 1024,
 	})
 	if err == nil {
@@ -424,7 +424,23 @@ func (m *mockLLMProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespons
 	return m.resp, nil
 }
 
-func (m *mockLLMProvider) Name() string  { return m.name }
+func (m *mockLLMProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	resp, err := m.Call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// Emit a single text delta chunk for the mock.
+	if resp.Text != "" {
+		onChunk(StreamChunk{
+			Type:  "content_block_delta",
+			Delta: resp.Text,
+			Index: 0,
+		})
+	}
+	return resp, nil
+}
+
+func (m *mockLLMProvider) Name() string { return m.name }
 func (m *mockLLMProvider) IsReal() bool { return m.isReal }
 
 func TestBridgeProviderExecuteSuccess(t *testing.T) {
@@ -602,7 +618,7 @@ func TestBridgeProviderEventsDistinguishRealFromStub(t *testing.T) {
 // rewriteTransport redirects requests from the original URL to the test
 // server URL, preserving the path and headers.
 type rewriteTransport struct {
-	target  string
+	target   string
 	original string
 }
 
@@ -730,9 +746,9 @@ func TestErrorSanitization(t *testing.T) {
 	defer server.Close()
 
 	p := &BedrockProvider{
-		region:     "us-east-1",
+		region:    "us-east-1",
 		modelID:   "test-model",
-		authToken:  "test-token",
+		authToken: "test-token",
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
@@ -741,7 +757,7 @@ func TestErrorSanitization(t *testing.T) {
 	}
 
 	_, err := p.Call(context.Background(), LLMRequest{
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
 		MaxTokens: 1024,
 	})
 	if err == nil {
@@ -778,9 +794,9 @@ func TestBedrockProviderCallWithToolUse(t *testing.T) {
 	defer server.Close()
 
 	p := &BedrockProvider{
-		region:     "us-east-1",
+		region:    "us-east-1",
 		modelID:   "us.anthropic.claude-sonnet-4-6",
-		authToken:  "test-bearer-token",
+		authToken: "test-bearer-token",
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
@@ -789,8 +805,8 @@ func TestBedrockProviderCallWithToolUse(t *testing.T) {
 	}
 
 	resp, err := p.Call(context.Background(), LLMRequest{
-		System:   "You are helpful.",
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Read the test file"}}}},
+		System:    "You are helpful.",
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Read the test file"}}}},
 		MaxTokens: 4096,
 	})
 	if err != nil {
@@ -841,13 +857,13 @@ func TestZAIProviderCallWithToolUse(t *testing.T) {
 
 	p := &ZAIProvider{
 		apiKey:     "test-zai-key",
-		modelID:   "glm-4.7",
+		modelID:    "glm-4.7",
 		httpClient: server.Client(),
 		baseURL:    server.URL,
 	}
 
 	resp, err := p.Call(context.Background(), LLMRequest{
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Search for golang testing"}}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Search for golang testing"}}}},
 		MaxTokens: 4096,
 	})
 	if err != nil {
@@ -887,9 +903,9 @@ func TestBedrockProviderCallWithMultipleToolUse(t *testing.T) {
 	defer server.Close()
 
 	p := &BedrockProvider{
-		region:     "us-east-1",
+		region:    "us-east-1",
 		modelID:   "test-model",
-		authToken:  "test-token",
+		authToken: "test-token",
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
@@ -898,7 +914,7 @@ func TestBedrockProviderCallWithMultipleToolUse(t *testing.T) {
 	}
 
 	resp, err := p.Call(context.Background(), LLMRequest{
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "read both files"}}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "read both files"}}}},
 		MaxTokens: 4096,
 	})
 	if err != nil {
@@ -987,9 +1003,9 @@ func TestBridgeProviderCallWithToolsReturnsToolCalls(t *testing.T) {
 	bridge := NewBridgeProvider(mock)
 
 	req := runtime.ToolLoopRequest{
-		System:     "You are helpful.",
-		Messages:   []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"Read the hosts file"}]}`)},
-		MaxTokens:  4096,
+		System:    "You are helpful.",
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"Read the hosts file"}]}`)},
+		MaxTokens: 4096,
 	}
 
 	resp, err := bridge.CallWithTools(context.Background(), req)
@@ -1032,9 +1048,9 @@ func TestBridgeProviderCallWithToolsEndTurn(t *testing.T) {
 	bridge := NewBridgeProvider(mock)
 
 	req := runtime.ToolLoopRequest{
-		System:     "You are helpful.",
-		Messages:   []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"What is the answer?"}]}`)},
-		MaxTokens:  4096,
+		System:    "You are helpful.",
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"What is the answer?"}]}`)},
+		MaxTokens: 4096,
 	}
 
 	resp, err := bridge.CallWithTools(context.Background(), req)
@@ -1278,6 +1294,476 @@ func TestBridgeProviderCallWithToolsPassesToolDefinitions(t *testing.T) {
 	}
 }
 
+// --- Z.AI Streaming Provider Tests (VAL-LLM-002, VAL-LLM-004) ---
+
+func TestZAIProviderStreamSuccess(t *testing.T) {
+	// VAL-LLM-004: Z.AI streaming returns incremental text chunks.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify stream=true in request body.
+		var body anthropicRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if !body.Stream {
+			t.Error("expected stream=true in request body")
+		}
+
+		// Verify x-api-key header.
+		if v := r.Header.Get("x-api-key"); v != "test-zai-key" {
+			t.Errorf("expected x-api-key, got: %s", v)
+		}
+
+		// Verify Accept header for SSE.
+		if v := r.Header.Get("Accept"); v != "text/event-stream" {
+			t.Errorf("expected Accept text/event-stream, got: %s", v)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		// Write Anthropic-compatible SSE stream.
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_zai_stream_001","model":"glm-5-turbo","usage":{"input_tokens":10}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: ping` + "\n" + `data: {"type":"ping"}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" from"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Z.AI!"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w) // blank line between events
+		}
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	var chunks []StreamChunk
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		System:    "You are helpful.",
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 1024,
+	}, func(chunk StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+
+	if err != nil {
+		t.Fatalf("zai stream: %v", err)
+	}
+
+	// Verify accumulated response.
+	if resp.Text != "Hello from Z.AI!" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Hello from Z.AI!")
+	}
+	if resp.ID != "msg_zai_stream_001" {
+		t.Errorf("ID = %q, want %q", resp.ID, "msg_zai_stream_001")
+	}
+	if resp.Model != "glm-5-turbo" {
+		t.Errorf("Model = %q, want %q", resp.Model, "glm-5-turbo")
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "end_turn")
+	}
+	if resp.Usage.InputTokens != 10 {
+		t.Errorf("Usage.InputTokens = %d, want 10", resp.Usage.InputTokens)
+	}
+	if resp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage.OutputTokens = %d, want 5", resp.Usage.OutputTokens)
+	}
+	if resp.ProviderName != "zai" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "zai")
+	}
+
+	// Verify incremental chunks were received.
+	textDeltas := 0
+	for _, chunk := range chunks {
+		if chunk.Type == "content_block_delta" && chunk.Delta != "" {
+			textDeltas++
+		}
+	}
+	if textDeltas != 3 {
+		t.Errorf("expected 3 text_delta chunks, got %d", textDeltas)
+	}
+}
+
+func TestZAIProviderStreamError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"overloaded"}`))
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := p.Stream(context.Background(), LLMRequest{
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1024,
+	}, func(chunk StreamChunk) {})
+	if err == nil {
+		t.Fatal("expected error for 503 response")
+	}
+	if strings.Contains(err.Error(), "overloaded") {
+		t.Errorf("error should be sanitized, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "sanitized") {
+		t.Errorf("error should mention sanitized, got: %v", err)
+	}
+}
+
+func TestZAIProviderStreamWithToolUse(t *testing.T) {
+	// Verify streaming handles tool_use content blocks correctly.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_tool_001","model":"glm-5-turbo","usage":{"input_tokens":50}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking weather..."}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_001","name":"get_weather","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"location\":"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" \"SF\"}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":1}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w)
+		}
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	var chunks []StreamChunk
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Weather in SF?"}}}},
+		Tools: []ToolDef{
+			{Name: "get_weather", Description: "Get weather", InputSchema: map[string]any{"type": "object"}},
+		},
+		MaxTokens: 200,
+	}, func(chunk StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+
+	if err != nil {
+		t.Fatalf("zai stream tool use: %v", err)
+	}
+
+	// Verify text content.
+	if resp.Text != "Checking weather..." {
+		t.Errorf("Text = %q, want %q", resp.Text, "Checking weather...")
+	}
+
+	// Verify tool calls extracted.
+	if resp.StopReason != "tool_use" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "tool_use")
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "toolu_001" {
+		t.Errorf("ToolCalls[0].ID = %q, want %q", resp.ToolCalls[0].ID, "toolu_001")
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("ToolCalls[0].Name = %q, want %q", resp.ToolCalls[0].Name, "get_weather")
+	}
+
+	// Verify tool input JSON accumulated correctly.
+	var args map[string]string
+	if err := json.Unmarshal(resp.ToolCalls[0].Arguments, &args); err != nil {
+		t.Fatalf("unmarshal tool args: %v", err)
+	}
+	if args["location"] != "SF" {
+		t.Errorf("location = %q, want %q", args["location"], "SF")
+	}
+
+	// Verify tool_call_delta chunks were emitted.
+	toolDeltas := 0
+	for _, c := range chunks {
+		if c.ToolCallDelta != "" {
+			toolDeltas++
+		}
+	}
+	if toolDeltas != 2 {
+		t.Errorf("expected 2 tool_call_delta chunks, got %d", toolDeltas)
+	}
+}
+
+func TestFireworksProviderStreamSuccess(t *testing.T) {
+	// Verify Fireworks streaming works with the same SSE format.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify Authorization Bearer header.
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			t.Errorf("expected Bearer auth, got: %s", auth)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_fw_stream_001","model":"kimi-k2p5-turbo","usage":{"input_tokens":8}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from Fireworks!"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w)
+		}
+	}))
+	defer server.Close()
+
+	p := &FireworksProvider{
+		apiKey:     "fw-test-key",
+		modelID:    "accounts/fireworks/routers/kimi-k2p5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 1024,
+	}, func(chunk StreamChunk) {})
+
+	if err != nil {
+		t.Fatalf("fireworks stream: %v", err)
+	}
+	if resp.Text != "Hello from Fireworks!" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Hello from Fireworks!")
+	}
+	if resp.ProviderName != "fireworks" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "fireworks")
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "end_turn")
+	}
+}
+
+func TestBedrockProviderStreamFallback(t *testing.T) {
+	// Bedrock provider falls back to non-streaming Call.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := anthropicResponse{
+			ID: "msg_br_stream_001",
+			Content: []anthropicResponseBlock{
+				{Type: "text", Text: "Bedrock non-streaming fallback"},
+			},
+			StopReason: "end_turn",
+			Usage:      anthropicUsage{InputTokens: 10, OutputTokens: 5},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := &BedrockProvider{
+		region:    "us-east-1",
+		modelID:   "test-model",
+		authToken: "test-token",
+		httpClient: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: &rewriteTransport{target: server.URL, original: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+		},
+		anthropicV: "bedrock-2023-05-31",
+	}
+
+	var chunks []StreamChunk
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1024,
+	}, func(chunk StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+
+	if err != nil {
+		t.Fatalf("bedrock stream fallback: %v", err)
+	}
+	if resp.Text != "Bedrock non-streaming fallback" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Bedrock non-streaming fallback")
+	}
+	// Should emit at least a message_start, content_block_delta, and message_stop.
+	if len(chunks) < 3 {
+		t.Errorf("expected at least 3 chunks, got %d", len(chunks))
+	}
+}
+
+func TestZAIProviderStreamWithGLM5TurboModel(t *testing.T) {
+	// VAL-LLM-002: Verify glm-5-turbo model works through streaming.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body anthropicRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Model != "glm-5-turbo" {
+			t.Errorf("expected model glm-5-turbo in request, got: %s", body.Model)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_glm5_001","model":"glm-5-turbo","usage":{"input_tokens":15}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好世界"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w)
+		}
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Say hello in Chinese"}}}},
+		MaxTokens: 100,
+	}, func(chunk StreamChunk) {})
+
+	if err != nil {
+		t.Fatalf("glm-5-turbo stream: %v", err)
+	}
+	if resp.Text != "你好世界" {
+		t.Errorf("Text = %q, want %q", resp.Text, "你好世界")
+	}
+	if resp.Model != "glm-5-turbo" {
+		t.Errorf("Model = %q, want %q", resp.Model, "glm-5-turbo")
+	}
+	if resp.Usage.InputTokens != 15 || resp.Usage.OutputTokens != 3 {
+		t.Errorf("Usage = %+v, want input=15 output=3", resp.Usage)
+	}
+}
+
+func TestZAIProviderStreamWithGLM51Model(t *testing.T) {
+	// Verify glm-5.1 model also works through Z.AI provider.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_glm51_001","model":"glm-5.1","usage":{"input_tokens":12}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"GLM-5.1 response"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w)
+		}
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5.1",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}, func(chunk StreamChunk) {})
+
+	if err != nil {
+		t.Fatalf("glm-5.1 stream: %v", err)
+	}
+	if resp.Text != "GLM-5.1 response" {
+		t.Errorf("Text = %q, want %q", resp.Text, "GLM-5.1 response")
+	}
+	if resp.ProviderName != "zai" {
+		t.Errorf("ProviderName = %q, want zai", resp.ProviderName)
+	}
+}
+
+func TestZAIProviderStreamWithSystemPrompt(t *testing.T) {
+	// Verify system prompt is included in streaming request.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body anthropicRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		// Verify system prompt was included.
+		if body.System == nil {
+			t.Error("expected system prompt in streaming request")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_sys_001","model":"glm-5-turbo","usage":{"input_tokens":20}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"System-aware response"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+
+		for _, event := range events {
+			fmt.Fprintln(w, event)
+			fmt.Fprintln(w)
+		}
+	}))
+	defer server.Close()
+
+	p := &ZAIProvider{
+		apiKey:     "test-zai-key",
+		modelID:    "glm-5-turbo",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	resp, err := p.Stream(context.Background(), LLMRequest{
+		System:    "You are a helpful assistant.",
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}, func(chunk StreamChunk) {})
+
+	if err != nil {
+		t.Fatalf("zai stream with system: %v", err)
+	}
+	if resp.Text != "System-aware response" {
+		t.Errorf("Text = %q, want %q", resp.Text, "System-aware response")
+	}
+}
+
 // --- Helper: capturing LLM provider ---
 
 // capturingLLMProvider captures the LLMRequest before returning a canned response.
@@ -1293,5 +1779,10 @@ func (c *capturingLLMProvider) Call(ctx context.Context, req LLMRequest) (*LLMRe
 	}
 	return c.resp, nil
 }
-func (c *capturingLLMProvider) Name() string  { return c.name }
+
+func (c *capturingLLMProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	return c.Call(ctx, req)
+}
+
+func (c *capturingLLMProvider) Name() string { return c.name }
 func (c *capturingLLMProvider) IsReal() bool { return true }
