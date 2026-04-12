@@ -16,12 +16,12 @@ import (
 
 // HealthResponse is the JSON structure returned by GET /health.
 type gatewayHealthResponse struct {
-	Status             string `json:"status"`
-	Service            string `json:"service"`
-	Provider           string `json:"provider"`
-	ActiveIdentities   int    `json:"active_identities"`
-	RateLimitMaxRequests int  `json:"rate_limit_max_requests,omitempty"`
-	RateLimitWindowMs  int64  `json:"rate_limit_window_ms,omitempty"`
+	Status               string `json:"status"`
+	Service              string `json:"service"`
+	Provider             string `json:"provider"`
+	ActiveIdentities     int    `json:"active_identities"`
+	RateLimitMaxRequests int    `json:"rate_limit_max_requests,omitempty"`
+	RateLimitWindowMs    int64  `json:"rate_limit_window_ms,omitempty"`
 }
 
 // ProviderRequest is the JSON payload for POST /provider/v1/inference.
@@ -29,8 +29,8 @@ type gatewayHealthResponse struct {
 // the gateway, which injects host-side credentials before forwarding
 // to the upstream provider (VAL-GATEWAY-004).
 type ProviderRequest struct {
-	// Provider is the requested provider ("bedrock" or "zai").
-	// If empty, the gateway uses the default resolved provider.
+	// Provider is the requested provider ("bedrock", "zai", or "fireworks").
+	// If empty, the gateway uses model-based routing or the default provider.
 	Provider string `json:"provider,omitempty"`
 
 	// Model is an optional model override.
@@ -86,36 +86,63 @@ type ErrorResponse struct {
 
 // Handler provides HTTP handlers for the gateway service.
 type Handler struct {
-	registry   *IdentityRegistry
-	provider   provider.Provider       // the resolved real provider (bedrock or zai)
-	rateLimiter *PerSandboxRateLimiter // per-sandbox rate limiter (may be nil)
+	registry    *IdentityRegistry
+	provider    provider.Provider       // single provider mode (backward compat)
+	providers   *provider.MultiProvider // multi-provider mode (may be nil)
+	rateLimiter *PerSandboxRateLimiter  // per-sandbox rate limiter (may be nil)
 }
 
 // NewHandler creates a gateway Handler with the given identity registry
-// and provider. The provider may be nil if no real provider is configured;
-// in that case, inference requests will fail with a clear error.
+// and a single provider. The provider may be nil if no real provider is
+// configured; in that case, inference requests will fail with a clear error.
 // No rate limiting is applied when using this constructor.
 func NewHandler(registry *IdentityRegistry, p provider.Provider) *Handler {
 	return &Handler{
 		registry:    registry,
 		provider:    p,
+		providers:   nil,
 		rateLimiter: nil,
 	}
 }
 
 // NewHandlerWithRateLimit creates a gateway Handler with per-sandbox rate
-// limiting. Each sandbox identity gets an independent request quota so one
-// noisy sandbox cannot starve another (VAL-GATEWAY-005, VAL-CROSS-115).
+// limiting and a single provider. Each sandbox identity gets an independent
+// request quota so one noisy sandbox cannot starve another
+// (VAL-GATEWAY-005, VAL-CROSS-115).
 func NewHandlerWithRateLimit(registry *IdentityRegistry, p provider.Provider, rl *PerSandboxRateLimiter) *Handler {
 	return &Handler{
 		registry:    registry,
 		provider:    p,
+		providers:   nil,
+		rateLimiter: rl,
+	}
+}
+
+// NewMultiHandler creates a gateway Handler with multi-provider routing.
+// The gateway selects the appropriate provider based on the request's
+// provider field or model parameter (VAL-LLM-001, VAL-LLM-005).
+func NewMultiHandler(registry *IdentityRegistry, mp *provider.MultiProvider) *Handler {
+	return &Handler{
+		registry:    registry,
+		provider:    nil,
+		providers:   mp,
+		rateLimiter: nil,
+	}
+}
+
+// NewMultiHandlerWithRateLimit creates a gateway Handler with multi-provider
+// routing and per-sandbox rate limiting.
+func NewMultiHandlerWithRateLimit(registry *IdentityRegistry, mp *provider.MultiProvider, rl *PerSandboxRateLimiter) *Handler {
+	return &Handler{
+		registry:    registry,
+		provider:    nil,
+		providers:   mp,
 		rateLimiter: rl,
 	}
 }
 
 // HandleHealth handles GET /health for the gateway service.
-// It reports the active provider, identity count, and rate limiter config.
+// It reports the active provider(s), identity count, and rate limiter config.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeGatewayJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
@@ -123,7 +150,13 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providerName := "none"
-	if h.provider != nil {
+	if h.providers != nil {
+		// Multi-provider mode: report all registered providers.
+		names := h.providers.Names()
+		if len(names) > 0 {
+			providerName = strings.Join(names, ",")
+		}
+	} else if h.provider != nil {
 		providerName = h.provider.Name()
 	}
 
@@ -153,10 +186,11 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleInference handles POST /provider/v1/inference.
-// It authenticates the sandbox caller via Bearer token, injects host-side
-// provider credentials, calls the upstream provider, and returns the
-// response with sanitized errors (VAL-GATEWAY-001, VAL-GATEWAY-003,
-// VAL-GATEWAY-004, VAL-GATEWAY-007).
+// It authenticates the sandbox caller via Bearer token, resolves the
+// appropriate provider (multi-provider routing or single-provider
+// fallback), injects host-side provider credentials, calls the upstream
+// provider, and returns the response with sanitized errors
+// (VAL-GATEWAY-001, VAL-GATEWAY-003, VAL-GATEWAY-004, VAL-GATEWAY-007).
 func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeGatewayJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
@@ -189,8 +223,21 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Step 3: Check that a real provider is configured.
-	if h.provider == nil {
+	// Step 3: Decode the request.
+	var req ProviderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
+		return
+	}
+
+	// Step 4: Resolve the provider (multi-provider or single-provider).
+	p, err := h.resolveProvider(req)
+	if err != nil {
+		log.Printf("gateway: provider resolution failed for sandbox %s: %v", sandboxID, err)
+		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+	if p == nil {
 		log.Printf("gateway: no provider configured for request from sandbox %s", sandboxID)
 		writeGatewayJSON(w, http.StatusServiceUnavailable, ErrorResponse{
 			Error: "no provider configured",
@@ -198,23 +245,7 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: Decode the request.
-	var req ProviderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
-		return
-	}
-
-	// Step 5: Reject unsupported providers (VAL-GATEWAY-006).
-	if req.Provider != "" && req.Provider != h.provider.Name() {
-		log.Printf("gateway: unsupported provider %q requested (have %s)", req.Provider, h.provider.Name())
-		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{
-			Error: fmt.Sprintf("unsupported provider: %s", req.Provider),
-		})
-		return
-	}
-
-	// Step 6: Build the LLM request and call the provider.
+	// Step 5: Build the LLM request and call the provider.
 	llmReq := provider.LLMRequest{
 		Model:     req.Model,
 		System:    req.System,
@@ -224,13 +255,13 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		Stream:    false, // gateway forces non-streaming
 	}
 
-	log.Printf("gateway: inference request from sandbox %s (provider=%s messages=%d)",
-		sandboxID, h.provider.Name(), len(req.Messages))
+	log.Printf("gateway: inference request from sandbox %s (provider=%s model=%s messages=%d)",
+		sandboxID, p.Name(), req.Model, len(req.Messages))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	resp, err := h.provider.Call(ctx, llmReq)
+	resp, err := p.Call(ctx, llmReq)
 	if err != nil {
 		// Sanitize the error: never include raw upstream bodies,
 		// credentials, or auth headers in the response
@@ -242,7 +273,7 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 7: Return the successful response.
+	// Step 6: Return the successful response.
 	log.Printf("gateway: inference succeeded for sandbox %s (provider=%s tokens=%d+%d text_len=%d)",
 		sandboxID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
 
@@ -255,6 +286,75 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 		ToolCalls:    resp.ToolCalls,
 		ProviderName: resp.ProviderName,
 	})
+}
+
+// resolveProvider selects the appropriate provider for the given request.
+// In multi-provider mode, it routes based on the explicit provider field
+// or the model parameter. In single-provider mode, it validates that the
+// requested provider matches the configured one.
+func (h *Handler) resolveProvider(req ProviderRequest) (provider.Provider, error) {
+	// Multi-provider mode: route based on provider name or model.
+	if h.providers != nil {
+		return h.resolveFromMultiProvider(req)
+	}
+
+	// Single-provider mode: validate the requested provider matches.
+	if req.Provider != "" && h.provider != nil && req.Provider != h.provider.Name() {
+		return nil, fmt.Errorf("unsupported provider: %s", req.Provider)
+	}
+
+	return h.provider, nil
+}
+
+// resolveFromMultiProvider selects a provider from the multi-provider
+// registry. It tries explicit provider name first, then model-based
+// routing, then falls back to the first registered provider.
+func (h *Handler) resolveFromMultiProvider(req ProviderRequest) (provider.Provider, error) {
+	// Step 1: Explicit provider name routing.
+	if req.Provider != "" {
+		p := h.providers.Get(req.Provider)
+		if p == nil {
+			return nil, fmt.Errorf("unsupported provider: %s", req.Provider)
+		}
+		return p, nil
+	}
+
+	// Step 2: Model-based routing using SupportedModels.
+	if req.Model != "" {
+		for _, mi := range provider.SupportedModels() {
+			if mi.ID == req.Model {
+				p := h.providers.Get(mi.Provider)
+				if p != nil {
+					return p, nil
+				}
+			}
+		}
+
+		// Fallback: heuristic model routing for known patterns.
+		if strings.Contains(req.Model, "fireworks") {
+			if p := h.providers.Get("fireworks"); p != nil {
+				return p, nil
+			}
+		}
+		if strings.HasPrefix(req.Model, "glm-") {
+			if p := h.providers.Get("zai"); p != nil {
+				return p, nil
+			}
+		}
+		if strings.Contains(req.Model, "anthropic") || strings.Contains(req.Model, "claude") {
+			if p := h.providers.Get("bedrock"); p != nil {
+				return p, nil
+			}
+		}
+	}
+
+	// Step 3: Default to the first registered provider.
+	names := h.providers.Names()
+	if len(names) > 0 {
+		return h.providers.Get(names[0]), nil
+	}
+
+	return nil, nil
 }
 
 // HandleIssueCredential handles POST /provider/v1/credentials/issue.

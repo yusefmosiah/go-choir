@@ -175,7 +175,7 @@ func (m *mockProvider) Call(ctx context.Context, req provider.LLMRequest) (*prov
 	return m.response, nil
 }
 
-func (m *mockProvider) Name() string  { return m.name }
+func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) IsReal() bool { return m.real }
 
 func setupHandler(t *testing.T) (*Handler, *IdentityRegistry, *mockProvider) {
@@ -802,5 +802,553 @@ func TestMultipleSandboxesIsolated(t *testing.T) {
 	_, err = reg.ValidateCredential(result2.RawToken)
 	if err != nil {
 		t.Fatalf("sandbox-2 credential should still work: %v", err)
+	}
+}
+
+// --- Multi-Provider Routing Tests (VAL-LLM-001, VAL-LLM-003) ---
+
+// setupMultiProviderHandler creates a handler with multiple providers
+// registered for testing multi-provider routing.
+func setupMultiProviderHandler(t *testing.T) (*Handler, *IdentityRegistry) {
+	t.Helper()
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "fw-resp-001",
+			Text:         "Hello from Fireworks AI!",
+			Model:        "accounts/fireworks/routers/kimi-k2p5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "fireworks",
+			Usage:        provider.Usage{InputTokens: 8, OutputTokens: 12},
+		},
+	}
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "zai-resp-001",
+			Text:         "Hello from Z.AI!",
+			Model:        "glm-5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "zai",
+			Usage:        provider.Usage{InputTokens: 6, OutputTokens: 10},
+		},
+	}
+
+	bedrockProvider := &mockProvider{
+		name: "bedrock",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "br-resp-001",
+			Text:         "Hello from Bedrock!",
+			Model:        "us.anthropic.claude-sonnet-4-6",
+			StopReason:   "end_turn",
+			ProviderName: "bedrock",
+			Usage:        provider.Usage{InputTokens: 10, OutputTokens: 15},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+	mp.Register("zai", zaiProvider)
+	mp.Register("bedrock", bedrockProvider)
+
+	return NewMultiHandler(reg, mp), reg
+}
+
+func TestMultiProvider_RoutesToFireworksByProviderField(t *testing.T) {
+	// VAL-LLM-001: Request with provider=fireworks routes to Fireworks provider.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-fw")
+
+	payload := ProviderRequest{
+		Provider:  "fireworks",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Say hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.ProviderName != "fireworks" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "fireworks")
+	}
+	if resp.Text != "Hello from Fireworks AI!" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Hello from Fireworks AI!")
+	}
+	if resp.Model != "accounts/fireworks/routers/kimi-k2p5-turbo" {
+		t.Errorf("Model = %q, want %q", resp.Model, "accounts/fireworks/routers/kimi-k2p5-turbo")
+	}
+	if resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens == 0 {
+		t.Errorf("Usage should have non-zero tokens, got: %+v", resp.Usage)
+	}
+}
+
+func TestMultiProvider_RoutesToFireworksByModel(t *testing.T) {
+	// VAL-LLM-005: Request with Fireworks model routes to Fireworks provider.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-fw-model")
+
+	payload := ProviderRequest{
+		Model:     "accounts/fireworks/routers/kimi-k2p5-turbo",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.ProviderName != "fireworks" {
+		t.Errorf("ProviderName = %q, want %q (routed by model)", resp.ProviderName, "fireworks")
+	}
+}
+
+func TestMultiProvider_RoutesToZAIByProviderField(t *testing.T) {
+	// VAL-LLM-006: Request with provider=zai routes to Z.AI provider.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-zai")
+
+	payload := ProviderRequest{
+		Provider:  "zai",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.ProviderName != "zai" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "zai")
+	}
+}
+
+func TestMultiProvider_RoutesToZAIByModel(t *testing.T) {
+	// Model-based routing: glm-5-turbo → zai.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-zai-model")
+
+	payload := ProviderRequest{
+		Model:     "glm-5-turbo",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.ProviderName != "zai" {
+		t.Errorf("ProviderName = %q, want %q (routed by model)", resp.ProviderName, "zai")
+	}
+}
+
+func TestMultiProvider_RoutesToBedrockByProviderField(t *testing.T) {
+	// Request with provider=bedrock routes to Bedrock provider.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-br")
+
+	payload := ProviderRequest{
+		Provider:  "bedrock",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.ProviderName != "bedrock" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "bedrock")
+	}
+}
+
+func TestMultiProvider_RejectsUnknownProvider(t *testing.T) {
+	// VAL-LLM-007: Request with unknown provider returns 400.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-bad")
+
+	payload := ProviderRequest{
+		Provider:  "openai",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+
+	var errResp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(errResp.Error, "unsupported provider") {
+		t.Errorf("error = %q, want unsupported provider message", errResp.Error)
+	}
+}
+
+func TestMultiProvider_DefaultProviderWhenNoProviderSpecified(t *testing.T) {
+	// When no provider is specified, the first registered provider is used.
+	h, reg := setupMultiProviderHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-default")
+
+	payload := ProviderRequest{
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	// Should get a valid response from the default provider.
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Text == "" {
+		t.Error("expected non-empty text from default provider")
+	}
+}
+
+func TestMultiProvider_ProviderErrorSanitized(t *testing.T) {
+	// VAL-LLM-021: Provider errors are sanitized before reaching client.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		err:  fmt.Errorf("fireworks: status 503 Service Unavailable (sanitized)"),
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-fw-err")
+
+	payload := ProviderRequest{
+		Provider: "fireworks",
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hi"}}}},
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadGateway, w.Body.String())
+	}
+
+	var errResp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Error should not contain credentials or raw upstream body.
+	if strings.Contains(errResp.Error, "Bearer") {
+		t.Errorf("error message contains credential-like data: %q", errResp.Error)
+	}
+}
+
+func TestMultiProvider_FireworksToolCalls(t *testing.T) {
+	// Verify that tool_calls pass through correctly from Fireworks provider.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:         "fw-tool-001",
+			Model:      "accounts/fireworks/routers/kimi-k2p5-turbo",
+			StopReason: "tool_use",
+			Usage:      provider.Usage{InputTokens: 50, OutputTokens: 20},
+			ToolCalls: []provider.ContentToolCall{
+				{
+					ID:        "call_fw_1",
+					Name:      "get_weather",
+					Arguments: json.RawMessage(`{"location":"San Francisco"}`),
+				},
+			},
+			ProviderName: "fireworks",
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-fw-tools")
+
+	payload := ProviderRequest{
+		Provider: "fireworks",
+		Model:    "accounts/fireworks/routers/kimi-k2p5-turbo",
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "What's the weather?"}}}},
+		Tools: []provider.ToolDef{
+			{Name: "get_weather", Description: "Get weather", InputSchema: map[string]any{"type": "object"}},
+		},
+		MaxTokens: 200,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp ProviderResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.StopReason != "tool_use" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "tool_use")
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("ToolCalls[0].Name = %q, want %q", resp.ToolCalls[0].Name, "get_weather")
+	}
+	if resp.ProviderName != "fireworks" {
+		t.Errorf("ProviderName = %q, want %q", resp.ProviderName, "fireworks")
+	}
+}
+
+func TestMultiProvider_HealthReportsProviderCount(t *testing.T) {
+	h, _ := setupMultiProviderHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	h.HandleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp gatewayHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Provider names come from map iteration (unordered), so check for all three.
+	for _, name := range []string{"fireworks", "zai", "bedrock"} {
+		if !strings.Contains(resp.Provider, name) {
+			t.Errorf("Provider = %q, missing %q", resp.Provider, name)
+		}
+	}
+}
+
+func TestMultiProvider_RateLimitStillWorks(t *testing.T) {
+	// Verify rate limiting works with multi-provider handler.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "fw-resp-001",
+			Text:         "Hello!",
+			Model:        "kimi-k2p5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "fireworks",
+			Usage:        provider.Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+
+	rl := NewPerSandboxRateLimiter(2, 1*time.Minute) // 2 requests per minute
+	h := NewMultiHandlerWithRateLimit(reg, mp, rl)
+
+	result, _ := reg.IssueCredential("sandbox-rl")
+
+	payload := ProviderRequest{
+		Provider: "fireworks",
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hi"}}}},
+	}
+	body, _ := json.Marshal(payload)
+
+	// First two requests should succeed.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+		req.Header.Set("Authorization", "Bearer "+result.RawToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		h.HandleInference(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want %d", i+1, w.Code, http.StatusOK)
+		}
+	}
+
+	// Third request should be rate limited.
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate limited request: status = %d, want %d", w.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestMultiProvider_FireworksWithSystemPrompt(t *testing.T) {
+	// Verify system prompt is forwarded to Fireworks provider.
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "fw-sys-001",
+			Text:         "System-aware response",
+			Model:        "accounts/fireworks/routers/kimi-k2p5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "fireworks",
+			Usage:        provider.Usage{InputTokens: 30, OutputTokens: 10},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	result, _ := reg.IssueCredential("sandbox-fw-sys")
+
+	payload := ProviderRequest{
+		Provider:  "fireworks",
+		System:    "You are a pirate. Respond in pirate speak.",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+		MaxTokens: 100,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	// Verify the system prompt was forwarded to the provider.
+	if fireworksProvider.lastReq == nil {
+		t.Fatal("provider was not called")
+	}
+	if fireworksProvider.lastReq.System != "You are a pirate. Respond in pirate speak." {
+		t.Errorf("System = %q, want system prompt forwarded", fireworksProvider.lastReq.System)
 	}
 }

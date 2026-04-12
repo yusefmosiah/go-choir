@@ -1,17 +1,42 @@
 # Gateway Provider Boundary
 
-The gateway service (port 8084) is the host-side provider boundary for Mission 3. It is the only component that holds real provider credentials (Bedrock, Z.AI) and makes upstream LLM calls.
+The gateway service (port 8084) is the host-side provider boundary for Mission 3/4. It is the only component that holds real provider credentials (Bedrock, Z.AI, Fireworks) and makes upstream LLM calls.
 
 ## Architecture
 
 ```
-Browser → Proxy (8082) → Sandbox/Runtime (8085) → Gateway (8084) → Bedrock/Z.AI
+Browser → Proxy (8082) → Sandbox/Runtime (8085) → Gateway (8084) → Bedrock/Z.AI/Fireworks
                                     ↓
                             Uses GatewayClient
                     (Bearer token auth to gateway)
 ```
 
 The sandbox runtime no longer calls providers directly when the gateway is active. Instead, it uses a `GatewayClient` (in `internal/gateway/client.go`) that routes LLM requests through the gateway.
+
+## Multi-Provider Routing
+
+The gateway supports multi-provider routing via `provider.MultiProvider`. When multiple providers are available, the gateway routes requests based on:
+
+1. **Explicit provider field**: `provider: "fireworks"` routes to the Fireworks provider
+2. **Model-based routing**: Model IDs are matched against `provider.SupportedModels()` to determine the correct provider
+   - `accounts/fireworks/routers/kimi-k2p5-turbo` → fireworks
+   - `glm-5-turbo`, `glm-5.1` → zai
+   - `*.anthropic.claude-*` → bedrock
+3. **Heuristic fallback**: If no exact match, model string patterns are checked (contains "fireworks", starts with "glm-", contains "claude")
+4. **Default provider**: If no provider or model is specified, the first registered provider is used
+
+The gateway entrypoint (`cmd/gateway/main.go`) uses `provider.ResolveAll()` to initialize all providers with available credentials, and creates a `NewMultiHandlerWithRateLimit` handler.
+
+### Supported Models
+
+| Model ID | Provider | Display Name |
+|---|---|---|
+| `accounts/fireworks/routers/kimi-k2p5-turbo` | fireworks | Kimi K2.5 |
+| `glm-5.1` | zai | GLM-5.1 |
+| `glm-5-turbo` | zai | GLM-5-Turbo |
+| `us.anthropic.claude-haiku-4-5-20251001-v1:0` | bedrock | Claude Haiku 4.5 |
+| `us.anthropic.claude-sonnet-4-6` | bedrock | Claude Sonnet 4.6 |
+| `us.anthropic.claude-opus-4-6-v1` | bedrock | Claude Opus 4.6 |
 
 ## Key Invariants
 
@@ -44,14 +69,17 @@ Tokens are SHA-256 hashed at rest. The raw token is returned only once at issuan
 ## Files
 
 - `internal/gateway/config.go` — Config, IdentityRegistry, credential management
-- `internal/gateway/handlers.go` — HTTP handlers for inference and credential endpoints
+- `internal/gateway/handlers.go` — HTTP handlers for inference (multi-provider routing) and credential endpoints
 - `internal/gateway/client.go` — GatewayClient (provider.Provider) for sandbox-to-gateway calls
-- `internal/gateway/gateway_test.go` — Comprehensive tests (35 test cases)
-- `cmd/gateway/main.go` — Gateway service entrypoint
+- `internal/gateway/ratelimit.go` — Per-sandbox rate limiter
+- `internal/gateway/gateway_test.go` — Comprehensive tests (49 test cases including multi-provider routing)
+- `internal/provider/provider.go` — Provider implementations (Bedrock, Z.AI, Fireworks), MultiProvider, ResolveAll
+- `internal/provider/bridge.go` — BridgeProvider and GatewayBridgeProvider for runtime integration
+- `cmd/gateway/main.go` — Gateway service entrypoint (uses ResolveAll for multi-provider)
 
 ## Future Work
 
-- Per-sandbox rate limiting (VAL-GATEWAY-005) — next feature
+- SSE streaming support (VAL-LLM-003, VAL-LLM-004) — currently non-streaming only
 - Durable credential storage (currently in-memory; needs persistence for production)
 - VM lifecycle integration — vmctl should issue/rotate gateway credentials when VMs start/stop
 - The sandbox runtime can use GatewayClient instead of direct provider when the gateway is available

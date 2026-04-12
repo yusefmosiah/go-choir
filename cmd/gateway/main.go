@@ -18,28 +18,36 @@ func main() {
 	// Initialize the identity registry for sandbox credential management.
 	registry := gateway.NewIdentityRegistry(cfg.SandboxTokenTTL)
 
-	// Resolve the real provider from environment credentials and runtime
-	// model config. Provider credentials remain host-side and are never
-	// exposed to sandbox callers or browsers (VAL-GATEWAY-004).
-	var p provider.Provider
-	realProvider, err := provider.ResolveProvider(loadProviderConfig())
-	if err != nil {
-		log.Printf("gateway: provider resolution failed: %v", err)
-	}
-	if realProvider != nil {
-		p = realProvider
-		log.Printf("gateway: using real provider: %s", realProvider.Name())
+	// Resolve all available real providers from environment credentials
+	// using the MultiProvider for multi-provider routing. The gateway
+	// routes requests to the correct provider based on the provider field
+	// or model parameter (VAL-LLM-001, VAL-LLM-005).
+	// Provider credentials remain host-side and are never exposed to
+	// sandbox callers or browsers (VAL-GATEWAY-004).
+	providerCfg := loadProviderConfig()
+	mp := provider.ResolveAll(providerCfg)
+	providerNames := mp.Names()
+
+	var handler *gateway.Handler
+
+	if len(providerNames) > 0 {
+		log.Printf("gateway: resolved %d provider(s): %v", len(providerNames), providerNames)
+
+		// Initialize per-sandbox rate limiting (VAL-GATEWAY-005).
+		rlCfg := gateway.LoadRateLimiterConfig()
+		rl := gateway.NewPerSandboxRateLimiter(rlCfg.MaxRequests, rlCfg.WindowSize)
+		log.Printf("gateway: rate limiter enabled: %s", rl)
+
+		handler = gateway.NewMultiHandlerWithRateLimit(registry, mp, rl)
 	} else {
 		log.Printf("gateway: no real provider configured; inference requests will fail")
+
+		// Fall back to single-provider mode with nil provider.
+		rlCfg := gateway.LoadRateLimiterConfig()
+		rl := gateway.NewPerSandboxRateLimiter(rlCfg.MaxRequests, rlCfg.WindowSize)
+		handler = gateway.NewHandlerWithRateLimit(registry, nil, rl)
 	}
 
-	// Initialize per-sandbox rate limiting (VAL-GATEWAY-005).
-	rlCfg := gateway.LoadRateLimiterConfig()
-	rl := gateway.NewPerSandboxRateLimiter(rlCfg.MaxRequests, rlCfg.WindowSize)
-	log.Printf("gateway: rate limiter enabled: %s", rl)
-
-	// Create the gateway handler with registry, provider, and rate limiter.
-	handler := gateway.NewHandlerWithRateLimit(registry, p, rl)
 	gateway.RegisterRoutes(s, handler)
 
 	s.Start()
