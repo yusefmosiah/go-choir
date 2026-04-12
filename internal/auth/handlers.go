@@ -30,10 +30,10 @@ const SessionChallengeTTL = 5 * time.Minute
 
 // Handler provides HTTP handlers for the /auth/* routes.
 type Handler struct {
-	store   *Store
+	store    *Store
 	webauthn *webauthn.WebAuthn
-	config  *Config
-	signer  ed25519.PrivateKey // loaded at startup for JWT signing
+	config   *Config
+	signer   ed25519.PrivateKey // loaded at startup for JWT signing
 }
 
 // NewHandler creates a Handler with the given store, WebAuthn instance, and config.
@@ -56,9 +56,9 @@ type beginRequest struct {
 
 // sessionResponse is the JSON response for GET /auth/session.
 type sessionResponse struct {
-	Authenticated bool        `json:"authenticated"`
-	User          *userInfo   `json:"user,omitempty"`
-	Error         string      `json:"error,omitempty"`
+	Authenticated bool      `json:"authenticated"`
+	User          *userInfo `json:"user,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 // userInfo contains non-secret user fields returned in session responses.
@@ -75,7 +75,7 @@ type errorResponse struct {
 
 // finishResponse is the JSON response for successful register/login finish.
 type finishResponse struct {
-	OK   bool     `json:"ok"`
+	OK   bool      `json:"ok"`
 	User *userInfo `json:"user"`
 }
 
@@ -393,13 +393,13 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 
 	// Persist the challenge state so the finish handler can verify it.
 	challengeState := &ChallengeState{
-		ID:                 session.Challenge,
-		UserID:             user.ID,
-		Challenge:          session.Challenge,
-		Type:               "registration",
+		ID:                  session.Challenge,
+		UserID:              user.ID,
+		Challenge:           session.Challenge,
+		Type:                "registration",
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(SessionChallengeTTL),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(SessionChallengeTTL),
 	}
 	if err := h.store.SaveChallengeState(challengeState); err != nil {
 		log.Printf("auth register begin: save challenge: %v", err)
@@ -483,14 +483,14 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 	allowedCredsJSON, _ := json.Marshal(allowedCredIDs)
 
 	challengeState := &ChallengeState{
-		ID:                 session.Challenge,
-		UserID:             user.ID,
-		Challenge:          session.Challenge,
-		Type:               "login",
-		AllowedCredentials: string(allowedCredsJSON),
+		ID:                  session.Challenge,
+		UserID:              user.ID,
+		Challenge:           session.Challenge,
+		Type:                "login",
+		AllowedCredentials:  string(allowedCredsJSON),
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(SessionChallengeTTL),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(SessionChallengeTTL),
 	}
 	if err := h.store.SaveChallengeState(challengeState); err != nil {
 		log.Printf("auth login begin: save challenge: %v", err)
@@ -604,6 +604,7 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 		Transport:       transportListToJSON(credential.Transport),
 		SignCount:       int64(credential.Authenticator.SignCount),
 		AAGUID:          credential.Authenticator.AAGUID,
+		Flags:           marshalCredentialFlags(credential.Flags),
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(dbCred); err != nil {

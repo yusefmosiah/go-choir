@@ -88,7 +88,7 @@ func LoadConfig() (*Config, error) {
 		Port:              envOr("AUTH_PORT", DefaultAuthPort),
 		DBPath:            envOr("AUTH_DB_PATH", DefaultDBPath),
 		RPID:              envOr("AUTH_RP_ID", DefaultRPID),
-		JWTPrivateKeyPath:  envOr("AUTH_JWT_PRIVATE_KEY_PATH", DefaultJWTPrivateKeyPath),
+		JWTPrivateKeyPath: envOr("AUTH_JWT_PRIVATE_KEY_PATH", DefaultJWTPrivateKeyPath),
 		AccessTokenTTL:    envDuration("AUTH_ACCESS_TOKEN_TTL", DefaultAccessTokenTTL),
 		RefreshTokenTTL:   envDuration("AUTH_REFRESH_TOKEN_TTL", DefaultRefreshTokenTTL),
 		CookieSecure:      envBool("AUTH_COOKIE_SECURE", DefaultCookieSecure),

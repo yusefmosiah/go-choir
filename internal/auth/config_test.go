@@ -151,14 +151,14 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		{
 			name: "deployed_config",
 			env: map[string]string{
-				"AUTH_PORT":               "8081",
-				"AUTH_DB_PATH":            "/var/lib/go-choir/auth.db",
-				"AUTH_RP_ID":              "draft.choir-ip.com",
-				"AUTH_RP_ORIGINS":          "https://draft.choir-ip.com",
+				"AUTH_PORT":                 "8081",
+				"AUTH_DB_PATH":              "/var/lib/go-choir/auth.db",
+				"AUTH_RP_ID":                "draft.choir-ip.com",
+				"AUTH_RP_ORIGINS":           "https://draft.choir-ip.com",
 				"AUTH_JWT_PRIVATE_KEY_PATH": "/var/lib/go-choir/auth-signing-key",
-				"AUTH_ACCESS_TOKEN_TTL":   "5m",
-				"AUTH_REFRESH_TOKEN_TTL":  "720h",
-				"AUTH_COOKIE_SECURE":      "true",
+				"AUTH_ACCESS_TOKEN_TTL":     "5m",
+				"AUTH_REFRESH_TOKEN_TTL":    "720h",
+				"AUTH_COOKIE_SECURE":        "true",
 			},
 			check: func(t *testing.T, cfg *Config) {
 				if cfg.Port != "8081" {

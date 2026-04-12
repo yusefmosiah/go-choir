@@ -18,6 +18,19 @@ type webauthnUser struct {
 
 var _ webauthn.User = (*webauthnUser)(nil)
 
+// credentialFlags is a JSON-serializable representation of the
+// webauthn.CredentialFlags struct. These flags are stored alongside each
+// credential and must be restored when loading credentials for login
+// verification. Missing or empty flags default to false, which is safe for
+// the initial registration flow but MUST be populated from the stored values
+// for re-login to succeed (particularly BackupEligible).
+type credentialFlags struct {
+	UserPresent    bool `json:"user_present"`
+	UserVerified   bool `json:"user_verified"`
+	BackupEligible bool `json:"backup_eligible"`
+	BackupState    bool `json:"backup_state"`
+}
+
 // newWebAuthnUser creates a webauthnUser from a Store User and its credentials.
 func newWebAuthnUser(u *User, creds []Credential) (*webauthnUser, error) {
 	waCreds := make([]webauthn.Credential, 0, len(creds))
@@ -29,11 +42,31 @@ func newWebAuthnUser(u *User, creds []Credential) (*webauthnUser, error) {
 				transports = nil
 			}
 		}
+
+		// Restore CredentialFlags from stored JSON. These flags (especially
+		// BackupEligible) are checked by the WebAuthn library during login
+		// validation. If they don't match what the authenticator reports,
+		// login fails with "Backup Eligible flag inconsistency detected".
+		var flags credentialFlags
+		if c.Flags != "" && c.Flags != "{}" {
+			_ = json.Unmarshal([]byte(c.Flags), &flags)
+		}
+
 		waCreds = append(waCreds, webauthn.Credential{
 			ID:              []byte(c.ID),
 			PublicKey:       c.PublicKey,
 			AttestationType: c.AttestationType,
 			Transport:       transports,
+			Flags: webauthn.CredentialFlags{
+				UserPresent:    flags.UserPresent,
+				UserVerified:   flags.UserVerified,
+				BackupEligible: flags.BackupEligible,
+				BackupState:    flags.BackupState,
+			},
+			Authenticator: webauthn.Authenticator{
+				AAGUID:    c.AAGUID,
+				SignCount: uint32(c.SignCount),
+			},
 		})
 	}
 	return &webauthnUser{
@@ -58,4 +91,17 @@ func (u *webauthnUser) WebAuthnDisplayName() string {
 
 func (u *webauthnUser) WebAuthnCredentials() []webauthn.Credential {
 	return u.credentials
+}
+
+// marshalCredentialFlags converts a webauthn.CredentialFlags to JSON for
+// storage in the credentials table.
+func marshalCredentialFlags(flags webauthn.CredentialFlags) string {
+	f := credentialFlags{
+		UserPresent:    flags.UserPresent,
+		UserVerified:   flags.UserVerified,
+		BackupEligible: flags.BackupEligible,
+		BackupState:    flags.BackupState,
+	}
+	b, _ := json.Marshal(f)
+	return string(b)
 }

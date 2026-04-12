@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS credentials (
 	transport       TEXT    NOT NULL,
 	sign_count      INTEGER NOT NULL DEFAULT 0,
 	aaguid          BLOB    NOT NULL,
+	flags           TEXT    NOT NULL DEFAULT '{}',
 	created_at      DATETIME NOT NULL
 );
 
@@ -70,6 +71,9 @@ var schemaMigrations = []string{
 	// Added webauthn_session_data column for storing serialized SessionData
 	// needed by the finish handlers.
 	`ALTER TABLE challenge_state ADD COLUMN webauthn_session_data TEXT`,
+	// Added flags column for storing WebAuthn CredentialFlags (backup_eligible,
+	// backup_state, user_present, user_verified) needed for re-login verification.
+	`ALTER TABLE credentials ADD COLUMN flags TEXT NOT NULL DEFAULT '{}'`,
 }
 
 // User represents a row in the users table.
@@ -88,20 +92,21 @@ type Credential struct {
 	Transport       string
 	SignCount       int64
 	AAGUID          []byte
+	Flags           string // JSON-encoded CredentialFlags: user_present, user_verified, backup_eligible, backup_state
 	CreatedAt       time.Time
 }
 
 // ChallengeState represents a WebAuthn ceremony challenge row in the
 // challenge_state table.
 type ChallengeState struct {
-	ID                 string
-	UserID             string
-	Challenge          string
-	Type               string // "registration" or "login"
-	AllowedCredentials string // JSON-encoded array (may be empty for registration)
+	ID                  string
+	UserID              string
+	Challenge           string
+	Type                string // "registration" or "login"
+	AllowedCredentials  string // JSON-encoded array (may be empty for registration)
 	WebAuthnSessionData string // JSON-serialized webauthn.SessionData for finish handlers
-	CreatedAt          time.Time
-	ExpiresAt          time.Time
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
 }
 
 // RefreshSession represents a refresh/session record in the
@@ -246,8 +251,8 @@ func (s *Store) GetUserByUsername(username string) (*User, error) {
 // CreateCredential inserts a WebAuthn credential (passkey) record.
 func (s *Store) CreateCredential(c *Credential) error {
 	_, err := s.db.Exec(
-		"INSERT INTO credentials (id, user_id, public_key, attestation_type, transport, sign_count, aaguid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		c.ID, c.UserID, c.PublicKey, c.AttestationType, c.Transport, c.SignCount, c.AAGUID, c.CreatedAt,
+		"INSERT INTO credentials (id, user_id, public_key, attestation_type, transport, sign_count, aaguid, flags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		c.ID, c.UserID, c.PublicKey, c.AttestationType, c.Transport, c.SignCount, c.AAGUID, c.Flags, c.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create credential %q: %w", c.ID, err)
@@ -258,7 +263,7 @@ func (s *Store) CreateCredential(c *Credential) error {
 // GetCredentialsByUserID returns all credentials for the given user.
 func (s *Store) GetCredentialsByUserID(userID string) ([]Credential, error) {
 	rows, err := s.db.Query(
-		"SELECT id, user_id, public_key, attestation_type, transport, sign_count, aaguid, created_at FROM credentials WHERE user_id = ?",
+		"SELECT id, user_id, public_key, attestation_type, transport, sign_count, aaguid, flags, created_at FROM credentials WHERE user_id = ?",
 		userID,
 	)
 	if err != nil {
@@ -269,7 +274,7 @@ func (s *Store) GetCredentialsByUserID(userID string) ([]Credential, error) {
 	var creds []Credential
 	for rows.Next() {
 		var c Credential
-		if err := rows.Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.Transport, &c.SignCount, &c.AAGUID, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.PublicKey, &c.AttestationType, &c.Transport, &c.SignCount, &c.AAGUID, &c.Flags, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		creds = append(creds, c)

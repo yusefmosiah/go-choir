@@ -170,6 +170,7 @@ func TestCreateAndGetCredential(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := store.CreateCredential(cred); err != nil {
@@ -202,6 +203,7 @@ func TestCreateCredentialMissingUser(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	err := store.CreateCredential(cred)
@@ -241,6 +243,7 @@ func TestUpdateCredentialSignCount(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := store.CreateCredential(cred); err != nil {
@@ -275,6 +278,7 @@ func TestCredentialCascadeDelete(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := store.CreateCredential(cred); err != nil {
@@ -510,13 +514,13 @@ func TestChallengeStateWithWebAuthnSessionData(t *testing.T) {
 
 	sessionData := `{"challenge":"test-challenge","rpId":"localhost","user_id":"dXNlci0x"}`
 	cs := &ChallengeState{
-		ID:                 "challenge-wa",
-		UserID:             "user-1",
-		Challenge:          "test-challenge",
-		Type:               "registration",
+		ID:                  "challenge-wa",
+		UserID:              "user-1",
+		Challenge:           "test-challenge",
+		Type:                "registration",
 		WebAuthnSessionData: sessionData,
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
 	}
 	if err := store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("SaveChallengeState: %v", err)
@@ -910,6 +914,7 @@ func TestSessionDataSurvivesAuthRestart(t *testing.T) {
 		Transport:       "[]",
 		SignCount:       0,
 		AAGUID:          []byte{},
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := store1.CreateCredential(cred); err != nil {

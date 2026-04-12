@@ -5,8 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/pem"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -102,8 +102,8 @@ func TestRegisterBeginRejectsMalformedJSON(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	tests := []struct {
-		name    string
-		body    string
+		name string
+		body string
 	}{
 		{"not json", `this is not json`},
 		{"missing username field", `{"email": "alice@example.com"}`},
@@ -396,6 +396,7 @@ func TestLoginBeginReturnsAssertionOptionsForRegisteredUser(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -675,6 +676,7 @@ func TestSessionDoesNotLeakSecrets(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -788,6 +790,7 @@ func TestWebAuthnUserAdapter(t *testing.T) {
 		Transport:       `["internal","hybrid"]`,
 		SignCount:       5,
 		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := store.CreateCredential(cred); err != nil {
@@ -1096,13 +1099,13 @@ func TestRegisterFinishRejectsExpiredChallenge(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "expired-test-challenge",
-		UserID:             user.ID,
-		Challenge:          "expired-test-challenge",
-		Type:               "registration",
+		ID:                  "expired-test-challenge",
+		UserID:              user.ID,
+		Challenge:           "expired-test-challenge",
+		Type:                "registration",
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC().Add(-10 * time.Minute),
-		ExpiresAt:          time.Now().UTC().Add(-5 * time.Minute), // already expired
+		CreatedAt:           time.Now().UTC().Add(-10 * time.Minute),
+		ExpiresAt:           time.Now().UTC().Add(-5 * time.Minute), // already expired
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1161,13 +1164,13 @@ func TestRegisterFinishRejectsChallengeTypeMismatch(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "type-mismatch-challenge",
-		UserID:             user.ID,
-		Challenge:          "type-mismatch-challenge",
-		Type:               "login", // wrong type for register finish
+		ID:                  "type-mismatch-challenge",
+		UserID:              user.ID,
+		Challenge:           "type-mismatch-challenge",
+		Type:                "login", // wrong type for register finish
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1212,13 +1215,13 @@ func TestRegisterFinishReplayDoesNotMintSession(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "replay-test-challenge",
-		UserID:             user.ID,
-		Challenge:          "replay-test-challenge",
-		Type:               "registration",
+		ID:                  "replay-test-challenge",
+		UserID:              user.ID,
+		Challenge:           "replay-test-challenge",
+		Type:                "registration",
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1382,13 +1385,13 @@ func TestLoginFinishRejectsExpiredChallenge(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "login-expired-challenge",
-		UserID:             user.ID,
-		Challenge:          "login-expired-challenge",
-		Type:               "login",
+		ID:                  "login-expired-challenge",
+		UserID:              user.ID,
+		Challenge:           "login-expired-challenge",
+		Type:                "login",
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC().Add(-10 * time.Minute),
-		ExpiresAt:          time.Now().UTC().Add(-5 * time.Minute),
+		CreatedAt:           time.Now().UTC().Add(-10 * time.Minute),
+		ExpiresAt:           time.Now().UTC().Add(-5 * time.Minute),
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1431,13 +1434,13 @@ func TestLoginFinishRejectsChallengeTypeMismatch(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "login-type-mismatch-challenge",
-		UserID:             user.ID,
-		Challenge:          "login-type-mismatch-challenge",
-		Type:               "registration", // wrong type for login finish
+		ID:                  "login-type-mismatch-challenge",
+		UserID:              user.ID,
+		Challenge:           "login-type-mismatch-challenge",
+		Type:                "registration", // wrong type for login finish
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1473,6 +1476,7 @@ func TestLoginFinishReplayDoesNotMintSession(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -1487,13 +1491,13 @@ func TestLoginFinishReplayDoesNotMintSession(t *testing.T) {
 	sessionDataJSON, _ := json.Marshal(sessionData)
 
 	cs := &ChallengeState{
-		ID:                 "login-replay-challenge",
-		UserID:             user.ID,
-		Challenge:          "login-replay-challenge",
-		Type:               "login",
+		ID:                  "login-replay-challenge",
+		UserID:              user.ID,
+		Challenge:           "login-replay-challenge",
+		Type:                "login",
 		WebAuthnSessionData: string(sessionDataJSON),
-		CreatedAt:          time.Now().UTC(),
-		ExpiresAt:          time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
 	}
 	if err := h.store.SaveChallengeState(cs); err != nil {
 		t.Fatalf("save challenge: %v", err)
@@ -1734,6 +1738,7 @@ func TestAuthenticatedSessionDoesNotLeakCredentialMaterial(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -2240,6 +2245,7 @@ func TestLoginBeginStoresSessionData(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -2982,6 +2988,7 @@ func TestDeployedOriginLoginBeginReachableForKnownUser(t *testing.T) {
 		Transport:       `["internal"]`,
 		SignCount:       0,
 		AAGUID:          make([]byte, 16),
+		Flags:           "{}",
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(cred); err != nil {
@@ -3031,4 +3038,607 @@ func base64RawURLEncode(data []byte) string {
 func sha256Sum(data []byte) string {
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash)
+}
+
+// ======================================================================
+// Re-login bug fix tests (VAL-AUTH-004, VAL-AUTH-005)
+//
+// These tests verify that the CredentialFlags (user_present, user_verified,
+// backup_eligible, backup_state) and Authenticator.SignCount are properly
+// stored and restored, which is required for WebAuthn re-login to succeed.
+// ======================================================================
+
+// TestCredentialFlagsStoredOnRegistration verifies that the CredentialFlags
+// from a WebAuthn registration are stored in the credentials table.
+func TestCredentialFlagsStoredOnRegistration(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("flags-test-user", "flagsuser")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Create a credential with realistic flags that a platform authenticator
+	// would set (UserPresent=true, UserVerified=true, BackupEligible=true).
+	cred := &Credential{
+		ID:              "cred-flags-test",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Read it back and verify flags are persisted.
+	creds, err := store.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+	if len(creds) != 1 {
+		t.Fatalf("expected 1 credential, got %d", len(creds))
+	}
+	if creds[0].Flags != `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}` {
+		t.Errorf("flags: got %q, want backup_eligible=true flags", creds[0].Flags)
+	}
+}
+
+// TestCredentialFlagsRestoredOnWebAuthnUser verifies that when a webauthnUser
+// is created from stored credentials, the CredentialFlags and
+// Authenticator.SignCount are properly restored. This is the core of the
+// re-login bug fix — without this restoration, the WebAuthn library's
+// validateLogin function would fail with "Backup Eligible flag inconsistency".
+func TestCredentialFlagsRestoredOnWebAuthnUser(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("restore-flags-user", "restoreflags")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Simulate a credential stored with BackupEligible=true (which is what
+	// platform authenticators like Touch ID / Windows Hello set).
+	cred := &Credential{
+		ID:              "cred-restore-flags",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       5,
+		AAGUID:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Reload credentials from the store (simulating re-login flow).
+	creds, err := store.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+
+	// Create a WebAuthn user adapter (this is what happens during login begin).
+	waUser, err := newWebAuthnUser(user, creds)
+	if err != nil {
+		t.Fatalf("newWebAuthnUser: %v", err)
+	}
+
+	waCreds := waUser.WebAuthnCredentials()
+	if len(waCreds) != 1 {
+		t.Fatalf("expected 1 WebAuthn credential, got %d", len(waCreds))
+	}
+
+	// Verify the flags were restored correctly.
+	if !waCreds[0].Flags.BackupEligible {
+		t.Error("BackupEligible flag should be true after restoration from stored credential")
+	}
+	if waCreds[0].Flags.BackupState {
+		t.Error("BackupState flag should be false after restoration")
+	}
+	if !waCreds[0].Flags.UserPresent {
+		t.Error("UserPresent flag should be true after restoration")
+	}
+	if !waCreds[0].Flags.UserVerified {
+		t.Error("UserVerified flag should be true after restoration")
+	}
+
+	// Verify the sign count was restored.
+	if waCreds[0].Authenticator.SignCount != 5 {
+		t.Errorf("SignCount: got %d, want 5", waCreds[0].Authenticator.SignCount)
+	}
+
+	// Verify the AAGUID was restored.
+	if len(waCreds[0].Authenticator.AAGUID) != 16 {
+		t.Errorf("AAGUID length: got %d, want 16", len(waCreds[0].Authenticator.AAGUID))
+	}
+}
+
+// TestCredentialFlagsEmptyFlagsHandled verifies that credentials with empty
+// or missing flags (e.g., from before the migration) are handled gracefully
+// without panicking or causing errors.
+func TestCredentialFlagsEmptyFlagsHandled(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("empty-flags-user", "emptyflags")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		flags string
+	}{
+		{"empty json", "{}"},
+		{"empty string", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cred := &Credential{
+				ID:              "cred-empty-" + tt.name,
+				UserID:          user.ID,
+				PublicKey:       make([]byte, 64),
+				AttestationType: "none",
+				Transport:       `["internal"]`,
+				SignCount:       0,
+				AAGUID:          make([]byte, 16),
+				Flags:           tt.flags,
+				CreatedAt:       time.Now().UTC(),
+			}
+			if err := store.CreateCredential(cred); err != nil {
+				t.Fatalf("create credential: %v", err)
+			}
+
+			creds, err := store.GetCredentialsByUserID(user.ID)
+			if err != nil {
+				t.Fatalf("get credentials: %v", err)
+			}
+
+			// Find the right credential.
+			var found *Credential
+			for i := range creds {
+				if creds[i].ID == cred.ID {
+					found = &creds[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatal("credential not found")
+			}
+
+			// newWebAuthnUser should not panic with empty flags.
+			waUser, err := newWebAuthnUser(user, []Credential{*found})
+			if err != nil {
+				t.Fatalf("newWebAuthnUser with empty flags: %v", err)
+			}
+
+			waCreds := waUser.WebAuthnCredentials()
+			if len(waCreds) != 1 {
+				t.Fatalf("expected 1 credential, got %d", len(waCreds))
+			}
+
+			// All flags should be false (zero value) for empty/missing flags.
+			if waCreds[0].Flags.BackupEligible {
+				t.Error("BackupEligible should be false for empty flags")
+			}
+		})
+	}
+}
+
+// TestSignCounterUpdatedOnLogin verifies that the sign counter is updated
+// in the credentials table after a successful login (simulated by calling
+// the store directly).
+func TestSignCounterUpdatedOnLogin(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("signcount-user", "signcounttest")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	cred := &Credential{
+		ID:              "cred-signcount",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Simulate multiple login cycles by updating sign count.
+	for i := int64(1); i <= 3; i++ {
+		if err := store.UpdateCredentialSignCount("cred-signcount", i); err != nil {
+			t.Fatalf("update sign count %d: %v", i, err)
+		}
+
+		creds, err := store.GetCredentialsByUserID(user.ID)
+		if err != nil {
+			t.Fatalf("get credentials: %v", err)
+		}
+		if creds[0].SignCount != i {
+			t.Errorf("after update %d: sign_count got %d, want %d", i, creds[0].SignCount, i)
+		}
+	}
+}
+
+// TestReLoginCredentialIdentity verifies that credential IDs survive the
+// store → reload → WebAuthn user adapter round trip without corruption.
+// Credential IDs must match byte-for-byte for the WebAuthn library to find
+// the correct credential during login validation.
+func TestReLoginCredentialIdentity(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("identity-user", "identitytest")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Use a realistic credential ID (byte array, like WebAuthn produces).
+	originalID := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10}
+
+	cred := &Credential{
+		ID:              string(originalID),
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Reload and create WebAuthn user adapter.
+	creds, err := store.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+
+	waUser, err := newWebAuthnUser(user, creds)
+	if err != nil {
+		t.Fatalf("newWebAuthnUser: %v", err)
+	}
+
+	waCreds := waUser.WebAuthnCredentials()
+	if len(waCreds) != 1 {
+		t.Fatalf("expected 1 credential, got %d", len(waCreds))
+	}
+
+	// Verify the credential ID matches byte-for-byte.
+	if !bytes.Equal(waCreds[0].ID, originalID) {
+		t.Errorf("credential ID mismatch: got %x, want %x", waCreds[0].ID, originalID)
+	}
+}
+
+// TestReLoginPublicKeySurvivesRoundTrip verifies that the public key bytes
+// survive the store → reload → WebAuthn user adapter round trip.
+func TestReLoginPublicKeySurvivesRoundTrip(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("pubkey-user", "pubkeytest")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Use a non-trivial public key (64 bytes, like a real COSE key).
+	originalPubKey := make([]byte, 64)
+	for i := range originalPubKey {
+		originalPubKey[i] = byte(i)
+	}
+
+	cred := &Credential{
+		ID:              "cred-pubkey",
+		UserID:          user.ID,
+		PublicKey:       originalPubKey,
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	creds, err := store.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+
+	waUser, err := newWebAuthnUser(user, creds)
+	if err != nil {
+		t.Fatalf("newWebAuthnUser: %v", err)
+	}
+
+	waCreds := waUser.WebAuthnCredentials()
+	if !bytes.Equal(waCreds[0].PublicKey, originalPubKey) {
+		t.Errorf("public key mismatch: got %x, want %x", waCreds[0].PublicKey, originalPubKey)
+	}
+}
+
+// TestReLoginSessionDataPersistsForReLogin verifies that the challenge state
+// and WebAuthn session data can be stored and retrieved, which is required
+// for the login finish handler to validate the WebAuthn assertion during
+// re-login.
+func TestReLoginSessionDataPersistsForReLogin(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("session-persist-user", "sessionpersist")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	cred := &Credential{
+		ID:              "cred-session-persist",
+		UserID:          user.ID,
+		PublicKey:       make([]byte, 64),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true,"backup_eligible":true,"backup_state":false}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Simulate a login begin by storing a login challenge.
+	sessionData := webauthn.SessionData{
+		Challenge:            "relogin-test-challenge",
+		RelyingPartyID:       "localhost",
+		UserID:               []byte(user.ID),
+		AllowedCredentialIDs: [][]byte{[]byte(cred.ID)},
+	}
+	sessionDataJSON, _ := json.Marshal(sessionData)
+
+	cs := &ChallengeState{
+		ID:                  "relogin-test-challenge",
+		UserID:              user.ID,
+		Challenge:           "relogin-test-challenge",
+		Type:                "login",
+		AllowedCredentials:  `["cred-session-persist"]`,
+		WebAuthnSessionData: string(sessionDataJSON),
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := store.SaveChallengeState(cs); err != nil {
+		t.Fatalf("save challenge state: %v", err)
+	}
+
+	// Retrieve the challenge (simulating login finish).
+	got, err := store.GetChallengeStateByID("relogin-test-challenge")
+	if err != nil {
+		t.Fatalf("get challenge state: %v", err)
+	}
+
+	// Verify the WebAuthn session data can be deserialized.
+	var gotSession webauthn.SessionData
+	if err := json.Unmarshal([]byte(got.WebAuthnSessionData), &gotSession); err != nil {
+		t.Fatalf("unmarshal session data: %v", err)
+	}
+	if gotSession.Challenge != "relogin-test-challenge" {
+		t.Errorf("challenge: got %q, want %q", gotSession.Challenge, "relogin-test-challenge")
+	}
+	if gotSession.RelyingPartyID != "localhost" {
+		t.Errorf("rp ID: got %q, want %q", gotSession.RelyingPartyID, "localhost")
+	}
+	if len(gotSession.AllowedCredentialIDs) != 1 || string(gotSession.AllowedCredentialIDs[0]) != cred.ID {
+		t.Errorf("allowed credential IDs: got %v, want [%q]", gotSession.AllowedCredentialIDs, cred.ID)
+	}
+}
+
+// TestLogoutThenReLoginFlow simulates the complete register → login →
+// logout → re-login lifecycle at the handler level, verifying that
+// session state is properly managed across all transitions.
+func TestLogoutThenReLoginFlow(t *testing.T) {
+	h, priv := testHandlerEnv(t)
+
+	// Step 1: Create a user and issue a session (simulating registration).
+	user, err := h.store.CreateUser("lifecycle-user", "lifecycle")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	issueRec := httptest.NewRecorder()
+	_, err = h.issueSession(issueRec, user)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	// Step 2: Verify session is authenticated.
+	sessionReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	for _, c := range issueRec.Result().Cookies() {
+		sessionReq.AddCookie(c)
+	}
+	sessionRec := httptest.NewRecorder()
+	h.HandleSession(sessionRec, sessionReq)
+
+	var sessionResp sessionResponse
+	if err := json.NewDecoder(sessionRec.Body).Decode(&sessionResp); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if !sessionResp.Authenticated {
+		t.Fatal("should be authenticated after initial session")
+	}
+	if sessionResp.User.ID != user.ID {
+		t.Errorf("user ID: got %q, want %q", sessionResp.User.ID, user.ID)
+	}
+
+	// Step 3: Logout.
+	logoutReq := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	for _, c := range issueRec.Result().Cookies() {
+		logoutReq.AddCookie(c)
+	}
+	logoutRec := httptest.NewRecorder()
+	h.HandleLogout(logoutRec, logoutReq)
+
+	// Verify logged out.
+	var logoutResp sessionResponse
+	if err := json.NewDecoder(logoutRec.Body).Decode(&logoutResp); err != nil {
+		t.Fatalf("decode logout: %v", err)
+	}
+	if logoutResp.Authenticated {
+		t.Error("should not be authenticated after logout")
+	}
+
+	// Step 4: Verify old session cookies no longer work.
+	// Use an expired access JWT to simulate the access token having expired
+	// after some time, and verify that the refresh token (deleted during logout)
+	// cannot restore the session.
+	expiredClaims := jwt.MapClaims{
+		"sub":   user.ID,
+		"exp":   time.Now().Add(-1 * time.Hour).Unix(),
+		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
+		"scope": "access",
+	}
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, expiredClaims)
+	expiredTokenStr, err := expiredToken.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+
+	// Try to use the old refresh cookie with the expired access.
+	postLogoutReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	postLogoutReq.AddCookie(&http.Cookie{Name: AccessTokenCookieName, Value: expiredTokenStr})
+	for _, c := range issueRec.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			postLogoutReq.AddCookie(c)
+		}
+	}
+	postLogoutRec := httptest.NewRecorder()
+	h.HandleSession(postLogoutRec, postLogoutReq)
+
+	var postLogoutResp sessionResponse
+	if err := json.NewDecoder(postLogoutRec.Body).Decode(&postLogoutResp); err != nil {
+		t.Fatalf("decode post-logout session: %v", err)
+	}
+	if postLogoutResp.Authenticated {
+		t.Error("should NOT be authenticated after logout — old refresh token should be invalidated")
+	}
+
+	// Step 5: Simulate re-login by issuing a new session.
+	reLoginRec := httptest.NewRecorder()
+	_, err = h.issueSession(reLoginRec, user)
+	if err != nil {
+		t.Fatalf("re-login issue session: %v", err)
+	}
+
+	// Step 6: Verify the new session works.
+	reLoginSessionReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	for _, c := range reLoginRec.Result().Cookies() {
+		reLoginSessionReq.AddCookie(c)
+	}
+	reLoginSessionRec := httptest.NewRecorder()
+	h.HandleSession(reLoginSessionRec, reLoginSessionReq)
+
+	var reLoginResp sessionResponse
+	if err := json.NewDecoder(reLoginSessionRec.Body).Decode(&reLoginResp); err != nil {
+		t.Fatalf("decode re-login session: %v", err)
+	}
+	if !reLoginResp.Authenticated {
+		t.Error("should be authenticated after re-login")
+	}
+	if reLoginResp.User.ID != user.ID {
+		t.Errorf("re-login user ID: got %q, want %q", reLoginResp.User.ID, user.ID)
+	}
+	if reLoginResp.User.Username != "lifecycle" {
+		t.Errorf("re-login username: got %q, want %q", reLoginResp.User.Username, "lifecycle")
+	}
+
+	_ = priv
+}
+
+// TestConcurrentSessionsOnReLogin verifies that a user can have multiple
+// concurrent refresh sessions (e.g., from different browsers), which is
+// required for VAL-AUTH-017.
+func TestConcurrentSessionsOnReLogin(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	user, err := h.store.CreateUser("concurrent-user", "concurrent")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Issue session 1 (simulating first browser).
+	rec1 := httptest.NewRecorder()
+	_, err = h.issueSession(rec1, user)
+	if err != nil {
+		t.Fatalf("issue session 1: %v", err)
+	}
+
+	// Issue session 2 (simulating second browser).
+	rec2 := httptest.NewRecorder()
+	_, err = h.issueSession(rec2, user)
+	if err != nil {
+		t.Fatalf("issue session 2: %v", err)
+	}
+
+	// Both sessions should report authenticated.
+	for i, rec := range []*httptest.ResponseRecorder{rec1, rec2} {
+		req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+		for _, c := range rec.Result().Cookies() {
+			req.AddCookie(c)
+		}
+		checkRec := httptest.NewRecorder()
+		h.HandleSession(checkRec, req)
+
+		var resp sessionResponse
+		if err := json.NewDecoder(checkRec.Body).Decode(&resp); err != nil {
+			t.Fatalf("session %d: decode: %v", i+1, err)
+		}
+		if !resp.Authenticated {
+			t.Errorf("session %d: should be authenticated", i+1)
+		}
+		if resp.User.ID != user.ID {
+			t.Errorf("session %d: user ID mismatch", i+1)
+		}
+	}
+
+	// Logout from session 1 should invalidate ALL sessions (current behavior).
+	logoutReq := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	for _, c := range rec1.Result().Cookies() {
+		logoutReq.AddCookie(c)
+	}
+	logoutRec := httptest.NewRecorder()
+	h.HandleLogout(logoutRec, logoutReq)
+
+	// Session 2's refresh token should also be invalidated.
+	req2 := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	// Use an expired access JWT to force refresh token usage.
+	for _, c := range rec2.Result().Cookies() {
+		if c.Name == RefreshTokenCookieName {
+			req2.AddCookie(c)
+		}
+	}
+	checkRec2 := httptest.NewRecorder()
+	h.HandleSession(checkRec2, req2)
+
+	var resp2 sessionResponse
+	if err := json.NewDecoder(checkRec2.Body).Decode(&resp2); err != nil {
+		t.Fatalf("session 2 after logout 1: decode: %v", err)
+	}
+	// After logout (which deletes all refresh sessions for the user),
+	// session 2 should not be restorable via refresh.
+	if resp2.Authenticated {
+		t.Error("session 2 should not be restorable after global logout deleted all refresh sessions")
+	}
 }
