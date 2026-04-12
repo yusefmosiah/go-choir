@@ -35,6 +35,8 @@
     createDocument, listDocuments, getDocument, updateDocument, deleteDocument,
     createRevision, getRevision, getHistory, getDiff, getBlame,
     submitAgentRevision,
+    spawnResearchWorker,
+    fetchResearchStatus,
   } from './etext.js';
   import { AuthRequiredError, fetchWithRenewal } from './auth.js';
 
@@ -83,6 +85,14 @@
   let agentTaskId = '';
   let agentStatus = ''; // 'pending', 'running', 'completed', 'failed', ''
   let agentSubmitting = false;
+
+  // ---- Research worker state (VAL-CHOIR-007) ----
+  let researchStatus = ''; // 'pending', 'running', 'completed', 'failed', ''
+  let researchTaskId = '';
+  let researchSubmitting = false;
+  let researchResult = '';
+  let researchTopic = '';
+  let showResearchResult = false;
 
   // ---- Document list ----
 
@@ -385,6 +395,93 @@
     }
   }
 
+  // ---- Research worker (VAL-CHOIR-007) ----
+
+  async function handleResearch() {
+    if (!currentDoc) return;
+    error = '';
+    researchSubmitting = true;
+    researchStatus = 'pending';
+    researchResult = '';
+    showResearchResult = false;
+
+    try {
+      const resp = await spawnResearchWorker(
+        currentDoc.doc_id,
+        editContent,
+        researchTopic,
+      );
+      researchTaskId = resp.task_id;
+      researchStatus = resp.state || 'pending';
+      researchTopic = '';
+
+      // Poll research worker status until completion.
+      pollResearchWorker(resp.task_id);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        dispatch('authexpired');
+        return;
+      }
+      error = err.message || 'Failed to start research';
+      researchStatus = 'failed';
+    } finally {
+      researchSubmitting = false;
+    }
+  }
+
+  async function pollResearchWorker(taskId) {
+    const maxPolls = 120; // 120 * 500ms = 60 seconds max
+    let pollCount = 0;
+
+    const poll = async () => {
+      try {
+        const data = await fetchResearchStatus(taskId);
+
+        if (data.state === 'completed') {
+          researchStatus = 'completed';
+          researchResult = data.result || '';
+          showResearchResult = true;
+          return;
+        } else if (data.state === 'failed' || data.state === 'cancelled') {
+          researchStatus = 'failed';
+          error = 'Research failed: ' + (data.error || 'unknown error');
+          return;
+        } else if (data.state === 'running') {
+          researchStatus = 'running';
+        }
+
+        pollCount++;
+        if (pollCount < maxPolls) {
+          setTimeout(poll, 500);
+        } else {
+          researchStatus = 'failed';
+          error = 'Research task timed out';
+        }
+      } catch (err) {
+        researchStatus = 'failed';
+        error = err.message || 'Error polling research status';
+      }
+    };
+
+    setTimeout(poll, 200);
+  }
+
+  function dismissResearchResult() {
+    showResearchResult = false;
+    researchResult = '';
+    researchStatus = '';
+    researchTaskId = '';
+  }
+
+  function applyResearchResult() {
+    if (!researchResult || !currentDoc) return;
+    // Insert the research result at the end of the current content.
+    editContent = editContent
+      ? editContent + '\n\n---\n## Research Results\n\n' + researchResult
+      : researchResult;
+    dismissResearchResult();
+  }
+
   // ---- Navigation helpers ----
 
   function goBackToList() {
@@ -396,6 +493,10 @@
     blameResult = null;
     error = '';
     saveStatus = '';
+    researchStatus = '';
+    researchResult = '';
+    researchTaskId = '';
+    showResearchResult = false;
     loadDocuments();
   }
 
@@ -544,11 +645,54 @@
           {#if saveStatus}
             <span class="save-status" data-etext-save-status>{saveStatus}</span>
           {/if}
+          <button
+            class="btn btn-research"
+            data-etext-research
+            on:click={handleResearch}
+            disabled={researchSubmitting || researchStatus === 'running' || researchStatus === 'pending'}
+            title="Spawn a research worker to investigate the document topic"
+          >
+            {#if researchSubmitting}
+              🔍 Starting…
+            {:else if researchStatus === 'running' || researchStatus === 'pending'}
+              🔍 Researching…
+            {:else}
+              🔍 Research
+            {/if}
+          </button>
           <button class="btn" data-etext-history-btn on:click={handleOpenHistory}>
             History
           </button>
         </div>
       </div>
+
+      <!-- Research worker progress indicator (VAL-CHOIR-007) -->
+      {#if researchStatus === 'running' || researchStatus === 'pending'}
+        <div class="research-progress" data-etext-research-progress>
+          <span class="research-progress-dot"></span>
+          Researching document topic…
+        </div>
+      {/if}
+
+      <!-- Research results panel (VAL-CHOIR-007) -->
+      {#if showResearchResult && researchResult}
+        <div class="research-result-panel" data-etext-research-result>
+          <div class="research-result-header">
+            <span class="research-result-title">🔍 Research Results</span>
+            <div class="research-result-actions">
+              <button class="btn btn-small btn-primary" data-etext-research-apply on:click={applyResearchResult}>
+                Apply to Document
+              </button>
+              <button class="btn btn-small" data-etext-research-dismiss on:click={dismissResearchResult}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+          <div class="research-result-content" data-etext-research-result-content>
+            {researchResult}
+          </div>
+        </div>
+      {/if}
 
       <div class="agent-revision-bar" data-etext-agent-revision>
         <div class="agent-revision-input">
@@ -987,6 +1131,81 @@
 
   .btn-agent:hover:not(:disabled) {
     background: rgba(167, 139, 250, 0.2);
+  }
+
+  /* ---- Research button ---- */
+  .btn-research {
+    color: #34d399;
+    background: rgba(52, 211, 153, 0.1);
+    border-color: rgba(52, 211, 153, 0.25);
+  }
+
+  .btn-research:hover:not(:disabled) {
+    background: rgba(52, 211, 153, 0.2);
+  }
+
+  /* ---- Research progress ---- */
+  .research-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.75rem;
+    color: #34d399;
+    padding: 0.3rem 0.5rem;
+    background: rgba(52, 211, 153, 0.05);
+    border: 1px solid rgba(52, 211, 153, 0.15);
+    border-radius: 4px;
+  }
+
+  .research-progress-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #34d399;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  /* ---- Research result panel ---- */
+  .research-result-panel {
+    margin-bottom: 0.5rem;
+    background: rgba(52, 211, 153, 0.05);
+    border: 1px solid rgba(52, 211, 153, 0.2);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .research-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.6rem;
+    background: rgba(52, 211, 153, 0.08);
+    border-bottom: 1px solid rgba(52, 211, 153, 0.15);
+  }
+
+  .research-result-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #34d399;
+  }
+
+  .research-result-actions {
+    display: flex;
+    gap: 0.3rem;
+  }
+
+  .research-result-content {
+    padding: 0.6rem;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #c0c0d0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   }
 
   .agent-progress {

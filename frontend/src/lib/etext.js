@@ -15,6 +15,8 @@
  *   GET    /api/etext/diff?from=X&to=Y    — diff two revisions
  *   GET    /api/etext/revisions/{id}/blame — blame revision
  *   POST   /api/etext/documents/{id}/agent-revision — submit agent revision
+ *   POST   /api/agent/task                            — spawn a worker task (research)
+ *   GET    /api/agent/status                          — poll worker task status
  *
  * All requests use cookie-backed auth via fetchWithRenewal so that:
  *   - expired access tokens are silently renewed before retry
@@ -336,6 +338,76 @@ export async function submitAgentRevision(docId, prompt) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Agent revision failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Research worker (choir-in-choir)
+// ---------------------------------------------------------------------------
+
+/**
+ * Spawns a research worker task for a document (VAL-CHOIR-007).
+ *
+ * The Research button creates a top-level task that runs in the background
+ * (non-blocking). The task uses the document content as context for research.
+ * Results are reported back to the etext editor when the worker completes.
+ *
+ * This uses the standard task submission endpoint (/api/agent/task) rather
+ * than the spawn endpoint (/api/agent/spawn) because the research worker is
+ * a standalone task — it does not need a parent task reference. The task
+ * metadata includes the document context for the runtime to use.
+ *
+ * Uses fetchWithRenewal so renewal/retry does not duplicate the task
+ * (VAL-CHOIR-012).
+ *
+ * @param {string} docId - The document ID being researched.
+ * @param {string} content - Current document content (used as research context).
+ * @param {string} topic - Research topic or query (defaults to document-based research).
+ * @returns {Promise<{task_id: string, state: string, owner_id: string, created_at: string}>}
+ * @throws {AuthRequiredError} If auth renewal fails.
+ */
+export async function spawnResearchWorker(docId, content, topic) {
+  const prompt = topic && topic.trim()
+    ? `Research the following topic and provide detailed findings:\n\nTopic: ${topic.trim()}\n\nDocument context:\n${content}`
+    : `Research the following document content and provide detailed findings, additional context, and relevant information:\n\n${content}`;
+
+  const res = await fetchWithRenewal('/api/agent/task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      metadata: {
+        type: 'etext_research',
+        doc_id: docId,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Research task submission failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetches the status of a research worker task.
+ *
+ * @param {string} taskId - The task ID returned by spawnResearchWorker.
+ * @returns {Promise<{task_id: string, state: string, result: string, error: string, metadata: object}>}
+ * @throws {AuthRequiredError} If auth renewal fails.
+ */
+export async function fetchResearchStatus(taskId) {
+  const res = await fetchWithRenewal(`/api/agent/status?task_id=${encodeURIComponent(taskId)}`, {
+    method: 'GET',
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Research status fetch failed (${res.status})`);
   }
 
   return res.json();
