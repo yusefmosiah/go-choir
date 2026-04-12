@@ -309,6 +309,12 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	hostPort := m.nextPort
 	m.nextPort++
 
+	// Ensure VM state directory exists before creating data image.
+	vmStateDir := filepath.Join(m.cfg.StateDir, cfg.VMID)
+	if err := os.MkdirAll(vmStateDir, 0750); err != nil {
+		return nil, fmt.Errorf("failed to create VM state directory: %w", err)
+	}
+
 	// Ensure the persistent directory exists.
 	if cfg.PersistentDir == "" {
 		cfg.PersistentDir = filepath.Join(m.cfg.StateDir, cfg.VMID, "persist")
