@@ -30,18 +30,23 @@
   /** @type {'register' | 'login'} */
   let view = 'register';
 
-  /** Username input for the current view. */
-  let username = '';
+  /** Email input for the current view. */
+  let email = '';
 
-  /** Validation error message (empty username etc). */
+  /** Validation error message (empty email etc). */
   let error = '';
 
   /** Combined error to display: validation error takes precedence, then passkeyError. */
   $: displayError = error || passkeyError;
 
+  /** Simple email format validation. */
+  function isValidEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
+
   function switchView(newView) {
     view = newView;
-    username = '';
+    email = '';
     error = '';
     // Clear passkeyError when switching views so the user gets a clean retry state.
     dispatch('clearpasskeyerror');
@@ -49,20 +54,28 @@
 
   function handleRegister() {
     error = '';
-    if (!username.trim()) {
-      error = 'Please enter a username.';
+    if (!email.trim()) {
+      error = 'Please enter an email address.';
       return;
     }
-    dispatch('authbegin', { username: username.trim(), type: 'register' });
+    if (!isValidEmail(email.trim())) {
+      error = 'Please enter a valid email address.';
+      return;
+    }
+    dispatch('authbegin', { email: email.trim(), type: 'register' });
   }
 
   function handleLogin() {
     error = '';
-    if (!username.trim()) {
-      error = 'Please enter a username.';
+    if (!email.trim()) {
+      error = 'Please enter an email address.';
       return;
     }
-    dispatch('authbegin', { username: username.trim(), type: 'login' });
+    if (!isValidEmail(email.trim())) {
+      error = 'Please enter a valid email address.';
+      return;
+    }
+    dispatch('authbegin', { email: email.trim(), type: 'login' });
   }
 </script>
 
@@ -98,13 +111,13 @@
         <p class="view-desc">Register a new account with a passkey. No passwords needed.</p>
 
         <form on:submit|preventDefault={handleRegister}>
-          <label for="register-username">Username</label>
+          <label for="register-email">Email</label>
           <input
-            id="register-username"
-            type="text"
-            bind:value={username}
-            placeholder="Choose a username"
-            autocomplete="username"
+            id="register-email"
+            type="email"
+            bind:value={email}
+            placeholder="Enter your email address"
+            autocomplete="email"
             disabled={ceremonyInProgress}
             required
           />
@@ -123,13 +136,13 @@
         <p class="view-desc">Log in with your registered passkey.</p>
 
         <form on:submit|preventDefault={handleLogin}>
-          <label for="login-username">Username</label>
+          <label for="login-email">Email</label>
           <input
-            id="login-username"
-            type="text"
-            bind:value={username}
-            placeholder="Enter your username"
-            autocomplete="username"
+            id="login-email"
+            type="email"
+            bind:value={email}
+            placeholder="Enter your email address"
+            autocomplete="email"
             disabled={ceremonyInProgress}
             required
           />
@@ -244,7 +257,7 @@
     color: #aaa;
   }
 
-  input[type="text"] {
+  input[type="email"] {
     padding: 0.7rem 0.85rem;
     font-size: 0.95rem;
     background: #111;
@@ -255,11 +268,11 @@
     transition: border-color 0.2s;
   }
 
-  input[type="text"]:focus {
+  input[type="email"]:focus {
     border-color: #555;
   }
 
-  input[type="text"]::placeholder {
+  input[type="email"]::placeholder {
     color: #555;
   }
 

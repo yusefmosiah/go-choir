@@ -284,7 +284,7 @@
     <div class="header-right">
       <div class="user-area" data-shell-user>
         <span class="user-icon">👤</span>
-        <span class="user-name">{currentUser?.username || 'unknown'}</span>
+        <span class="user-name">{currentUser?.email || 'unknown'}</span>
       </div>
       <button class="logout-btn" data-shell-logout on:click={handleLogout}>
         Sign Out

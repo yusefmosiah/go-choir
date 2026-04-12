@@ -493,7 +493,7 @@
     <div class="bar-right">
       <div class="user-area" data-desktop-user data-shell-user>
         <span class="user-icon">👤</span>
-        <span class="user-name">{currentUser?.username || 'unknown'}</span>
+        <span class="user-name">{currentUser?.email || 'unknown'}</span>
       </div>
       <button class="logout-btn" data-desktop-logout data-shell-logout on:click={handleLogout}>
         Sign Out

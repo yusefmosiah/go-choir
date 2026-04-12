@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/mail"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -51,7 +53,7 @@ func NewHandler(store *Store, wa *webauthn.WebAuthn, cfg *Config, signer ed25519
 
 // beginRequest is the expected JSON body for register/login begin endpoints.
 type beginRequest struct {
-	Username string `json:"username"`
+	Email string `json:"email"`
 }
 
 // sessionResponse is the JSON response for GET /auth/session.
@@ -64,7 +66,7 @@ type sessionResponse struct {
 // userInfo contains non-secret user fields returned in session responses.
 type userInfo struct {
 	ID        string `json:"id"`
-	Username  string `json:"username"`
+	Email     string `json:"email"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -267,7 +269,7 @@ func (h *Handler) issueSession(w http.ResponseWriter, user *User) (*userInfo, er
 
 	return &userInfo{
 		ID:        user.ID,
-		Username:  user.Username,
+		Email:     user.Email,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}, nil
 }
@@ -327,6 +329,40 @@ func (h *Handler) rotateRefreshSession(w http.ResponseWriter, oldSession *Refres
 	return nil
 }
 
+// isValidEmail checks if the given string is a valid email address.
+// It uses Go's standard library mail parser and additionally verifies
+// that the address contains exactly one "@" and a domain with at least
+// one dot (e.g., "user@example.com").
+func isValidEmail(email string) bool {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return false
+	}
+
+	// Use Go's standard mail parser for basic validation.
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return false
+	}
+
+	// The parsed address should match the input (no extra names etc).
+	if addr.Address != email {
+		return false
+	}
+
+	// Verify there's a domain part with at least one dot.
+	parts := strings.SplitN(addr.Address, "@", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	domain := parts[1]
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+
+	return true
+}
+
 // --- HTTP Handlers ---
 
 // HandleRegisterBegin handles POST /auth/register/begin.
@@ -344,17 +380,22 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "username is required"})
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "email is required"})
 		return
 	}
 
-	// Create the user in the store if they don't already exist.
-	user, err := h.store.GetUserByUsername(req.Username)
+	if !isValidEmail(req.Email) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "please enter a valid email address"})
+		return
+	}
+
+	// Look up the user by email.
+	user, err := h.store.GetUserByEmail(req.Email)
 	if err != nil {
 		// User doesn't exist yet — create them.
 		userID := uuid.NewString()
-		user, err = h.store.CreateUser(userID, req.Username)
+		user, err = h.store.CreateUser(userID, req.Email)
 		if err != nil {
 			log.Printf("auth register begin: create user: %v", err)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create user"})
@@ -425,13 +466,18 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "username is required"})
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "email is required"})
+		return
+	}
+
+	if !isValidEmail(req.Email) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "please enter a valid email address"})
 		return
 	}
 
 	// Look up the user.
-	user, err := h.store.GetUserByUsername(req.Username)
+	user, err := h.store.GetUserByEmail(req.Email)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "user not found"})
 		return
@@ -794,7 +840,7 @@ func (h *Handler) HandleSession(w http.ResponseWriter, r *http.Request) {
 		Authenticated: true,
 		User: &userInfo{
 			ID:        user.ID,
-			Username:  user.Username,
+			Email:     user.Email,
 			CreatedAt: user.CreatedAt.Format(time.RFC3339),
 		},
 	})
@@ -823,7 +869,7 @@ func (h *Handler) tryRefreshRotation(w http.ResponseWriter, r *http.Request) {
 		Authenticated: true,
 		User: &userInfo{
 			ID:        user.ID,
-			Username:  user.Username,
+			Email:     user.Email,
 			CreatedAt: user.CreatedAt.Format(time.RFC3339),
 		},
 	})

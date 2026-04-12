@@ -61,15 +61,15 @@
   }
 
   async function handleAuthBegin(event) {
-    const { username, type } = event.detail;
+    const { email, type } = event.detail;
     passkeyError = '';
     ceremonyInProgress = true;
 
     try {
       if (type === 'register') {
-        await registerPasskey(username);
+        await registerPasskey(email);
       } else {
-        await loginPasskey(username);
+        await loginPasskey(email);
       }
 
       // Ceremony succeeded — re-check session to transition to

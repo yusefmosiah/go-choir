@@ -50,17 +50,17 @@ function bufferToBase64url(buffer) {
  *   2. navigator.credentials.create() — browser handles ceremony
  *   3. POST /auth/register/finish — complete registration
  *
- * @param {string} username
+ * @param {string} email
  * @returns {Promise<{ok: boolean, user?: object}>}
  * @throws {Error} On network failure, server error, or ceremony cancellation
  */
-export async function registerPasskey(username) {
+export async function registerPasskey(email) {
   // Step 1: Begin registration.
   const beginRes = await fetch('/auth/register/begin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ email }),
   });
 
   if (!beginRes.ok) {
@@ -132,17 +132,17 @@ export async function registerPasskey(username) {
  *   2. navigator.credentials.get() — browser handles ceremony
  *   3. POST /auth/login/finish  — complete login
  *
- * @param {string} username
+ * @param {string} email
  * @returns {Promise<{ok: boolean, user?: object}>}
  * @throws {Error} On network failure, server error, or ceremony cancellation
  */
-export async function loginPasskey(username) {
+export async function loginPasskey(email) {
   // Step 1: Begin login.
   const beginRes = await fetch('/auth/login/begin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ email }),
   });
 
   if (!beginRes.ok) {

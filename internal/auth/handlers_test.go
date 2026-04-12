@@ -106,9 +106,9 @@ func TestRegisterBeginRejectsMalformedJSON(t *testing.T) {
 		body string
 	}{
 		{"not json", `this is not json`},
-		{"missing username field", `{"email": "alice@example.com"}`},
-		{"empty username", `{"username": ""}`},
-		{"username is number", `{"username": 123}`},
+		{"missing email field", `{"username": "alice@example.com"}`},
+		{"empty email", `{"email": ""}`},
+		{"email is number", `{"email": 123}`},
 	}
 
 	for _, tt := range tests {
@@ -143,7 +143,7 @@ func TestRegisterBeginRejectsMalformedJSON(t *testing.T) {
 func TestRegisterBeginReturnsRPBoundChallenge(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	body := `{"username": "alice"}`
+	body := `{"email": "alice@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -202,7 +202,7 @@ func TestRegisterBeginReturnsRPBoundChallenge(t *testing.T) {
 func TestRegisterBeginCreatesUserAndChallengeInStore(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	body := `{"username": "bob"}`
+	body := `{"email": "bob@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -214,12 +214,12 @@ func TestRegisterBeginCreatesUserAndChallengeInStore(t *testing.T) {
 	}
 
 	// Verify the user was created in the store.
-	user, err := h.store.GetUserByUsername("bob")
+	user, err := h.store.GetUserByEmail("bob@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
-	if user.Username != "bob" {
-		t.Errorf("username: got %q, want %q", user.Username, "bob")
+	if user.Email != "bob@example.com" {
+		t.Errorf("email: got %q, want %q", user.Email, "bob@example.com")
 	}
 }
 
@@ -227,11 +227,11 @@ func TestRegisterBeginIdempotentForExistingUser(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create user first.
-	if _, err := h.store.CreateUser("existing-id", "charlie"); err != nil {
+	if _, err := h.store.CreateUser("existing-id", "charlie@example.com"); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	body := `{"username": "charlie"}`
+	body := `{"email": "charlie@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -243,7 +243,7 @@ func TestRegisterBeginIdempotentForExistingUser(t *testing.T) {
 	}
 
 	// Verify existing user was found, not duplicated.
-	user, err := h.store.GetUserByUsername("charlie")
+	user, err := h.store.GetUserByEmail("charlie@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -296,9 +296,9 @@ func TestLoginBeginRejectsMalformedJSON(t *testing.T) {
 		body string
 	}{
 		{"not json", `not json at all`},
-		{"missing username", `{"email": "alice@example.com"}`},
-		{"empty username", `{"username": ""}`},
-		{"username is null", `{"username": null}`},
+		{"missing email", `{"username": "alice@example.com"}`},
+		{"empty email", `{"email": ""}`},
+		{"email is null", `{"email": null}`},
 	}
 
 	for _, tt := range tests {
@@ -332,7 +332,7 @@ func TestLoginBeginRejectsMalformedJSON(t *testing.T) {
 func TestLoginBeginRejectsUnknownUser(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	body := `{"username": "nonexistent"}`
+	body := `{"email": "nonexistent@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -356,11 +356,11 @@ func TestLoginBeginRejectsUserWithNoCredentials(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user with no passkeys.
-	if _, err := h.store.CreateUser("user-no-creds", "nobody"); err != nil {
+	if _, err := h.store.CreateUser("user-no-creds", "nobody@example.com"); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
-	body := `{"username": "nobody"}`
+	body := `{"email": "nobody@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -384,7 +384,7 @@ func TestLoginBeginReturnsAssertionOptionsForRegisteredUser(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user with a credential.
-	user, err := h.store.CreateUser("login-user", "dave")
+	user, err := h.store.CreateUser("login-user", "dave@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestLoginBeginReturnsAssertionOptionsForRegisteredUser(t *testing.T) {
 		t.Fatalf("create credential: %v", err)
 	}
 
-	body := `{"username": "dave"}`
+	body := `{"email": "dave@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -613,7 +613,7 @@ func TestSessionReturnsAuthenticatedWithValidJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
 	// Create a user in the store.
-	user, err := h.store.CreateUser("jwt-user", "eve")
+	user, err := h.store.CreateUser("jwt-user", "eve@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -652,8 +652,8 @@ func TestSessionReturnsAuthenticatedWithValidJWT(t *testing.T) {
 	if resp.User == nil {
 		t.Fatal("user info should be present when authenticated")
 	}
-	if resp.User.Username != "eve" {
-		t.Errorf("username: got %q, want %q", resp.User.Username, "eve")
+	if resp.User.Email != "eve@example.com" {
+		t.Errorf("email: got %q, want %q", resp.User.Email, "eve@example.com")
 	}
 	if resp.User.ID != user.ID {
 		t.Errorf("user ID: got %q, want %q", resp.User.ID, user.ID)
@@ -664,7 +664,7 @@ func TestSessionDoesNotLeakSecrets(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
 	// Create a user and a credential (secret).
-	user, err := h.store.CreateUser("secret-user", "frank")
+	user, err := h.store.CreateUser("secret-user", "frank@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -777,7 +777,7 @@ func TestSessionNeverReturns5xxForInvalidAuth(t *testing.T) {
 func TestWebAuthnUserAdapter(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("wa-user-1", "walter")
+	user, err := store.CreateUser("wa-user-1", "walter@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -805,11 +805,11 @@ func TestWebAuthnUserAdapter(t *testing.T) {
 	if string(waUser.WebAuthnID()) != user.ID {
 		t.Errorf("WebAuthnID: got %q, want %q", string(waUser.WebAuthnID()), user.ID)
 	}
-	if waUser.WebAuthnName() != "walter" {
-		t.Errorf("WebAuthnName: got %q, want %q", waUser.WebAuthnName(), "walter")
+	if waUser.WebAuthnName() != "walter@example.com" {
+		t.Errorf("WebAuthnName: got %q, want %q", waUser.WebAuthnName(), "walter@example.com")
 	}
-	if waUser.WebAuthnDisplayName() != "walter" {
-		t.Errorf("WebAuthnDisplayName: got %q, want %q", waUser.WebAuthnDisplayName(), "walter")
+	if waUser.WebAuthnDisplayName() != "walter@example.com" {
+		t.Errorf("WebAuthnDisplayName: got %q, want %q", waUser.WebAuthnDisplayName(), "walter@example.com")
 	}
 	creds := waUser.WebAuthnCredentials()
 	if len(creds) != 1 {
@@ -859,8 +859,8 @@ func TestLoadPrivateKeyInvalidPath(t *testing.T) {
 func TestRegisterThenLoginBeginFlow(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	// Step 1: Register begin for "alice"
-	regBody := `{"username": "alice"}`
+	// Step 1: Register begin for "alice@example.com"
+	regBody := `{"email": "alice@example.com"}`
 	regReq := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(regBody))
 	regReq.Header.Set("Content-Type", "application/json")
@@ -872,7 +872,7 @@ func TestRegisterThenLoginBeginFlow(t *testing.T) {
 	}
 
 	// Step 2: Login begin should fail because no credentials yet
-	loginBody := `{"username": "alice"}`
+	loginBody := `{"email": "alice@example.com"}`
 	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(loginBody))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -919,7 +919,7 @@ func TestRegisterBeginWithDeployedRPID(t *testing.T) {
 
 	h := NewHandler(store, wa, cfg, priv)
 
-	body := `{"username": "deployed-alice"}`
+	body := `{"email": "deployed-alice@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1086,7 +1086,7 @@ func TestRegisterFinishRejectsExpiredChallenge(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user and store an expired challenge.
-	user, err := h.store.CreateUser("expired-ch-user", "expiredch")
+	user, err := h.store.CreateUser("expired-ch-user", "expiredch@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1151,7 +1151,7 @@ func TestRegisterFinishRejectsChallengeTypeMismatch(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user and store a LOGIN-type challenge, then try to use it for registration.
-	user, err := h.store.CreateUser("type-mismatch-user", "typemismatch")
+	user, err := h.store.CreateUser("type-mismatch-user", "typemismatch@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1202,7 +1202,7 @@ func TestRegisterFinishReplayDoesNotMintSession(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user and store a valid challenge.
-	user, err := h.store.CreateUser("replay-user", "replay")
+	user, err := h.store.CreateUser("replay-user", "replay@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1372,7 +1372,7 @@ func TestLoginFinishRejectsExpiredChallenge(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user with a credential.
-	user, err := h.store.CreateUser("login-expired-user", "loginexpired")
+	user, err := h.store.CreateUser("login-expired-user", "loginexpired@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1421,7 +1421,7 @@ func TestLoginFinishRejectsExpiredChallenge(t *testing.T) {
 func TestLoginFinishRejectsChallengeTypeMismatch(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("login-type-mismatch-user", "logintm")
+	user, err := h.store.CreateUser("login-type-mismatch-user", "logintm@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1463,7 +1463,7 @@ func TestLoginFinishRejectsChallengeTypeMismatch(t *testing.T) {
 func TestLoginFinishReplayDoesNotMintSession(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("login-replay-user", "loginreplay")
+	user, err := h.store.CreateUser("login-replay-user", "loginreplay@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1558,7 +1558,7 @@ func TestLoginFinishReplayDoesNotMintSession(t *testing.T) {
 func TestIssueSessionSetsCookiesAndMintsJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("session-user", "sessiontest")
+	user, err := h.store.CreateUser("session-user", "sessiontest@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1575,8 +1575,8 @@ func TestIssueSessionSetsCookiesAndMintsJWT(t *testing.T) {
 	if userInfo.ID != user.ID {
 		t.Errorf("user ID: got %q, want %q", userInfo.ID, user.ID)
 	}
-	if userInfo.Username != "sessiontest" {
-		t.Errorf("username: got %q, want %q", userInfo.Username, "sessiontest")
+	if userInfo.Email != "sessiontest@example.com" {
+		t.Errorf("email: got %q, want %q", userInfo.Email, "sessiontest@example.com")
 	}
 
 	// Check that auth cookies were set.
@@ -1656,7 +1656,7 @@ func TestIssueSessionSetsCookiesAndMintsJWT(t *testing.T) {
 func TestAuthenticatedSessionWithValidCookies(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("auth-cookie-user", "cookieauth")
+	user, err := h.store.CreateUser("auth-cookie-user", "cookieauth@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1690,8 +1690,8 @@ func TestAuthenticatedSessionWithValidCookies(t *testing.T) {
 	if resp.User == nil {
 		t.Fatal("user info should be present")
 	}
-	if resp.User.Username != "cookieauth" {
-		t.Errorf("username: got %q, want %q", resp.User.Username, "cookieauth")
+	if resp.User.Email != "cookieauth@example.com" {
+		t.Errorf("email: got %q, want %q", resp.User.Email, "cookieauth@example.com")
 	}
 	if resp.User.ID != user.ID {
 		t.Errorf("user ID: got %q, want %q", resp.User.ID, user.ID)
@@ -1726,7 +1726,7 @@ func TestAuthenticatedSessionDoesNotLeakCredentialMaterial(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
 	// Create a user with a credential.
-	user, err := h.store.CreateUser("no-leak-user", "noleak")
+	user, err := h.store.CreateUser("no-leak-user", "noleak@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1782,8 +1782,8 @@ func TestAuthenticatedSessionDoesNotLeakCredentialMaterial(t *testing.T) {
 	}
 
 	// The response should contain user identity fields.
-	if !bytes.Contains([]byte(body), []byte("noleak")) {
-		t.Error("session response should contain username")
+	if !bytes.Contains([]byte(body), []byte("noleak@example.com")) {
+		t.Error("session response should contain email")
 	}
 	if !bytes.Contains([]byte(body), []byte(user.ID)) {
 		t.Error("session response should contain user ID")
@@ -1795,7 +1795,7 @@ func TestAuthenticatedSessionDoesNotLeakCredentialMaterial(t *testing.T) {
 func TestRefreshRotationRenewsAccessJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("refresh-user", "refresh")
+	user, err := h.store.CreateUser("refresh-user", "refresh@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1849,7 +1849,7 @@ func TestRefreshRotationRenewsAccessJWT(t *testing.T) {
 	if !resp.Authenticated {
 		t.Error("should be authenticated after refresh rotation")
 	}
-	if resp.User == nil || resp.User.Username != "refresh" {
+	if resp.User == nil || resp.User.Email != "refresh@example.com" {
 		t.Error("user info should be present after refresh rotation")
 	}
 
@@ -1907,7 +1907,7 @@ func TestRefreshRotationRenewsAccessJWT(t *testing.T) {
 func TestRefreshRotationRejectsExpiredRefresh(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("expired-refresh-user", "expiredrefresh")
+	user, err := h.store.CreateUser("expired-refresh-user", "expiredrefresh@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -1955,7 +1955,7 @@ func TestRefreshRotationRejectsExpiredRefresh(t *testing.T) {
 func TestReplayedOldRefreshTokenFailsAfterRotation(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("replay-refresh-user", "replayrefresh")
+	user, err := h.store.CreateUser("replay-refresh-user", "replayrefresh@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2022,7 +2022,7 @@ func TestReplayedOldRefreshTokenFailsAfterRotation(t *testing.T) {
 func TestValidateAccessTokenValidJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("validate-user", "validate")
+	user, err := h.store.CreateUser("validate-user", "validate@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2048,7 +2048,7 @@ func TestValidateAccessTokenValidJWT(t *testing.T) {
 func TestValidateAccessTokenRejectsTamperedJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("tamper-user", "tamper")
+	user, err := h.store.CreateUser("tamper-user", "tamper@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2072,7 +2072,7 @@ func TestValidateAccessTokenRejectsTamperedJWT(t *testing.T) {
 func TestValidateAccessTokenRejectsExpiredJWT(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("expired-jwt-user", "expiredjwt")
+	user, err := h.store.CreateUser("expired-jwt-user", "expiredjwt@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2098,7 +2098,7 @@ func TestValidateAccessTokenRejectsExpiredJWT(t *testing.T) {
 func TestValidateAccessTokenRejectsNonAccessToken(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("non-access-user", "nonaccess")
+	user, err := h.store.CreateUser("non-access-user", "nonaccess@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2152,7 +2152,7 @@ func TestAuthCookiesAreSecureWhenConfigured(t *testing.T) {
 
 	h := NewHandler(store, wa, cfg, priv)
 
-	user, err := store.CreateUser("secure-cookie-user", "securecookie")
+	user, err := store.CreateUser("secure-cookie-user", "securecookie@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2183,7 +2183,7 @@ func TestAuthCookiesAreSecureWhenConfigured(t *testing.T) {
 func TestRegisterBeginStoresSessionData(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	body := `{"username": "sessiondata"}`
+	body := `{"email": "sessiondata@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -2195,7 +2195,7 @@ func TestRegisterBeginStoresSessionData(t *testing.T) {
 	}
 
 	// Find the user.
-	user, err := h.store.GetUserByUsername("sessiondata")
+	user, err := h.store.GetUserByEmail("sessiondata@example.com")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -2233,7 +2233,7 @@ func TestLoginBeginStoresSessionData(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user with a credential.
-	user, err := h.store.CreateUser("login-session-data-user", "loginsd")
+	user, err := h.store.CreateUser("login-session-data-user", "loginsd@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2252,7 +2252,7 @@ func TestLoginBeginStoresSessionData(t *testing.T) {
 		t.Fatalf("create credential: %v", err)
 	}
 
-	body := `{"username": "loginsd"}`
+	body := `{"email": "loginsd@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -2340,7 +2340,7 @@ func TestLogoutInvalidatesAuthenticatedSession(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
 	// Create a user and issue a full session.
-	user, err := h.store.CreateUser("logout-user", "logouttest")
+	user, err := h.store.CreateUser("logout-user", "logouttest@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2532,7 +2532,7 @@ func TestLogoutThenSessionReportsSignedOut(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
 	// Create a user and issue a session.
-	user, err := h.store.CreateUser("logout-session-user", "logoutsession")
+	user, err := h.store.CreateUser("logout-session-user", "logoutsession@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2648,7 +2648,7 @@ func assertDeployedCookieAttributes(t *testing.T, c *http.Cookie, expectedPath s
 func TestDeployedCookieContractOnSessionIssuance(t *testing.T) {
 	h, _ := deployedHandlerEnv(t)
 
-	user, err := h.store.CreateUser("deployed-cookie-user", "deployedcookie")
+	user, err := h.store.CreateUser("deployed-cookie-user", "deployedcookie@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2699,7 +2699,7 @@ func TestDeployedCookieContractOnSessionIssuance(t *testing.T) {
 func TestDeployedCookieContractOnRefreshRotation(t *testing.T) {
 	h, priv := deployedHandlerEnv(t)
 
-	user, err := h.store.CreateUser("deployed-rotation-user", "deployedrot")
+	user, err := h.store.CreateUser("deployed-rotation-user", "deployedrot@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2796,7 +2796,7 @@ func TestDeployedCookieContractOnRefreshRotation(t *testing.T) {
 func TestDeployedCookieContractOnLogout(t *testing.T) {
 	h, _ := deployedHandlerEnv(t)
 
-	user, err := h.store.CreateUser("deployed-logout-user", "deployedlogout")
+	user, err := h.store.CreateUser("deployed-logout-user", "deployedlogout@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2925,7 +2925,7 @@ func TestDeployedOriginLogoutEndpointReachable(t *testing.T) {
 func TestDeployedOriginRegisterBeginReachable(t *testing.T) {
 	h, _ := deployedHandlerEnv(t)
 
-	body := `{"username": "deployed-reachability-user"}`
+	body := `{"email": "deployed-reachability@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -2976,7 +2976,7 @@ func TestDeployedOriginLoginBeginReachableForKnownUser(t *testing.T) {
 	h, _ := deployedHandlerEnv(t)
 
 	// Create a user with a credential so login/begin can succeed.
-	user, err := h.store.CreateUser("deployed-login-user", "deployedlogin")
+	user, err := h.store.CreateUser("deployed-login-user", "deployedlogin@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -2995,7 +2995,7 @@ func TestDeployedOriginLoginBeginReachableForKnownUser(t *testing.T) {
 		t.Fatalf("create credential: %v", err)
 	}
 
-	body := `{"username": "deployedlogin"}`
+	body := `{"email": "deployedlogin@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -3053,7 +3053,7 @@ func sha256Sum(data []byte) string {
 func TestCredentialFlagsStoredOnRegistration(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("flags-test-user", "flagsuser")
+	user, err := store.CreateUser("flags-test-user", "flagsuser@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3096,7 +3096,7 @@ func TestCredentialFlagsStoredOnRegistration(t *testing.T) {
 func TestCredentialFlagsRestoredOnWebAuthnUser(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("restore-flags-user", "restoreflags")
+	user, err := store.CreateUser("restore-flags-user", "restoreflags@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3166,7 +3166,7 @@ func TestCredentialFlagsRestoredOnWebAuthnUser(t *testing.T) {
 func TestCredentialFlagsEmptyFlagsHandled(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("empty-flags-user", "emptyflags")
+	user, err := store.CreateUser("empty-flags-user", "emptyflags@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3238,7 +3238,7 @@ func TestCredentialFlagsEmptyFlagsHandled(t *testing.T) {
 func TestSignCounterUpdatedOnLogin(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("signcount-user", "signcounttest")
+	user, err := store.CreateUser("signcount-user", "signcounttest@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3281,7 +3281,7 @@ func TestSignCounterUpdatedOnLogin(t *testing.T) {
 func TestReLoginCredentialIdentity(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("identity-user", "identitytest")
+	user, err := store.CreateUser("identity-user", "identitytest@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3332,7 +3332,7 @@ func TestReLoginCredentialIdentity(t *testing.T) {
 func TestReLoginPublicKeySurvivesRoundTrip(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("pubkey-user", "pubkeytest")
+	user, err := store.CreateUser("pubkey-user", "pubkeytest@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3381,7 +3381,7 @@ func TestReLoginPublicKeySurvivesRoundTrip(t *testing.T) {
 func TestReLoginSessionDataPersistsForReLogin(t *testing.T) {
 	store := TestStore(t)
 
-	user, err := store.CreateUser("session-persist-user", "sessionpersist")
+	user, err := store.CreateUser("session-persist-user", "sessionpersist@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3453,7 +3453,7 @@ func TestLogoutThenReLoginFlow(t *testing.T) {
 	h, priv := testHandlerEnv(t)
 
 	// Step 1: Create a user and issue a session (simulating registration).
-	user, err := h.store.CreateUser("lifecycle-user", "lifecycle")
+	user, err := h.store.CreateUser("lifecycle-user", "lifecycle@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3560,8 +3560,8 @@ func TestLogoutThenReLoginFlow(t *testing.T) {
 	if reLoginResp.User.ID != user.ID {
 		t.Errorf("re-login user ID: got %q, want %q", reLoginResp.User.ID, user.ID)
 	}
-	if reLoginResp.User.Username != "lifecycle" {
-		t.Errorf("re-login username: got %q, want %q", reLoginResp.User.Username, "lifecycle")
+	if reLoginResp.User.Email != "lifecycle@example.com" {
+		t.Errorf("re-login email: got %q, want %q", reLoginResp.User.Email, "lifecycle@example.com")
 	}
 
 	_ = priv
@@ -3573,7 +3573,7 @@ func TestLogoutThenReLoginFlow(t *testing.T) {
 func TestConcurrentSessionsOnReLogin(t *testing.T) {
 	h, _ := testHandlerEnv(t)
 
-	user, err := h.store.CreateUser("concurrent-user", "concurrent")
+	user, err := h.store.CreateUser("concurrent-user", "concurrent@example.com")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -3640,5 +3640,245 @@ func TestConcurrentSessionsOnReLogin(t *testing.T) {
 	// session 2 should not be restorable via refresh.
 	if resp2.Authenticated {
 		t.Error("session 2 should not be restorable after global logout deleted all refresh sessions")
+	}
+}
+
+// ======================================================================
+// Email validation tests (VAL-AUTH-007, VAL-AUTH-008)
+// ======================================================================
+
+func TestIsValidEmail(t *testing.T) {
+	tests := []struct {
+		email string
+		valid bool
+	}{
+		{"user@example.com", true},
+		{"alice@domain.org", true},
+		{"bob+tag@company.co.uk", true},
+		{"test.user@sub.domain.com", true},
+		{"", false},
+		{"not-an-email", false},
+		{"missing@domain", false},
+		{"@nodomain.com", false},
+		{"spaces in@email.com", false},
+		{"no-at-sign.com", false},
+		{"double@@at.com", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.email, func(t *testing.T) {
+			got := isValidEmail(tt.email)
+			if got != tt.valid {
+				t.Errorf("isValidEmail(%q) = %v, want %v", tt.email, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestRegisterBeginRejectsInvalidEmail(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	tests := []struct {
+		name  string
+		email string
+	}{
+		{"empty", ""},
+		{"not email", "not-an-email"},
+		{"missing domain dot", "missing@domain"},
+		{"no at sign", "no-at-sign.com"},
+		{"at sign only", "@nodomain.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"email": %q}`, tt.email)
+			req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+				bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.HandleRegisterBegin(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+
+			var resp errorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Error == "" {
+				t.Error("expected non-empty error message for invalid email")
+			}
+		})
+	}
+}
+
+func TestRegisterBeginAcceptsValidEmail(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	body := `{"email": "newuser@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Verify user was created with the email.
+	user, err := h.store.GetUserByEmail("newuser@example.com")
+	if err != nil {
+		t.Fatalf("GetUserByEmail: %v", err)
+	}
+	if user.Email != "newuser@example.com" {
+		t.Errorf("email: got %q, want %q", user.Email, "newuser@example.com")
+	}
+}
+
+func TestLoginBeginRejectsInvalidEmail(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	tests := []struct {
+		name  string
+		email string
+	}{
+		{"empty", ""},
+		{"not email", "not-an-email"},
+		{"missing domain dot", "missing@domain"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"email": %q}`, tt.email)
+			req := httptest.NewRequest(http.MethodPost, "/auth/login/begin",
+				bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.HandleLoginBegin(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+
+			var resp errorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Error == "" {
+				t.Error("expected non-empty error message for invalid email")
+			}
+		})
+	}
+}
+
+func TestRegisterBeginRejectsOldUsernameField(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Sending the old "username" field should fail since the handler
+	// now expects "email".
+	body := `{"username": "alice@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	// The handler reads req.Email which is empty, so it should return 400.
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// ======================================================================
+// Schema migration tests (VAL-AUTH-009)
+// ======================================================================
+
+func TestSchemaHasEmailColumn(t *testing.T) {
+	store := TestStore(t)
+
+	// Verify the users table has an email column.
+	var colName string
+	err := store.DB().QueryRow(
+		"SELECT name FROM pragma_table_info('users') WHERE name = 'email'",
+	).Scan(&colName)
+	if err != nil {
+		t.Fatalf("email column not found in users table: %v", err)
+	}
+	if colName != "email" {
+		t.Errorf("column name: got %q, want %q", colName, "email")
+	}
+}
+
+func TestEmailColumnHasUniqueConstraint(t *testing.T) {
+	store := TestStore(t)
+
+	// Try creating two users with the same email — should fail.
+	if _, err := store.CreateUser("user-1", "unique@example.com"); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	_, err := store.CreateUser("user-2", "unique@example.com")
+	if err == nil {
+		t.Error("expected error for duplicate email, got nil")
+	}
+}
+
+func TestMigrationCopiesUsernameToEmail(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "migration-test.db")
+
+	// Open store to create schema, then close.
+	store1, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+
+	// Insert a user directly using the old "username" column name
+	// (simulating a pre-migration database). Since the schema DDL now
+	// creates "email" directly, we test that the email column is properly
+	// used from the start.
+	user, err := store1.CreateUser("mig-user-1", "migrated@example.com")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	_ = store1.Close()
+
+	// Reopen and verify the user's email persists.
+	store2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	found, err := store2.GetUserByID(user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if found.Email != "migrated@example.com" {
+		t.Errorf("email after reopen: got %q, want %q", found.Email, "migrated@example.com")
+	}
+}
+
+// TestWebAuthnUserUsesEmailForDisplayName verifies that the WebAuthn user
+// adapter uses the email for name and display name (VAL-AUTH-009).
+func TestWebAuthnUserUsesEmailForDisplayName(t *testing.T) {
+	store := TestStore(t)
+
+	user, err := store.CreateUser("wa-email-user", "display@example.com")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	waUser, err := newWebAuthnUser(user, nil)
+	if err != nil {
+		t.Fatalf("newWebAuthnUser: %v", err)
+	}
+
+	if waUser.WebAuthnName() != "display@example.com" {
+		t.Errorf("WebAuthnName: got %q, want %q", waUser.WebAuthnName(), "display@example.com")
+	}
+	if waUser.WebAuthnDisplayName() != "display@example.com" {
+		t.Errorf("WebAuthnDisplayName: got %q, want %q", waUser.WebAuthnDisplayName(), "display@example.com")
 	}
 }

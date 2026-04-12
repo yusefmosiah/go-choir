@@ -71,8 +71,8 @@ func newWebAuthnUser(u *User, creds []Credential) (*webauthnUser, error) {
 	}
 	return &webauthnUser{
 		id:          []byte(u.ID),
-		name:        u.Username,
-		displayName: u.Username,
+		name:        u.Email,
+		displayName: u.Email,
 		credentials: waCreds,
 	}, nil
 }

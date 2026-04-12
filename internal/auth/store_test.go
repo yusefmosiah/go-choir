@@ -83,30 +83,30 @@ func TestCreateUser(t *testing.T) {
 	if user.ID != "user-1" {
 		t.Errorf("ID: got %q, want %q", user.ID, "user-1")
 	}
-	if user.Username != "alice" {
-		t.Errorf("Username: got %q, want %q", user.Username, "alice")
+	if user.Email != "alice" {
+		t.Errorf("Email: got %q, want %q", user.Email, "alice")
 	}
 	if user.CreatedAt.IsZero() {
 		t.Error("CreatedAt should not be zero")
 	}
 }
 
-func TestCreateUserDuplicateUsername(t *testing.T) {
+func TestCreateUserDuplicateEmail(t *testing.T) {
 	store := TestStore(t)
 
-	if _, err := store.CreateUser("user-1", "alice"); err != nil {
+	if _, err := store.CreateUser("user-1", "alice@example.com"); err != nil {
 		t.Fatalf("first CreateUser: %v", err)
 	}
-	_, err := store.CreateUser("user-2", "alice") // same username
+	_, err := store.CreateUser("user-2", "alice@example.com") // same email
 	if err == nil {
-		t.Error("expected error for duplicate username, got nil")
+		t.Error("expected error for duplicate email, got nil")
 	}
 }
 
 func TestGetUserByID(t *testing.T) {
 	store := TestStore(t)
 
-	if _, err := store.CreateUser("user-1", "alice"); err != nil {
+	if _, err := store.CreateUser("user-1", "alice@example.com"); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -114,8 +114,8 @@ func TestGetUserByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserByID: %v", err)
 	}
-	if user.Username != "alice" {
-		t.Errorf("Username: got %q, want %q", user.Username, "alice")
+	if user.Email != "alice@example.com" {
+		t.Errorf("Email: got %q, want %q", user.Email, "alice@example.com")
 	}
 }
 
@@ -128,26 +128,26 @@ func TestGetUserByIDNotFound(t *testing.T) {
 	}
 }
 
-func TestGetUserByUsername(t *testing.T) {
+func TestGetUserByEmail(t *testing.T) {
 	store := TestStore(t)
 
-	if _, err := store.CreateUser("user-1", "alice"); err != nil {
+	if _, err := store.CreateUser("user-1", "alice@example.com"); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	user, err := store.GetUserByUsername("alice")
+	user, err := store.GetUserByEmail("alice@example.com")
 	if err != nil {
-		t.Fatalf("GetUserByUsername: %v", err)
+		t.Fatalf("GetUserByEmail: %v", err)
 	}
 	if user.ID != "user-1" {
 		t.Errorf("ID: got %q, want %q", user.ID, "user-1")
 	}
 }
 
-func TestGetUserByUsernameNotFound(t *testing.T) {
+func TestGetUserByEmailNotFound(t *testing.T) {
 	store := TestStore(t)
 
-	_, err := store.GetUserByUsername("nobody")
+	_, err := store.GetUserByEmail("nobody@example.com")
 	if err != sql.ErrNoRows {
 		t.Errorf("expected sql.ErrNoRows, got: %v", err)
 	}
@@ -900,7 +900,7 @@ func TestSessionDataSurvivesAuthRestart(t *testing.T) {
 	}
 
 	// Create a user.
-	user, err := store1.CreateUser("user-restart-001", "restart-tester")
+	user, err := store1.CreateUser("user-restart-001", "restart-tester@example.com")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -948,8 +948,8 @@ func TestSessionDataSurvivesAuthRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserByID after restart: %v", err)
 	}
-	if foundUser.Username != "restart-tester" {
-		t.Errorf("user after restart: got username %q, want %q", foundUser.Username, "restart-tester")
+	if foundUser.Email != "restart-tester@example.com" {
+		t.Errorf("user after restart: got email %q, want %q", foundUser.Email, "restart-tester@example.com")
 	}
 
 	// Verify the credential still exists.
@@ -997,7 +997,7 @@ func TestRefreshRotationWorksAfterAuthRestart(t *testing.T) {
 		t.Fatalf("first OpenStore: %v", err)
 	}
 
-	user, err := store1.CreateUser("user-rotation-001", "rotation-tester")
+	user, err := store1.CreateUser("user-rotation-001", "rotation-tester@example.com")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -1066,7 +1066,7 @@ func TestRefreshRotationWorksAfterAuthRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserByID after rotation: %v", err)
 	}
-	if foundUser.Username != "rotation-tester" {
-		t.Errorf("user after rotation: got username %q, want %q", foundUser.Username, "rotation-tester")
+	if foundUser.Email != "rotation-tester@example.com" {
+		t.Errorf("user after rotation: got email %q, want %q", foundUser.Email, "rotation-tester@example.com")
 	}
 }

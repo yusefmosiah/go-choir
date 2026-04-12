@@ -19,7 +19,7 @@ type Store struct {
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS users (
 	id         TEXT PRIMARY KEY,
-	username   TEXT UNIQUE NOT NULL,
+	email      TEXT UNIQUE NOT NULL,
 	created_at DATETIME NOT NULL
 );
 
@@ -74,12 +74,15 @@ var schemaMigrations = []string{
 	// Added flags column for storing WebAuthn CredentialFlags (backup_eligible,
 	// backup_state, user_present, user_verified) needed for re-login verification.
 	`ALTER TABLE credentials ADD COLUMN flags TEXT NOT NULL DEFAULT '{}'`,
+	// Migrate username column to email. SQLite doesn't support ALTER COLUMN RENAME,
+	// so we add the email column if it doesn't exist and migrate data.
+	`ALTER TABLE users ADD COLUMN email TEXT`,
 }
 
 // User represents a row in the users table.
 type User struct {
 	ID        string
-	Username  string
+	Email     string
 	CreatedAt time.Time
 }
 
@@ -169,6 +172,11 @@ func (s *Store) bootstrap() error {
 		}
 	}
 
+	// Migrate existing users: copy username → email if email column was just added.
+	if err := s.migrateUsernameToEmail(); err != nil {
+		return fmt.Errorf("migrate username to email: %w", err)
+	}
+
 	return nil
 }
 
@@ -197,6 +205,31 @@ func searchSubstring(s, substr string) bool {
 	return false
 }
 
+// migrateUsernameToEmail handles the migration from username to email column.
+// If the email column was just added (from the migration), it copies data
+// from username to email for existing rows. If the email column already
+// existed (fresh database), this is a no-op.
+func (s *Store) migrateUsernameToEmail() error {
+	// Check if the email column has any NULL values (meaning it was just added
+	// and hasn't been populated yet).
+	var nullCount int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE email IS NULL").Scan(&nullCount)
+	if err != nil {
+		// Table might not exist yet in some edge cases — safe to ignore.
+		return nil
+	}
+
+	if nullCount > 0 {
+		// Copy username values to email for rows where email is NULL.
+		_, err := s.db.Exec("UPDATE users SET email = username WHERE email IS NULL")
+		if err != nil {
+			return fmt.Errorf("copy username to email: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	if s.db != nil {
@@ -212,36 +245,36 @@ func (s *Store) DB() *sql.DB {
 }
 
 // CreateUser inserts a new user and returns it.
-func (s *Store) CreateUser(id, username string) (*User, error) {
+func (s *Store) CreateUser(id, email string) (*User, error) {
 	now := time.Now().UTC()
 	_, err := s.db.Exec(
-		"INSERT INTO users (id, username, created_at) VALUES (?, ?, ?)",
-		id, username, now,
+		"INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)",
+		id, email, now,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create user %q: %w", username, err)
+		return nil, fmt.Errorf("create user %q: %w", email, err)
 	}
-	return &User{ID: id, Username: username, CreatedAt: now}, nil
+	return &User{ID: id, Email: email, CreatedAt: now}, nil
 }
 
 // GetUserByID returns the user with the given ID, or sql.ErrNoRows.
 func (s *Store) GetUserByID(id string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRow(
-		"SELECT id, username, created_at FROM users WHERE id = ?", id,
-	).Scan(&u.ID, &u.Username, &u.CreatedAt)
+		"SELECT id, email, created_at FROM users WHERE id = ?", id,
+	).Scan(&u.ID, &u.Email, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return u, nil
 }
 
-// GetUserByUsername returns the user with the given username, or sql.ErrNoRows.
-func (s *Store) GetUserByUsername(username string) (*User, error) {
+// GetUserByEmail returns the user with the given email, or sql.ErrNoRows.
+func (s *Store) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRow(
-		"SELECT id, username, created_at FROM users WHERE username = ?", username,
-	).Scan(&u.ID, &u.Username, &u.CreatedAt)
+		"SELECT id, email, created_at FROM users WHERE email = ?", email,
+	).Scan(&u.ID, &u.Email, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

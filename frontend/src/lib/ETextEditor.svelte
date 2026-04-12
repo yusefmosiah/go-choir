@@ -185,7 +185,7 @@
       const rev = await createRevision(currentDoc.doc_id, {
         content: editContent,
         authorKind: 'user',
-        authorLabel: currentUser?.username || 'unknown',
+        authorLabel: currentUser?.email || 'unknown',
         citations,
         metadata,
       });
