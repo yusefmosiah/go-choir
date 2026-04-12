@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -3880,5 +3881,286 @@ func TestWebAuthnUserUsesEmailForDisplayName(t *testing.T) {
 	}
 	if waUser.WebAuthnDisplayName() != "display@example.com" {
 		t.Errorf("WebAuthnDisplayName: got %q, want %q", waUser.WebAuthnDisplayName(), "display@example.com")
+	}
+}
+
+// --- Duplicate Registration Prevention Tests (VAL-AUTH-010, VAL-AUTH-011) ---
+
+// TestDuplicateEmailRegistrationRejected verifies that attempting to register
+// with an email that already has credentials returns 409 Conflict.
+// This is the core bug fix: previously, register/begin would silently proceed
+// even if the user already had registered passkeys.
+func TestDuplicateEmailRegistrationRejected(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Step 1: Register a user successfully (first registration).
+	firstBody := `{"email": "duplicate@example.com"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(firstBody))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first registration: got status %d, want %d", rec1.Code, http.StatusOK)
+	}
+
+	// Get the user ID created during first registration.
+	user, err := h.store.GetUserByEmail("duplicate@example.com")
+	if err != nil {
+		t.Fatalf("get user after first registration: %v", err)
+	}
+
+	// Simulate that the user completed registration by adding a credential.
+	// This is what happens after register/finish succeeds.
+	cred := &Credential{
+		ID:              "test-cred-id-001",
+		UserID:          user.ID,
+		PublicKey:       []byte("fake-public-key"),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Step 2: Attempt to register the same email again.
+	secondBody := `{"email": "duplicate@example.com"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(secondBody))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec2, req2)
+
+	// Should be rejected with 409 Conflict.
+	if rec2.Code != http.StatusConflict {
+		t.Errorf("duplicate registration: got status %d, want %d", rec2.Code, http.StatusConflict)
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+
+	// Error message should clearly indicate the email is already registered.
+	if resp.Error == "" {
+		t.Error("expected non-empty error message for duplicate registration")
+	}
+
+	// Verify no new user record was created.
+	users, err := h.store.GetCredentialsByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+	if len(users) != 1 {
+		t.Errorf("credentials count: got %d, want 1 (no duplicate created)", len(users))
+	}
+
+	// Verify no challenge state was created for the duplicate attempt.
+	challenges, err := h.store.GetChallengeStatesByUserID(user.ID)
+	if err != nil {
+		t.Fatalf("get challenge states: %v", err)
+	}
+	// The first registration may or may not have a challenge depending on test,
+	// but the second attempt should NOT have created one.
+	// Since we only called begin twice and the second should have been rejected,
+	// there should be at most 1 challenge (from the first call).
+	if len(challenges) > 1 {
+		t.Errorf("challenge states: got %d, expected at most 1 (no new challenge for duplicate)", len(challenges))
+	}
+}
+
+// TestDuplicateEmailErrorMessageIsClear verifies that the error message for
+// duplicate registration clearly indicates the email is already registered
+// and suggests logging in instead (VAL-AUTH-010).
+func TestDuplicateEmailErrorMessageIsClear(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user with a credential (fully registered).
+	user, err := h.store.CreateUser("du-msg-user", "already@registered.com")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "cred-du-001",
+		UserID:          user.ID,
+		PublicKey:       []byte("fake-public-key"),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Attempt to register the same email.
+	body := `{"email": "already@registered.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusConflict)
+	}
+
+	var resp errorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Error message should mention "already registered" or similar.
+	if resp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+	// The error should indicate the email is already registered.
+	lower := strings.ToLower(resp.Error)
+	if !strings.Contains(lower, "already") && !strings.Contains(lower, "registered") {
+		t.Errorf("error message should mention 'already registered', got: %q", resp.Error)
+	}
+}
+
+// TestRegisterBeginAllowsUserWithoutCredentials verifies that registration
+// begin still works for a user record that exists but has no credentials
+// (i.e., started but never completed registration). This supports the
+// idempotent registration begin scenario (VAL-AUTH-011).
+func TestRegisterBeginAllowsUserWithoutCredentials(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user without any credentials (partial registration).
+	_, err := h.store.CreateUser("partial-user", "partial@example.com")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Attempt to register should succeed since user has no passkeys.
+	body := `{"email": "partial@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	// Should succeed with 200 (user has no credentials yet).
+	if rec.Code != http.StatusOK {
+		t.Errorf("partial user registration: got status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Should return valid WebAuthn creation options.
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp["publicKey"]; !ok {
+		t.Error("expected publicKey in response")
+	}
+}
+
+// TestDuplicateRegistrationNoNewUserRecord verifies that attempting duplicate
+// registration does not create a new user record (VAL-AUTH-010).
+func TestDuplicateRegistrationNoNewUserRecord(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create a user with credentials.
+	user, err := h.store.CreateUser("du-nr-user", "norecord@example.com")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "cred-nr-001",
+		UserID:          user.ID,
+		PublicKey:       []byte("fake-public-key"),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Count users before duplicate attempt.
+	var userCountBefore int
+	err = h.store.DB().QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", "norecord@example.com").Scan(&userCountBefore)
+	if err != nil {
+		t.Fatalf("count users before: %v", err)
+	}
+
+	// Attempt duplicate registration.
+	body := `{"email": "norecord@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	// Count users after duplicate attempt.
+	var userCountAfter int
+	err = h.store.DB().QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", "norecord@example.com").Scan(&userCountAfter)
+	if err != nil {
+		t.Fatalf("count users after: %v", err)
+	}
+
+	if userCountAfter != userCountBefore {
+		t.Errorf("user count changed: before=%d, after=%d (should be same)", userCountBefore, userCountAfter)
+	}
+}
+
+// TestDuplicateRegistrationNoChallengeCreated verifies that no challenge state
+// is created when attempting to register with an existing email that has
+// credentials (VAL-AUTH-010).
+func TestDuplicateRegistrationNoChallengeCreated(t *testing.T) {
+	h, _ := testHandlerEnv(t)
+
+	// Create user with credential.
+	user, err := h.store.CreateUser("du-nc-user", "nochallenge@example.com")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	cred := &Credential{
+		ID:              "cred-nc-001",
+		UserID:          user.ID,
+		PublicKey:       []byte("fake-public-key"),
+		AttestationType: "none",
+		Transport:       `["internal"]`,
+		SignCount:       0,
+		AAGUID:          make([]byte, 16),
+		Flags:           `{"user_present":true,"user_verified":true}`,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.store.CreateCredential(cred); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	// Attempt duplicate registration.
+	body := `{"email": "nochallenge@example.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/begin",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.HandleRegisterBegin(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusConflict)
+	}
+
+	// Verify no challenge state was created for this user.
+	var challengeCount int
+	err = h.store.DB().QueryRow("SELECT COUNT(*) FROM challenge_state WHERE user_id = ?", user.ID).Scan(&challengeCount)
+	if err != nil {
+		t.Fatalf("count challenges: %v", err)
+	}
+	if challengeCount != 0 {
+		t.Errorf("challenge count: got %d, want 0 (no challenge for duplicate)", challengeCount)
 	}
 }

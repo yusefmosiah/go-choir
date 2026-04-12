@@ -401,6 +401,22 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create user"})
 			return
 		}
+	} else {
+		// User exists — check if they already have credentials.
+		creds, credErr := h.store.GetCredentialsByUserID(user.ID)
+		if credErr != nil {
+			log.Printf("auth register begin: check credentials: %v", credErr)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+			return
+		}
+		if len(creds) > 0 {
+			// User already has registered passkeys — reject duplicate registration.
+			log.Printf("auth register begin: duplicate registration attempt for %q", req.Email)
+			writeJSON(w, http.StatusConflict, errorResponse{Error: "email already registered"})
+			return
+		}
+		// User exists but has no credentials (started but didn't complete registration).
+		// Allow them to proceed with registration.
 	}
 
 	// Build a WebAuthn user adapter.
