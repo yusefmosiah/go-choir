@@ -9,3 +9,10 @@
 [2m4:03:13 PM[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
 Error: read ECONNRESET
     at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m2:59:42 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/lib/AuthEntry.svelte, /src/lib/AuthEntry.svelte?svelte&type=style&lang.css[22m
+[2m3:00:42 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/lib/AuthEntry.svelte?svelte&type=style&lang.css[22m
+[2m3:01:00 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.svelte, /src/lib/Desktop.svelte, /src/lib/ETextEditor.svelte, /src/lib/TaskRunner.svelte[22m
+[2m3:01:18 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.svelte, /src/lib/Desktop.svelte, /src/lib/ETextEditor.svelte, /src/lib/TaskRunner.svelte[22m
+[2m3:01:46 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.svelte[22m
+[2m3:02:30 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/lib/Desktop.svelte[22m
+[2m3:02:58 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/lib/ETextEditor.svelte[22m

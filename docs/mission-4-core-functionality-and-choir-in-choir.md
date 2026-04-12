@@ -23,7 +23,7 @@
    - Update database schema (auth.db)
    - Update registration form (email instead of username)
    - Update login form
-   - Migration for existing users (if any)
+
 
 3. **WebAuthn completion**
    - Verify credential creation during registration
