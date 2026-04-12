@@ -5,6 +5,8 @@
 // It is the concrete runtime that vmctl delegates to when managing
 // VM-backed sandbox workloads (VAL-VM-010, VAL-VM-011).
 //
+// Build: 2026-04-12-01 - Force rebuild after Nix cache issue
+//
 // The VMManager is designed to run only on Linux with KVM available.
 // On non-Linux platforms, the stub implementations return graceful
 // errors so that local development and testing remain possible.

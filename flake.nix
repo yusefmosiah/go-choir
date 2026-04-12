@@ -33,9 +33,7 @@
             (baseNameOf path == "go.mod") ||
             (baseNameOf path == "go.sum");
         };
-        # Force rebuild: invalidate vendorHash to ensure local source changes are picked up
-        # (The fix for MkdirAll in vmmanager is local source, not in vendor deps)
-        vendorHash = "";
+        vendorHash = "sha256-2Rg6bOMu4Ypi7C0NmwmG1Gv2h1/2oTn4z75yTwS3B6Q=";
         doCheck = false; # Tests run separately in CI
       };
 
