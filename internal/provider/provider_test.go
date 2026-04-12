@@ -512,17 +512,26 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 		t.Errorf("expected first event provider 'test-provider', got: %s", firstPayload["provider"])
 	}
 
-	// Delta event should contain the response text.
-	deltaIdx := len(events) - 1
-	var deltaPayload map[string]string
-	if err := json.Unmarshal(events[deltaIdx].payload, &deltaPayload); err != nil {
-		t.Fatalf("unmarshal delta event: %v", err)
+	// Delta event should contain the response text (emitted during streaming).
+	var foundDelta bool
+	for _, ev := range events {
+		if ev.kind == types.EventTaskDelta {
+			var deltaPayload map[string]string
+			if err := json.Unmarshal(ev.payload, &deltaPayload); err != nil {
+				t.Fatalf("unmarshal delta event: %v", err)
+			}
+			if deltaPayload["real"] != "true" {
+				t.Errorf("expected delta event real=true, got: %s", deltaPayload["real"])
+			}
+			if deltaPayload["text"] != "Real provider response!" {
+				t.Errorf("expected delta text 'Real provider response!', got: %s", deltaPayload["text"])
+			}
+			foundDelta = true
+			break
+		}
 	}
-	if deltaPayload["real"] != "true" {
-		t.Errorf("expected delta event real=true, got: %s", deltaPayload["real"])
-	}
-	if deltaPayload["text"] != "Real provider response!" {
-		t.Errorf("expected delta text 'Real provider response!', got: %s", deltaPayload["text"])
+	if !foundDelta {
+		t.Error("expected task.delta event from streaming bridge provider")
 	}
 }
 
@@ -1786,3 +1795,195 @@ func (c *capturingLLMProvider) Stream(ctx context.Context, req LLMRequest, onChu
 
 func (c *capturingLLMProvider) Name() string { return c.name }
 func (c *capturingLLMProvider) IsReal() bool { return true }
+
+// --- BridgeProvider Streaming Tests ---
+
+// streamingMockProvider is a mock LLM provider that emits multiple text chunks
+// during streaming to simulate real SSE behavior.
+type streamingMockProvider struct {
+	name   string
+	chunks []string
+	resp   *LLMResponse
+}
+
+func (s *streamingMockProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	return s.resp, nil
+}
+
+func (s *streamingMockProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	for i, chunk := range s.chunks {
+		onChunk(StreamChunk{
+			Type:  "content_block_delta",
+			Delta: chunk,
+			Index: 0,
+		})
+		_ = i
+	}
+	// Emit stop event.
+	onChunk(StreamChunk{
+		Type:       "message_stop",
+		StopReason: s.resp.StopReason,
+		Usage:      &StreamUsage{InputTokens: s.resp.Usage.InputTokens, OutputTokens: s.resp.Usage.OutputTokens},
+	})
+	return s.resp, nil
+}
+
+func (s *streamingMockProvider) Name() string { return s.name }
+func (s *streamingMockProvider) IsReal() bool { return true }
+
+func TestBridgeProviderStreamingEmitsMultipleDeltas(t *testing.T) {
+	chunks := []string{"Hello ", "world ", "from ", "streaming!"}
+	inner := &streamingMockProvider{
+		name:   "stream-test",
+		chunks: chunks,
+		resp: &LLMResponse{
+			ID:         "resp-stream-1",
+			Text:       "Hello world from streaming!",
+			Model:      "test-model",
+			StopReason: "end_turn",
+			Usage:      Usage{InputTokens: 10, OutputTokens: 20},
+		},
+	}
+
+	bridge := NewBridgeProvider(inner)
+	task := &types.TaskRecord{
+		TaskID: "task-stream-1",
+		Prompt: "Say hello",
+	}
+
+	var emitted []struct {
+		kind    types.EventKind
+		payload json.RawMessage
+	}
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
+		emitted = append(emitted, struct {
+			kind    types.EventKind
+			payload json.RawMessage
+		}{kind, payload})
+	}
+
+	err := bridge.Execute(context.Background(), task, emit)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	// Verify task result was set.
+	if task.Result != "Hello world from streaming!" {
+		t.Errorf("result = %q, want %q", task.Result, "Hello world from streaming!")
+	}
+
+	// Count delta events.
+	deltaCount := 0
+	for _, ev := range emitted {
+		if ev.kind == types.EventTaskDelta {
+			deltaCount++
+		}
+	}
+	if deltaCount != len(chunks) {
+		t.Errorf("delta count = %d, want %d", deltaCount, len(chunks))
+	}
+
+	// Verify each delta contains the expected chunk text.
+	var deltaTexts []string
+	for _, ev := range emitted {
+		if ev.kind == types.EventTaskDelta {
+			var payload map[string]string
+			if err := json.Unmarshal(ev.payload, &payload); err == nil {
+				deltaTexts = append(deltaTexts, payload["text"])
+			}
+		}
+	}
+	for i, got := range deltaTexts {
+		if got != chunks[i] {
+			t.Errorf("delta[%d] = %q, want %q", i, got, chunks[i])
+		}
+	}
+}
+
+func TestBridgeProviderStreamingUsesStreamMethod(t *testing.T) {
+	// Verify that Execute calls Stream on the inner provider, not Call,
+	// by using a provider that tracks which method was called.
+	tracker := &streamMethodTrackerProvider{
+		name: "verify-stream",
+		resp: &LLMResponse{
+			Text:       "test",
+			StopReason: "end_turn",
+			Usage:      Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	bridge := NewBridgeProvider(tracker)
+	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
+
+	err := bridge.Execute(context.Background(), task, emit)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !tracker.streamCalled {
+		t.Error("expected Stream() to be called on inner provider")
+	}
+	if tracker.callCalled {
+		t.Error("expected Call() NOT to be called when streaming is available")
+	}
+}
+
+func TestBridgeProviderStreamingRequestHasStreamTrue(t *testing.T) {
+	tracker := &streamMethodTrackerProvider{
+		name: "verify-req",
+		resp: &LLMResponse{
+			Text:       "hello",
+			StopReason: "end_turn",
+			Usage:      Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	bridge := NewBridgeProvider(tracker)
+	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
+
+	err := bridge.Execute(context.Background(), task, emit)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if tracker.capturedReq == nil {
+		t.Fatal("request was not captured")
+	}
+	if !tracker.capturedReq.Stream {
+		t.Error("expected Stream=true in the LLM request from BridgeProvider.Execute")
+	}
+}
+
+// streamMethodTrackerProvider tracks which methods (Call vs Stream) are invoked.
+type streamMethodTrackerProvider struct {
+	name         string
+	resp         *LLMResponse
+	streamCalled bool
+	callCalled   bool
+	capturedReq  *LLMRequest
+}
+
+func (s *streamMethodTrackerProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	s.callCalled = true
+	s.capturedReq = &req
+	return s.resp, nil
+}
+
+func (s *streamMethodTrackerProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	s.streamCalled = true
+	s.capturedReq = &req
+	// Emit a single delta chunk.
+	if s.resp.Text != "" {
+		onChunk(StreamChunk{
+			Type:  "content_block_delta",
+			Delta: s.resp.Text,
+			Index: 0,
+		})
+	}
+	return s.resp, nil
+}
+
+func (s *streamMethodTrackerProvider) Name() string { return s.name }
+func (s *streamMethodTrackerProvider) IsReal() bool { return true }

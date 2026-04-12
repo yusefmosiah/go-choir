@@ -46,8 +46,9 @@ func (b *BridgeProvider) Inner() Provider { return b.inner }
 func (b *BridgeProvider) ProviderName() string { return b.inner.Name() }
 
 // Execute implements the runtime.Provider interface. It translates the
-// task prompt into an LLM request, calls the real provider, emits
-// progress events during execution, and returns the result text.
+// task prompt into an LLM request, calls the real provider with streaming
+// enabled, emits incremental delta events for each text chunk, and returns
+// the accumulated result text.
 //
 // Provider failures surface as structured errors without crashing the
 // runtime (VAL-RUNTIME-008). The emitted events contain enough detail
@@ -64,10 +65,10 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 	})
 	emit(types.EventTaskProgress, "execution", startPayload)
 
-	// Build the LLM request from the task prompt.
+	// Build the LLM request from the task prompt with streaming enabled.
 	req := LLMRequest{
-		Model:    "", // model is set by the provider internally
-		System:   "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully.",
+		Model:  "", // model is set by the provider internally
+		System: "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully.",
 		Messages: []Message{
 			{
 				Role: "user",
@@ -77,14 +78,24 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 			},
 		},
 		MaxTokens: 4096,
-		Stream:    false,
+		Stream:    true,
 	}
 
-	log.Printf("bridge: calling %s provider for task %s (prompt_len=%d)",
+	log.Printf("bridge: calling %s provider (streaming) for task %s (prompt_len=%d)",
 		providerName, task.TaskID, len(task.Prompt))
 
-	// Call the real provider.
-	resp, err := b.inner.Call(ctx, req)
+	// Call the real provider with streaming.
+	resp, err := b.inner.Stream(ctx, req, func(chunk StreamChunk) {
+		// Emit a delta event for each text chunk from the provider.
+		if chunk.Delta != "" {
+			deltaPayload, _ := json.Marshal(map[string]string{
+				"text":     chunk.Delta,
+				"provider": providerName,
+				"real":     "true",
+			})
+			emit(types.EventTaskDelta, "execution", deltaPayload)
+		}
+	})
 	if err != nil {
 		// Emit a provider-failure event with sanitized error info.
 		failPayload, _ := json.Marshal(map[string]string{
@@ -101,23 +112,15 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 	// Emit a progress event with provider metadata (observable enough to
 	// distinguish real work from stub).
 	progressPayload, _ := json.Marshal(map[string]string{
-		"status":       "responded",
-		"provider":     providerName,
-		"real":         "true",
-		"model":        resp.Model,
-		"stop_reason":  resp.StopReason,
-		"tokens_in":    fmt.Sprintf("%d", resp.Usage.InputTokens),
-		"tokens_out":   fmt.Sprintf("%d", resp.Usage.OutputTokens),
+		"status":      "completed",
+		"provider":    providerName,
+		"real":        "true",
+		"model":       resp.Model,
+		"stop_reason": resp.StopReason,
+		"tokens_in":   fmt.Sprintf("%d", resp.Usage.InputTokens),
+		"tokens_out":  fmt.Sprintf("%d", resp.Usage.OutputTokens),
 	})
 	emit(types.EventTaskProgress, "execution", progressPayload)
-
-	// Emit the delta with the actual text content.
-	deltaPayload, _ := json.Marshal(map[string]string{
-		"text":     resp.Text,
-		"provider": providerName,
-		"real":     "true",
-	})
-	emit(types.EventTaskDelta, "execution", deltaPayload)
 
 	// Store the result on the task for the runtime to persist.
 	task.Result = resp.Text
@@ -163,7 +166,7 @@ func (b *BridgeProvider) CallWithTools(ctx context.Context, req runtime.ToolLoop
 		ID:         resp.ID,
 		StopReason: convertStopReason(resp.StopReason),
 		Text:       resp.Text,
-		Usage:      runtime.TokenUsage{
+		Usage: runtime.TokenUsage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
 		},
@@ -324,6 +327,8 @@ type GatewayCaller interface {
 	IsReal() bool
 	// Call sends the LLM request through the gateway.
 	Call(ctx context.Context, req LLMRequest) (*LLMResponse, error)
+	// Stream sends the LLM request through the gateway with streaming enabled.
+	Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error)
 }
 
 // NewGatewayBridgeProvider creates a GatewayBridgeProvider from a
@@ -339,7 +344,8 @@ func NewGatewayBridgeProvider(client GatewayCaller) *GatewayBridgeProvider {
 func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
 
 // Execute implements the runtime.Provider interface. It translates the
-// task prompt into an LLM request and routes it through the gateway.
+// task prompt into an LLM request and routes it through the gateway with
+// streaming enabled, emitting incremental delta events for each text chunk.
 func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit runtime.EventEmitFunc) error {
 	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"gateway","routed":true}`))
 
@@ -350,12 +356,22 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 			{Role: "user", Content: []Block{{Type: "text", Text: task.Prompt}}},
 		},
 		MaxTokens: 4096,
-		Stream:    false,
+		Stream:    true,
 	}
 
-	log.Printf("gateway-bridge: calling gateway for task %s (prompt_len=%d)", task.TaskID, len(task.Prompt))
+	log.Printf("gateway-bridge: calling gateway (streaming) for task %s (prompt_len=%d)", task.TaskID, len(task.Prompt))
 
-	resp, err := g.client.Call(ctx, req)
+	resp, err := g.client.Stream(ctx, req, func(chunk StreamChunk) {
+		// Emit a delta event for each text chunk from the gateway.
+		if chunk.Delta != "" {
+			deltaPayload, _ := json.Marshal(map[string]string{
+				"text":     chunk.Delta,
+				"provider": "gateway",
+				"routed":   "true",
+			})
+			emit(types.EventTaskDelta, "execution", deltaPayload)
+		}
+	})
 	if err != nil {
 		failPayload, _ := json.Marshal(map[string]string{
 			"status":   "failed",
@@ -368,22 +384,15 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 	}
 
 	progressPayload, _ := json.Marshal(map[string]string{
-		"status":       "responded",
-		"provider":     resp.ProviderName,
-		"routed":       "true",
-		"model":        resp.Model,
-		"stop_reason":  resp.StopReason,
-		"tokens_in":    fmt.Sprintf("%d", resp.Usage.InputTokens),
-		"tokens_out":   fmt.Sprintf("%d", resp.Usage.OutputTokens),
+		"status":      "completed",
+		"provider":    resp.ProviderName,
+		"routed":      "true",
+		"model":       resp.Model,
+		"stop_reason": resp.StopReason,
+		"tokens_in":   fmt.Sprintf("%d", resp.Usage.InputTokens),
+		"tokens_out":  fmt.Sprintf("%d", resp.Usage.OutputTokens),
 	})
 	emit(types.EventTaskProgress, "execution", progressPayload)
-
-	deltaPayload, _ := json.Marshal(map[string]string{
-		"text":     resp.Text,
-		"provider": resp.ProviderName,
-		"routed":   "true",
-	})
-	emit(types.EventTaskDelta, "execution", deltaPayload)
 
 	task.Result = resp.Text
 

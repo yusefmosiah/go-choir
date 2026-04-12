@@ -22,11 +22,31 @@ type mockGatewayCaller struct {
 	lastReq *LLMRequest // captures the most recent request
 }
 
-func (m *mockGatewayCaller) Name() string  { return m.name }
-func (m *mockGatewayCaller) IsReal() bool   { return m.isReal }
+func (m *mockGatewayCaller) Name() string { return m.name }
+func (m *mockGatewayCaller) IsReal() bool { return m.isReal }
 func (m *mockGatewayCaller) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
 	m.lastReq = &req
 	return m.resp, m.err
+}
+func (m *mockGatewayCaller) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	m.lastReq = &req
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Simulate streaming by emitting the full response text as a single chunk.
+	if m.resp != nil && m.resp.Text != "" {
+		onChunk(StreamChunk{
+			Type:  "content_block_delta",
+			Delta: m.resp.Text,
+			Index: 0,
+		})
+		onChunk(StreamChunk{
+			Type:       "message_stop",
+			StopReason: m.resp.StopReason,
+			Usage:      &StreamUsage{InputTokens: m.resp.Usage.InputTokens, OutputTokens: m.resp.Usage.OutputTokens},
+		})
+	}
+	return m.resp, nil
 }
 
 // --- GatewayBridgeProvider construction tests ---
@@ -95,7 +115,7 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		t.Fatalf("expected task result, got: %s", task.Result)
 	}
 
-	// Verify events were emitted (started, responded progress, delta).
+	// Verify events were emitted (started, delta from streaming, completed progress).
 	if len(emitted) < 3 {
 		t.Fatalf("expected at least 3 events, got %d", len(emitted))
 	}
@@ -109,12 +129,29 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		t.Fatalf("first event should indicate routed=true, got: %s", emitted[0].payload)
 	}
 
-	// Verify the request was sent correctly.
+	// Verify the request was sent with streaming enabled.
 	if mock.lastReq == nil {
 		t.Fatal("no request was sent to the gateway")
 	}
+	if !mock.lastReq.Stream {
+		t.Fatal("expected Stream=true in the request to gateway")
+	}
 	if len(mock.lastReq.Messages) != 1 || mock.lastReq.Messages[0].Role != "user" {
 		t.Fatalf("expected 1 user message, got: %+v", mock.lastReq.Messages)
+	}
+
+	// Verify a task.delta event was emitted during streaming.
+	hasDelta := false
+	for _, e := range emitted {
+		if e.kind == types.EventTaskDelta {
+			hasDelta = true
+			if !strings.Contains(e.payload, "Hello from the gateway!") {
+				t.Fatalf("delta event should contain streamed text, got: %s", e.payload)
+			}
+		}
+	}
+	if !hasDelta {
+		t.Error("expected task.delta event from streaming gateway bridge")
 	}
 }
 

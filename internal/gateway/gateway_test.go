@@ -696,6 +696,193 @@ func TestGatewayClientCall_RevokedToken(t *testing.T) {
 	}
 }
 
+func TestGatewayClientStream(t *testing.T) {
+	reg := NewIdentityRegistry(1 * time.Hour)
+	mp := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "resp-stream-1",
+			Text:         "Streaming response text",
+			Model:        "glm-5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "zai",
+			Usage:        provider.Usage{InputTokens: 10, OutputTokens: 25},
+		},
+	}
+
+	handler := NewHandler(reg, mp)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/provider/v1/inference", handler.HandleInference)
+	mux.HandleFunc("/health", handler.HandleHealth)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	result, err := reg.IssueCredential("sandbox-stream-test")
+	if err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+
+	client := NewGatewayClient(server.URL, result.RawToken)
+
+	// Stream through the gateway client.
+	var chunks []provider.StreamChunk
+	resp, err := client.Stream(context.Background(), provider.LLMRequest{
+		Model:     "glm-5-turbo",
+		System:    "You are helpful",
+		Messages:  []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Say hi"}}}},
+		MaxTokens: 100,
+		Stream:    true,
+	}, func(chunk provider.StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	// Verify the accumulated response text (text comes from delta chunks).
+	if resp.Text != "Streaming response text" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Streaming response text")
+	}
+
+	// Note: Model and StopReason may not be populated in the accumulated
+	// response if the mock provider doesn't emit message_start/message_delta
+	// events. In production, the real providers emit these events. The
+	// GatewayClient.Stream() accumulates them from the SSE stream when present.
+
+	// Verify we received at least one chunk.
+	if len(chunks) == 0 {
+		t.Fatal("expected at least one streaming chunk")
+	}
+
+	// Verify the delta chunk contains the text.
+	hasDelta := false
+	for _, chunk := range chunks {
+		if chunk.Type == "content_block_delta" && chunk.Delta != "" {
+			hasDelta = true
+			if chunk.Delta != "Streaming response text" {
+				t.Errorf("delta = %q, want %q", chunk.Delta, "Streaming response text")
+			}
+		}
+	}
+	if !hasDelta {
+		t.Error("expected content_block_delta chunk with text")
+	}
+}
+
+func TestGatewayClientStream_Error(t *testing.T) {
+	reg := NewIdentityRegistry(1 * time.Hour)
+	mp := &mockProvider{
+		name: "zai",
+		real: true,
+		err:  fmt.Errorf("provider unavailable"),
+	}
+
+	handler := NewHandler(reg, mp)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/provider/v1/inference", handler.HandleInference)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	result, err := reg.IssueCredential("sandbox-stream-err")
+	if err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+
+	client := NewGatewayClient(server.URL, result.RawToken)
+
+	_, err = client.Stream(context.Background(), provider.LLMRequest{
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hi"}}}},
+	}, func(chunk provider.StreamChunk) {})
+	if err == nil {
+		t.Fatal("expected error from streaming with provider error")
+	}
+}
+
+func TestGatewayClientStream_SSEAccumulation(t *testing.T) {
+	// Test parseGatewaySSE directly with a proper SSE stream containing
+	// message_start, content_block_delta, and message_stop events.
+	sseData := `data: {"type":"message_start","id":"msg-1","model":"glm-5-turbo"}
+
+data: {"type":"content_block_delta","delta":"Hello ","index":0}
+
+data: {"type":"content_block_delta","delta":"world","index":0}
+
+data: {"type":"message_delta","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}
+
+data: [DONE]
+
+`
+	var chunks []provider.StreamChunk
+	resp, err := parseGatewaySSE(strings.NewReader(sseData), func(chunk provider.StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("parseGatewaySSE: %v", err)
+	}
+
+	// Verify accumulated text.
+	if resp.Text != "Hello world" {
+		t.Errorf("Text = %q, want %q", resp.Text, "Hello world")
+	}
+	if resp.Model != "glm-5-turbo" {
+		t.Errorf("Model = %q, want %q", resp.Model, "glm-5-turbo")
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "end_turn")
+	}
+	if resp.ID != "msg-1" {
+		t.Errorf("ID = %q, want %q", resp.ID, "msg-1")
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage = %+v, want {10 5}", resp.Usage)
+	}
+
+	// Verify chunks were forwarded.
+	if len(chunks) != 4 { // message_start, 2 deltas, message_delta
+		t.Errorf("chunks = %d, want 4", len(chunks))
+	}
+}
+
+func TestGatewayClientStream_SSEError(t *testing.T) {
+	// Test parseGatewaySSE with an error event in the stream.
+	sseData := `data: {"error":"rate limit exceeded"}
+
+`
+	_, err := parseGatewaySSE(strings.NewReader(sseData), func(chunk provider.StreamChunk) {})
+	if err == nil {
+		t.Fatal("expected error from SSE error event")
+	}
+	if !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Errorf("error = %q, want rate limit exceeded", err.Error())
+	}
+}
+
+func TestGatewayClientStream_SSEInvalidJSON(t *testing.T) {
+	// Test parseGatewaySSE with invalid JSON (should be skipped, not error).
+	sseData := `data: not-json
+
+data: {"type":"content_block_delta","delta":"valid","index":0}
+
+data: [DONE]
+
+`
+	var chunks []provider.StreamChunk
+	resp, err := parseGatewaySSE(strings.NewReader(sseData), func(chunk provider.StreamChunk) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("parseGatewaySSE: %v", err)
+	}
+	if resp.Text != "valid" {
+		t.Errorf("Text = %q, want %q", resp.Text, "valid")
+	}
+	if len(chunks) != 1 {
+		t.Errorf("chunks = %d, want 1 (invalid JSON skipped)", len(chunks))
+	}
+}
+
 // --- Provider Error Sanitization Tests ---
 
 func TestSanitizeError_Basic(t *testing.T) {
