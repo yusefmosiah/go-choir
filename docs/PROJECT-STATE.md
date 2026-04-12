@@ -9,12 +9,15 @@
 
 **go-choir** is a distributed multi-agent operating system - a Go rewrite of ChoirOS (Rust), unified with Cogent's capabilities. The goal is a web desktop where:
 
-- **Conductor (prompt bar)** receives user input and routes to AppAgents
-- **AppAgents** (like etext) handle domain-specific work
-- **Workers** (terminal agents in microVMs) execute tasks and spawn coagents
+- **Each user has their own microVM** containing their data, apps, and agent runtime
+- **Conductor (prompt bar)** receives user input and routes to AppAgents within the user's microVM
+- **AppAgents** (like etext) handle domain-specific work within the user's microVM
+- **Workers** spawn as separate microVMs that autoscale for code execution (not terminal agents themselves)
 - **Web desktop UX** follows ChoirOS pattern: desktop icons, floating windows, bottom prompt bar
 
 **Key architectural principle:** Agents may always stop, the system may always resume.
+
+**Correction from choiros-rs:** User data lives in their dedicated microVM. The system autoscales worker execution to separate microVMs, but terminal agents and AppAgents run within the user's primary microVM.
 
 ---
 
