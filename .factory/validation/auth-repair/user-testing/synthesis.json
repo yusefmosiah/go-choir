@@ -1,0 +1,88 @@
+{
+  "milestone": "auth-repair",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-AUTH-004",
+    "VAL-AUTH-005",
+    "VAL-AUTH-007",
+    "VAL-AUTH-008",
+    "VAL-AUTH-009",
+    "VAL-AUTH-010",
+    "VAL-AUTH-011",
+    "VAL-AUTH-016",
+    "VAL-AUTH-017",
+    "VAL-AUTH-025",
+    "VAL-AUTH-026"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "testedAt": "2026-04-12T08:52:50Z",
+  "testedBy": "user-testing-validator-auth-repair",
+  "flowReports": [
+    ".factory/validation/auth-repair/user-testing/flows/auth-relogin-flow.json",
+    ".factory/validation/auth-repair/user-testing/flows/email-validation.json",
+    ".factory/validation/auth-repair/user-testing/flows/session-integration.json"
+  ],
+  "keyFindings": {
+    "criticalBugFix": {
+      "assertion": "VAL-AUTH-004, VAL-AUTH-005",
+      "finding": "The critical auth re-login bug is FIXED. Users can now register with a passkey, logout, and successfully re-login with the same passkey without requiring re-registration.",
+      "evidence": "Full browser automation test passed - Register → Login → Logout → Re-login flow works correctly"
+    },
+    "emailMigration": {
+      "assertion": "VAL-AUTH-007, VAL-AUTH-008, VAL-AUTH-009",
+      "finding": "Email-based authentication successfully implemented. Database schema migrated from username to email column with UNIQUE constraint. All 1,087 existing users have email addresses.",
+      "evidence": "Schema shows email TEXT UNIQUE NOT NULL, no username column remains"
+    },
+    "duplicatePrevention": {
+      "assertion": "VAL-AUTH-010, VAL-AUTH-011",
+      "finding": "Duplicate email registration prevention works correctly. Incomplete registrations can be resumed, completed registrations are protected from duplicates.",
+      "evidence": "Multiple register/begin calls for same email return same user ID without creating duplicates"
+    },
+    "sessionHandling": {
+      "assertion": "VAL-AUTH-016, VAL-AUTH-017",
+      "finding": "Session expiry forces re-authentication correctly. Concurrent session handling supports multiple devices per user (867 sessions for 1,079 users).",
+      "evidence": "Invalid/expired cookies return {authenticated: false}, database supports multiple refresh_sessions per user"
+    },
+    "integration": {
+      "assertion": "VAL-AUTH-025, VAL-AUTH-026",
+      "finding": "Proxy correctly forwards auth cookies to upstream. Database persistence verified with 1.1MB SQLite file containing all auth data.",
+      "evidence": "Proxy health check OK, verbose curl shows cookies forwarded, database has users/credentials/sessions tables"
+    }
+  },
+  "frictionsEncountered": [
+    {
+      "description": "Auth database file was initially 0 bytes (empty), causing credential storage to fail",
+      "resolution": "Restarted auth service to properly initialize database schema",
+      "affectedFlows": ["auth-relogin-flow"]
+    },
+    {
+      "description": "Database path mismatch - tests were querying wrong database location",
+      "resolution": "Discovered correct path via lsof: /tmp/go-choir-m2/auth/auth.db",
+      "affectedFlows": ["email-validation", "session-integration"]
+    },
+    {
+      "description": "Auth service was running old binary with 'username' field instead of 'email'",
+      "resolution": "Restarted auth service with current code (go run ./cmd/auth)",
+      "affectedFlows": ["email-validation"]
+    }
+  ],
+  "toolsUsed": ["agent-browser", "playwright", "curl", "sqlite3"],
+  "servicesTested": ["auth (8081)", "proxy (8082)", "frontend (4173)"],
+  "appliedUpdates": [
+    {
+      "target": "validation-state.json",
+      "description": "Marked 11 assertions as passed for auth-repair milestone",
+      "source": "flow-reports"
+    }
+  ],
+  "previousRound": null,
+  "notes": "All critical auth-repair assertions passed. The re-login bug fix is verified working through full browser automation. Email migration complete with proper validation and duplicate prevention."
+}

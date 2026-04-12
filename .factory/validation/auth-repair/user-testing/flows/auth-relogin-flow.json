@@ -1,0 +1,156 @@
+{
+  "groupId": "auth-relogin-flow",
+  "testedAt": "2026-04-12T08:52:00Z",
+  "isolation": {
+    "authServiceUrl": "http://127.0.0.1:8081",
+    "frontendUrl": "http://localhost:4173",
+    "authDatabase": "/Users/wiz/go-choir/auth.db",
+    "testEmails": [
+      "val-test-1775983978298-ii9d19@example.com",
+      "val-test-1775983979271-tww6kf@example.com"
+    ]
+  },
+  "toolsUsed": ["agent-browser", "playwright"],
+  "assertions": [
+    {
+      "id": "VAL-AUTH-004",
+      "title": "Login Finish Verifies Credential and Issues Session (Re-login)",
+      "description": "POST /auth/login/finish with a valid WebAuthn assertion response verifies the credential against stored public key and issues new session cookies. This is the CRITICAL bug fix - re-login must work.",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /auth/login/begin with existing user email",
+          "expected": "HTTP 200 OK with publicKey containing allowCredentials array",
+          "observed": "HTTP 200 OK with publicKey.allowCredentials containing 1 credential"
+        },
+        {
+          "action": "navigator.credentials.get() with assertion options",
+          "expected": "Returns valid WebAuthn assertion",
+          "observed": "Successfully created assertion with credential ID"
+        },
+        {
+          "action": "POST /auth/login/finish with assertion response",
+          "expected": "HTTP 200 OK with {ok: true, user: {...}}",
+          "observed": "HTTP 200 OK, response: {ok: true, user: {id: '...', email: '...'}}"
+        },
+        {
+          "action": "Verify cookies issued",
+          "expected": "choir_access and choir_refresh cookies set (HttpOnly, SameSite)",
+          "observed": "Both cookies present with correct attributes - HttpOnly: true, SameSite: Lax"
+        },
+        {
+          "action": "GET /auth/session",
+          "expected": "Returns authenticated: true with user data",
+          "observed": "{authenticated: true, user: {id: '...', email: '...', created_at: '...'}}"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "auth-repair/auth-relogin-flow/VAL-AUTH-004-step1-login-begin.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-004-step3-login-finish-success.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-004-step4-session-and-cookies-verified.png"
+        ],
+        "consoleErrors": "none",
+        "network": [
+          "POST /auth/login/begin -> 200 OK",
+          "POST /auth/login/finish -> 200 OK",
+          "GET /auth/session -> 200 OK (authenticated: true)"
+        ],
+        "databaseVerification": "credential sign_count updated from 0 to 1 after login"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-AUTH-005",
+      "title": "Full Flow - Register → Login → Logout → Re-login",
+      "description": "Complete user journey: Register with passkey, logout completely, then successfully re-login with the SAME passkey without re-registration.",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Navigate to http://localhost:4173",
+          "expected": "Auth entry page displayed with Register/Sign In options",
+          "observed": "Auth page loaded with email input and passkey buttons"
+        },
+        {
+          "action": "Register with unique email using virtual authenticator",
+          "expected": "Registration succeeds, session established",
+          "observed": "POST /auth/register/begin -> 200, POST /auth/register/finish -> 200 {ok: true}"
+        },
+        {
+          "action": "Verify login succeeds and session is established",
+          "expected": "GET /auth/session returns authenticated: true",
+          "observed": "Session confirmed authenticated with correct user email"
+        },
+        {
+          "action": "Logout (clear cookies/session)",
+          "expected": "POST /auth/logout succeeds, cookies cleared",
+          "observed": "Logout returned {authenticated: false}, cookies cleared"
+        },
+        {
+          "action": "Verify logged out state",
+          "expected": "GET /auth/session returns authenticated: false",
+          "observed": "Session shows authenticated: false as expected"
+        },
+        {
+          "action": "Re-login with same email and same passkey (CRITICAL TEST)",
+          "expected": "Re-login succeeds without requiring re-registration",
+          "observed": "POST /auth/login/begin -> 200, POST /auth/login/finish -> 200 {ok: true}"
+        },
+        {
+          "action": "Verify re-login session",
+          "expected": "GET /auth/session returns authenticated: true with same user",
+          "observed": "Session authenticated with same user ID and email as original registration"
+        }
+      ],
+      "evidence": {
+        "screenshots": [
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step1-initial-page.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step2-email-filled.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step3-after-registration.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step4-authenticated-session.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step5-after-logout.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step6-logged-out-session.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step7-after-relogin.png",
+          "auth-repair/auth-relogin-flow/VAL-AUTH-005-step8-relogin-session-confirmed.png"
+        ],
+        "consoleErrors": "none",
+        "network": [
+          "POST /auth/register/begin -> 200 OK",
+          "POST /auth/register/finish -> 200 OK {ok: true}",
+          "GET /auth/session -> 200 OK {authenticated: true}",
+          "POST /auth/logout -> 200 OK {authenticated: false}",
+          "GET /auth/session -> 200 OK {authenticated: false}",
+          "POST /auth/login/begin -> 200 OK (re-login)",
+          "POST /auth/login/finish -> 200 OK {ok: true} (re-login)",
+          "GET /auth/session -> 200 OK {authenticated: true} (re-login)"
+        ],
+        "testUserId": "74b04210-a15e-440b-a707-1ea9181f5c1d",
+        "testUserEmail": "val-test-1775983978298-ii9d19@example.com"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Auth database file (auth.db) was initially 0 bytes (empty), causing all credential storage to fail with 'failed to store credential' error. Required restarting the auth service to properly initialize the database schema.",
+      "resolved": true,
+      "resolution": "Killed existing auth processes, removed empty auth.db, restarted auth service which created proper schema. Tests then passed.",
+      "affectedAssertions": ["VAL-AUTH-004", "VAL-AUTH-005"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Both assertions PASSED. The critical re-login bug fix is verified working: users can register with a passkey, logout, and successfully re-login with the same passkey without re-registration. The login finish endpoint correctly verifies the credential against the stored public key and issues new session cookies.",
+  "testDetails": {
+    "playwrightTestsRun": [
+      "auth-passkey.spec.js (6 tests - all passed)",
+      "register-login-shell.spec.js (11 tests - all passed)",
+      "val-auth-relogin-flow.spec.js (2 tests - all passed)"
+    ],
+    "totalTests": 19,
+    "passed": 19,
+    "failed": 0
+  },
+  "validationContractVersion": "1.0",
+  "milestone": "auth-repair",
+  "missionId": "0411ccd8-943c-4cab-92ab-9528cccd79b5"
+}
