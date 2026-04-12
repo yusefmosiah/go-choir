@@ -1618,6 +1618,342 @@ func TestHandleInference_NonStreamingStillWorks(t *testing.T) {
 	}
 }
 
+// --- Comprehensive Provider Routing Tests (VAL-LLM-005, VAL-LLM-006, VAL-LLM-007) ---
+
+// TestProviderRouting is a table-driven test covering all multi-provider
+// routing scenarios. It validates that the gateway correctly selects the
+// provider based on explicit provider field, model parameter, or model
+// name heuristics, and rejects invalid/unknown providers with 400 errors.
+//
+// Verification: go test ./internal/gateway/... -run TestProviderRouting
+func TestProviderRouting(t *testing.T) {
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	fireworksProvider := &mockProvider{
+		name: "fireworks",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "fw-resp-routing",
+			Text:         "Fireworks response",
+			Model:        "accounts/fireworks/routers/kimi-k2p5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "fireworks",
+			Usage:        provider.Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	zaiProvider := &mockProvider{
+		name: "zai",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "zai-resp-routing",
+			Text:         "Z.AI response",
+			Model:        "glm-5-turbo",
+			StopReason:   "end_turn",
+			ProviderName: "zai",
+			Usage:        provider.Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	bedrockProvider := &mockProvider{
+		name: "bedrock",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "br-resp-routing",
+			Text:         "Bedrock response",
+			Model:        "us.anthropic.claude-sonnet-4-6",
+			StopReason:   "end_turn",
+			ProviderName: "bedrock",
+			Usage:        provider.Usage{InputTokens: 5, OutputTokens: 5},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("fireworks", fireworksProvider)
+	mp.Register("zai", zaiProvider)
+	mp.Register("bedrock", bedrockProvider)
+
+	h := NewMultiHandler(reg, mp)
+
+	// Issue a single credential for all sub-tests.
+	cred, _ := reg.IssueCredential("sandbox-routing-test")
+
+	tests := []struct {
+		name             string
+		provider         string
+		model            string
+		wantStatus       int
+		wantProviderName string // expected provider_name in response (empty for errors)
+		wantErrorContain string // expected error substring (empty for success)
+	}{
+		// VAL-LLM-005: Gateway routes Fireworks model to Fireworks provider.
+		{
+			name:             "explicit_provider_fireworks",
+			provider:         "fireworks",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "fireworks",
+		},
+		{
+			name:             "model_fireworks_exact_match",
+			model:            "accounts/fireworks/routers/kimi-k2p5-turbo",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "fireworks",
+		},
+		{
+			name:             "model_contains_fireworks",
+			model:            "accounts/fireworks/models/llama-v3-70b",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "fireworks",
+		},
+
+		// VAL-LLM-006: Gateway routes Z.AI model to Z.AI provider.
+		{
+			name:             "explicit_provider_zai",
+			provider:         "zai",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "zai",
+		},
+		{
+			name:             "model_glm5_turbo",
+			model:            "glm-5-turbo",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "zai",
+		},
+		{
+			name:             "model_glm5_1",
+			model:            "glm-5.1",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "zai",
+		},
+		{
+			name:             "model_glm_prefix",
+			model:            "glm-4-plus",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "zai",
+		},
+
+		// Bedrock routing.
+		{
+			name:             "explicit_provider_bedrock",
+			provider:         "bedrock",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "bedrock",
+		},
+		{
+			name:             "model_claude_routes_bedrock",
+			model:            "claude-3-opus",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "bedrock",
+		},
+
+		// VAL-LLM-007: Invalid provider returns 400 error.
+		{
+			name:             "unknown_provider_openai",
+			provider:         "openai",
+			wantStatus:       http.StatusBadRequest,
+			wantErrorContain: "unsupported provider",
+		},
+		{
+			name:             "unknown_provider_gemini",
+			provider:         "gemini",
+			wantStatus:       http.StatusBadRequest,
+			wantErrorContain: "unsupported provider",
+		},
+		{
+			name:             "unknown_provider_bedrock_with_bedrock_not_configured",
+			provider:         "mistral",
+			wantStatus:       http.StatusBadRequest,
+			wantErrorContain: "unsupported provider",
+		},
+
+		// Default routing when no provider/model specified.
+		{
+			name:             "no_provider_no_model_defaults_to_first",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "", // first registered provider (non-deterministic map order)
+		},
+
+		// Explicit provider takes precedence over model.
+		{
+			name:             "explicit_provider_overrides_model",
+			provider:         "zai",
+			model:            "accounts/fireworks/routers/kimi-k2p5-turbo",
+			wantStatus:       http.StatusOK,
+			wantProviderName: "zai",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := ProviderRequest{
+				Provider: tc.provider,
+				Model:    tc.model,
+				Messages: []provider.Message{
+					{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}},
+				},
+				MaxTokens: 100,
+			}
+			body, _ := json.Marshal(payload)
+
+			req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+			req.Header.Set("Authorization", "Bearer "+cred.RawToken)
+			req.Header.Set("Content-Type", "application/json")
+
+			w := httptest.NewRecorder()
+			h.HandleInference(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+
+			if tc.wantStatus == http.StatusOK {
+				var resp ProviderResponse
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if tc.wantProviderName != "" && resp.ProviderName != tc.wantProviderName {
+					t.Errorf("ProviderName = %q, want %q", resp.ProviderName, tc.wantProviderName)
+				}
+				if resp.Text == "" {
+					t.Error("expected non-empty text in response")
+				}
+			} else {
+				var errResp ErrorResponse
+				if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+					t.Fatalf("decode error: %v", err)
+				}
+				if tc.wantErrorContain != "" && !strings.Contains(errResp.Error, tc.wantErrorContain) {
+					t.Errorf("error = %q, want to contain %q", errResp.Error, tc.wantErrorContain)
+				}
+			}
+		})
+	}
+}
+
+// TestProviderRouting_SupportedModelsTable verifies that every model listed
+// in provider.SupportedModels() routes to the correct provider when that
+// provider is registered in the multi-provider handler.
+func TestProviderRouting_SupportedModelsTable(t *testing.T) {
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	// Create a mock provider for each provider name.
+	mockProviders := map[string]*mockProvider{
+		"fireworks": {
+			name: "fireworks", real: true,
+			response: &provider.LLMResponse{
+				Text: "fw", Model: "fw-model", StopReason: "end_turn",
+				ProviderName: "fireworks", Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
+			},
+		},
+		"zai": {
+			name: "zai", real: true,
+			response: &provider.LLMResponse{
+				Text: "zai", Model: "zai-model", StopReason: "end_turn",
+				ProviderName: "zai", Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
+			},
+		},
+		"bedrock": {
+			name: "bedrock", real: true,
+			response: &provider.LLMResponse{
+				Text: "br", Model: "br-model", StopReason: "end_turn",
+				ProviderName: "bedrock", Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
+			},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	for name, p := range mockProviders {
+		mp.Register(name, p)
+	}
+
+	h := NewMultiHandler(reg, mp)
+	cred, _ := reg.IssueCredential("sandbox-model-table")
+
+	for _, mi := range provider.SupportedModels() {
+		t.Run(mi.ID+"_routes_to_"+mi.Provider, func(t *testing.T) {
+			payload := ProviderRequest{
+				Model: mi.ID,
+				Messages: []provider.Message{
+					{Role: "user", Content: []provider.Block{{Type: "text", Text: "test"}}},
+				},
+				MaxTokens: 50,
+			}
+			body, _ := json.Marshal(payload)
+
+			req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+			req.Header.Set("Authorization", "Bearer "+cred.RawToken)
+			req.Header.Set("Content-Type", "application/json")
+
+			w := httptest.NewRecorder()
+			h.HandleInference(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("model %q: status = %d, want %d; body: %s", mi.ID, w.Code, http.StatusOK, w.Body.String())
+			}
+
+			var resp ProviderResponse
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("model %q: decode: %v", mi.ID, err)
+			}
+			if resp.ProviderName != mi.Provider {
+				t.Errorf("model %q: ProviderName = %q, want %q", mi.ID, resp.ProviderName, mi.Provider)
+			}
+		})
+	}
+}
+
+// TestProviderRouting_InvalidProviderDoesNotLeakCredentials verifies that
+// error responses for invalid providers never contain API keys, Bearer
+// tokens, or internal file paths (VAL-LLM-007, VAL-LLM-021).
+func TestProviderRouting_InvalidProviderDoesNotLeakCredentials(t *testing.T) {
+	reg := NewIdentityRegistry(1 * time.Hour)
+
+	zaiProvider := &mockProvider{
+		name: "zai", real: true,
+		response: &provider.LLMResponse{
+			Text: "ok", ProviderName: "zai",
+			Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
+		},
+	}
+
+	mp := provider.NewMultiProvider()
+	mp.Register("zai", zaiProvider)
+
+	h := NewMultiHandler(reg, mp)
+	cred, _ := reg.IssueCredential("sandbox-cred-leak")
+
+	for _, providerName := range []string{"openai", "bedrock", "deepseek", "nonexistent"} {
+		t.Run("provider_"+providerName, func(t *testing.T) {
+			payload := ProviderRequest{
+				Provider: providerName,
+				Messages: []provider.Message{
+					{Role: "user", Content: []provider.Block{{Type: "text", Text: "test"}}},
+				},
+			}
+			body, _ := json.Marshal(payload)
+
+			req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+			req.Header.Set("Authorization", "Bearer "+cred.RawToken)
+			req.Header.Set("Content-Type", "application/json")
+
+			w := httptest.NewRecorder()
+			h.HandleInference(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("provider %q: status = %d, want %d", providerName, w.Code, http.StatusBadRequest)
+			}
+
+			respBody := w.Body.String()
+			// Verify no credential leakage.
+			for _, pattern := range []string{"Bearer ", "x-api-key", "sk-", "secret", "password", "/etc/"} {
+				if strings.Contains(respBody, pattern) {
+					t.Errorf("provider %q: error response contains sensitive pattern %q: %s", providerName, pattern, respBody)
+				}
+			}
+		})
+	}
+}
+
 func TestHandleInference_StreamingModelRoutingToZAI(t *testing.T) {
 	// VAL-LLM-006: Streaming request with glm-5-turbo model routes to Z.AI.
 	h, reg := setupMultiProviderHandler(t)
