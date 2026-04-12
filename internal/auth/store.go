@@ -74,9 +74,6 @@ var schemaMigrations = []string{
 	// Added flags column for storing WebAuthn CredentialFlags (backup_eligible,
 	// backup_state, user_present, user_verified) needed for re-login verification.
 	`ALTER TABLE credentials ADD COLUMN flags TEXT NOT NULL DEFAULT '{}'`,
-	// Migrate username column to email. SQLite doesn't support ALTER COLUMN RENAME,
-	// so we add the email column if it doesn't exist and migrate data.
-	`ALTER TABLE users ADD COLUMN email TEXT`,
 }
 
 // User represents a row in the users table.
@@ -172,9 +169,10 @@ func (s *Store) bootstrap() error {
 		}
 	}
 
-	// Migrate existing users: copy username → email if email column was just added.
-	if err := s.migrateUsernameToEmail(); err != nil {
-		return fmt.Errorf("migrate username to email: %w", err)
+	// Hard cutover: remove username column by recreating the users table.
+	// This is idempotent and safe to run multiple times.
+	if err := s.migrateDropUsernameColumn(); err != nil {
+		return fmt.Errorf("migrate drop username column: %w", err)
 	}
 
 	return nil
@@ -205,26 +203,107 @@ func searchSubstring(s, substr string) bool {
 	return false
 }
 
-// migrateUsernameToEmail handles the migration from username to email column.
-// If the email column was just added (from the migration), it copies data
-// from username to email for existing rows. If the email column already
-// existed (fresh database), this is a no-op.
-func (s *Store) migrateUsernameToEmail() error {
-	// Check if the email column has any NULL values (meaning it was just added
-	// and hasn't been populated yet).
-	var nullCount int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE email IS NULL").Scan(&nullCount)
-	if err != nil {
-		// Table might not exist yet in some edge cases — safe to ignore.
+// migrateDropUsernameColumn performs a hard cutover from the old schema
+// (with username column) to the new schema (just email). SQLite doesn't
+// support DROP COLUMN, so we recreate the table.
+// This is idempotent: safe to run multiple times.
+func (s *Store) migrateDropUsernameColumn() error {
+	// Check if users table has a username column (old schema).
+	var hasUsernameCol bool
+	err := s.db.QueryRow(
+		"SELECT 1 FROM pragma_table_info('users') WHERE name = 'username'",
+	).Scan(&hasUsernameCol)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("check for username column: %w", err)
+	}
+
+	// If no username column exists, we're already on the new schema — nothing to do.
+	if !hasUsernameCol {
 		return nil
 	}
 
-	if nullCount > 0 {
-		// Copy username values to email for rows where email is NULL.
-		_, err := s.db.Exec("UPDATE users SET email = username WHERE email IS NULL")
-		if err != nil {
-			return fmt.Errorf("copy username to email: %w", err)
-		}
+	// Also check if email column exists (for databases that have both columns).
+	var hasEmailCol bool
+	err = s.db.QueryRow(
+		"SELECT 1 FROM pragma_table_info('users') WHERE name = 'email'",
+	).Scan(&hasEmailCol)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("check for email column: %w", err)
+	}
+
+	// SQLite doesn't support DROP COLUMN, so we recreate the table:
+	// 1. Create new table with correct schema (no username)
+	// 2. Copy data from old table (username → email, or email if it exists)
+	// 3. Drop old table
+	// 4. Rename new table
+	//
+	// Note: Foreign keys are temporarily disabled during this migration
+	// because we're recreating the users table that other tables reference.
+
+	// Disable foreign keys during table recreation.
+	if _, err := s.db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	// Re-enable foreign keys at the end (even on error paths).
+	defer func() {
+		_, _ = s.db.Exec("PRAGMA foreign_keys=ON")
+	}()
+
+	// Start transaction for atomicity.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Create new users table with correct schema.
+	_, err = tx.Exec(`
+		CREATE TABLE users_new (
+			id         TEXT PRIMARY KEY,
+			email      TEXT UNIQUE NOT NULL,
+			created_at DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create users_new table: %w", err)
+	}
+
+	// Copy data from old table.
+	// Use COALESCE(email, username) if email column exists, otherwise just username.
+	var copySQL string
+	if hasEmailCol {
+		// Has both columns: prefer email, fall back to username if email is NULL.
+		copySQL = `
+			INSERT INTO users_new (id, email, created_at)
+			SELECT id, COALESCE(email, username), created_at FROM users
+		`
+	} else {
+		// Only has username column: use it directly for email.
+		copySQL = `
+			INSERT INTO users_new (id, email, created_at)
+			SELECT id, username, created_at FROM users
+		`
+	}
+	_, err = tx.Exec(copySQL)
+	if err != nil {
+		return fmt.Errorf("copy data to users_new: %w", err)
+	}
+
+	// Drop old table.
+	_, err = tx.Exec("DROP TABLE users")
+	if err != nil {
+		return fmt.Errorf("drop old users table: %w", err)
+	}
+
+	// Rename new table to users.
+	_, err = tx.Exec("ALTER TABLE users_new RENAME TO users")
+	if err != nil {
+		return fmt.Errorf("rename users_new to users: %w", err)
+	}
+
+	// Commit transaction.
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration transaction: %w", err)
 	}
 
 	return nil
