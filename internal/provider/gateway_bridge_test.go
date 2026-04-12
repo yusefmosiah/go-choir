@@ -299,7 +299,9 @@ func TestGatewayURLPreferredOverDirectResolution(t *testing.T) {
 
 	// Also verify that direct resolution would succeed (ZAI_API_KEY is set).
 	// The sandbox logic should prefer the gateway URL regardless.
-	p, err := ResolveProvider()
+	p, err := ResolveProvider(ProviderConfig{
+		ZAIModels: []string{"glm-5.1"},
+	})
 	if err != nil {
 		t.Fatalf("direct resolution should still work: %v", err)
 	}

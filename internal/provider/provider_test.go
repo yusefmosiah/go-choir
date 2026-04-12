@@ -83,7 +83,7 @@ func TestBedrockProviderCallSuccess(t *testing.T) {
 
 	p := &BedrockProvider{
 		region:     "us-east-1",
-		modelID:   "us.anthropic.claude-sonnet-4-5-20250514-v1:0",
+		modelID:   "us.anthropic.claude-sonnet-4-6",
 		authToken:  "test-bearer-token",
 		httpClient: server.Client(),
 		anthropicV: "bedrock-2023-05-31",
@@ -303,7 +303,10 @@ func TestResolveProviderPrefersBedrock(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
-	p, err := ResolveProvider()
+	p, err := ResolveProvider(ProviderConfig{
+		BedrockModels: []string{"us.anthropic.claude-sonnet-4-6"},
+		ZAIModels:     []string{"glm-5.1"},
+	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
 	}
@@ -318,7 +321,9 @@ func TestResolveProviderPrefersBedrock(t *testing.T) {
 func TestResolveProviderFallsBackToZAI(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
-	p, err := ResolveProvider()
+	p, err := ResolveProvider(ProviderConfig{
+		ZAIModels: []string{"glm-5.1"},
+	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
 	}
@@ -335,7 +340,11 @@ func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 	t.Setenv("FIREWORKS_API_KEY", "")
 
-	p, err := ResolveProvider()
+	p, err := ResolveProvider(ProviderConfig{
+		BedrockModels:   []string{"us.anthropic.claude-sonnet-4-6"},
+		ZAIModels:       []string{"glm-5.1"},
+		FireworksModels: []string{"accounts/fireworks/routers/kimi-k2p5-turbo"},
+	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
 	}
@@ -346,9 +355,10 @@ func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
 
 func TestResolveProviderFallsBackToFireworks(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
-	t.Setenv("RUNTIME_FIREWORKS_MODEL", "accounts/fireworks/models/test-model")
 
-	p, err := ResolveProvider()
+	p, err := ResolveProvider(ProviderConfig{
+		FireworksModels: []string{"accounts/fireworks/models/test-model"},
+	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
 	}
@@ -363,31 +373,29 @@ func TestResolveProviderFallsBackToFireworks(t *testing.T) {
 func TestFireworksProviderFromEnvMissingKey(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "")
 
-	_, err := NewFireworksProviderFromEnv()
+	_, err := NewFireworksProviderFromEnv("accounts/fireworks/routers/kimi-k2p5-turbo")
 	if err == nil || !strings.Contains(err.Error(), "api key") {
 		t.Errorf("expected api key error, got: %v", err)
 	}
 }
 
-func TestFireworksProviderFromEnvDefaultsModel(t *testing.T) {
+func TestFireworksProviderFromEnvPassesModel(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
-	t.Setenv("RUNTIME_FIREWORKS_MODEL", "")
 
-	p, err := NewFireworksProviderFromEnv()
+	p, err := NewFireworksProviderFromEnv("accounts/fireworks/routers/kimi-k2p5-turbo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.modelID != "accounts/fireworks/models/llama4-maverick-instruct-basic" {
-		t.Errorf("expected default model, got: %s", p.modelID)
+	if p.modelID != "accounts/fireworks/routers/kimi-k2p5-turbo" {
+		t.Errorf("expected passed model, got: %s", p.modelID)
 	}
 }
 
 func TestFireworksProviderFromEnvCustomBaseURL(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
-	t.Setenv("RUNTIME_FIREWORKS_MODEL", "test-model")
 	t.Setenv("FIREWORKS_BASE_URL", "https://custom.example.com/api")
 
-	p, err := NewFireworksProviderFromEnv()
+	p, err := NewFireworksProviderFromEnv("test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -620,7 +628,7 @@ func TestBedrockProviderFromEnvMissingRegion(t *testing.T) {
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
 
-	_, err := NewBedrockProviderFromEnv()
+	_, err := NewBedrockProviderFromEnv("us.anthropic.claude-sonnet-4-6")
 	if err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("expected region error, got: %v", err)
 	}
@@ -630,23 +638,22 @@ func TestBedrockProviderFromEnvMissingToken(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
 
-	_, err := NewBedrockProviderFromEnv()
+	_, err := NewBedrockProviderFromEnv("us.anthropic.claude-sonnet-4-6")
 	if err == nil || !strings.Contains(err.Error(), "auth token") {
 		t.Fatalf("expected auth token error, got: %v", err)
 	}
 }
 
-func TestBedrockProviderFromEnvDefaultsModel(t *testing.T) {
+func TestBedrockProviderFromEnvPassesModel(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
-	t.Setenv("RUNTIME_BEDROCK_MODEL", "")
 
-	p, err := NewBedrockProviderFromEnv()
+	p, err := NewBedrockProviderFromEnv("us.anthropic.claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("create from env: %v", err)
 	}
-	if p.modelID != "us.anthropic.claude-sonnet-4-5-20250514-v1:0" {
-		t.Errorf("expected default model, got: %s", p.modelID)
+	if p.modelID != "us.anthropic.claude-sonnet-4-6" {
+		t.Errorf("expected passed model, got: %s", p.modelID)
 	}
 }
 
@@ -655,22 +662,21 @@ func TestBedrockProviderFromEnvDefaultsModel(t *testing.T) {
 func TestZAIProviderFromEnvMissingKey(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 
-	_, err := NewZAIProviderFromEnv()
+	_, err := NewZAIProviderFromEnv("glm-5.1")
 	if err == nil || !strings.Contains(err.Error(), "api key") {
 		t.Fatalf("expected api key error, got: %v", err)
 	}
 }
 
-func TestZAIProviderFromEnvDefaultsModel(t *testing.T) {
+func TestZAIProviderFromEnvPassesModel(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "test-key")
-	t.Setenv("RUNTIME_ZAI_MODEL", "")
 
-	p, err := NewZAIProviderFromEnv()
+	p, err := NewZAIProviderFromEnv("glm-5.1")
 	if err != nil {
 		t.Fatalf("create from env: %v", err)
 	}
-	if p.modelID != "glm-4.7" {
-		t.Errorf("expected default model 'glm-4.7', got: %s", p.modelID)
+	if p.modelID != "glm-5.1" {
+		t.Errorf("expected passed model 'glm-5.1', got: %s", p.modelID)
 	}
 }
 
@@ -682,7 +688,7 @@ func TestRedactModel(t *testing.T) {
 		expected string
 	}{
 		// Bedrock-style IDs: "us.anthropic.<long-model>"
-		{"us.anthropic.claude-sonnet-4-5-20250514-v1:0", "us.anthropic.clau***v1:0"},
+		{"us.anthropic.claude-sonnet-4-6", "us.anthropic.clau***-4-6"},
 		// Simple model name without dots
 		{"simple-model", "simple-model"},
 		// 4-part model ID: 3+ parts → first.second.<redacted last>
@@ -703,7 +709,7 @@ func TestRedactMiddle(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"claude-sonnet-4-5-20250514-v1:0", "clau***v1:0"},
+		{"claude-sonnet-4-6", "clau***-4-6"},
 		{"short", "***"},
 		{"123456789", "1234***6789"},
 	}
@@ -773,7 +779,7 @@ func TestBedrockProviderCallWithToolUse(t *testing.T) {
 
 	p := &BedrockProvider{
 		region:     "us-east-1",
-		modelID:   "us.anthropic.claude-sonnet-4-5-20250514-v1:0",
+		modelID:   "us.anthropic.claude-sonnet-4-6",
 		authToken:  "test-bearer-token",
 		httpClient: &http.Client{
 			Timeout:   120 * time.Second,

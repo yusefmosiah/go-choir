@@ -4,6 +4,12 @@
 // (Anthropic-compatible API) as the first required real-provider paths for
 // Mission 3.
 //
+// Supported models (matching Droid settings.json customModels):
+//   - GLM-5.1 (Z.AI, provider "zai") — default Z.AI model
+//   - GLM-5-Turbo (Z.AI, provider "zai") — faster Z.AI variant, same provider
+//   - Kimi K2.5 Turbo (Fireworks AI, provider "fireworks") — Fireworks router model
+//   - Claude Sonnet 4.5 (Bedrock, provider "bedrock") — default Bedrock model
+//
 // Design decisions:
 //   - Provider credentials are read from environment variables only; they are
 //     never committed to the repo, baked into Nix store, or exposed to the
@@ -18,6 +24,9 @@
 //     with bearer auth via ZAI_API_KEY.
 //   - Fireworks AI uses an Anthropic-compatible API at
 //     https://api.fireworks.ai/inference with bearer auth via FIREWORKS_API_KEY.
+//   - MultiProvider holds multiple provider backends for the upcoming
+//     multiagent system where multiple models run simultaneously. Model
+//     routing is its own scope and not implemented here.
 package provider
 
 import (
@@ -155,6 +164,33 @@ type Provider interface {
 	IsReal() bool
 }
 
+// ProviderConfig holds runtime configuration for which model each provider
+// backend should use. This is the configuration surface that the host-side
+// caller (gateway, direct sandbox) uses to select models. It is NOT resolved
+// from environment variables — model selection is a runtime concern, not an
+// infrastructure one.
+//
+// Provider credentials (API keys, tokens) are still resolved from env vars
+// by the FromEnv functions. This struct only governs model selection.
+type ProviderConfig struct {
+	// BedrockModels lists Bedrock model IDs (e.g.,
+	// "us.anthropic.claude-sonnet-4-5-20250514-v1:0"). The first entry is
+	// the default. If empty, Bedrock is not initialized even if credentials
+	// are available.
+	BedrockModels []string
+
+	// ZAIModels lists Z.AI model IDs (e.g., "glm-5.1", "glm-5-turbo").
+	// The first entry is the default. If empty, Z.AI is not initialized
+	// even if ZAI_API_KEY is set.
+	ZAIModels []string
+
+	// FireworksModels lists Fireworks model IDs (e.g.,
+	// "accounts/fireworks/routers/kimi-k2p5-turbo"). The first entry is
+	// the default. If empty, Fireworks is not initialized even if
+	// FIREWORKS_API_KEY is set.
+	FireworksModels []string
+}
+
 // BedrockProvider implements the Provider interface for AWS Bedrock using
 // the Anthropic Messages API format over the Bedrock invoke endpoint.
 // Auth uses a bearer identity token (AWS_BEARER_TOKEN_BEDROCK) rather
@@ -196,15 +232,12 @@ func NewBedrockProvider(cfg BedrockConfig) (*BedrockProvider, error) {
 	}, nil
 }
 
-// NewBedrockProviderFromEnv creates a Bedrock provider from environment
-// variables: AWS_REGION, AWS_BEARER_TOKEN_BEDROCK, and RUNTIME_BEDROCK_MODEL.
-func NewBedrockProviderFromEnv() (*BedrockProvider, error) {
+// NewBedrockProviderFromEnv creates a Bedrock provider using credentials
+// from environment variables (AWS_REGION, AWS_BEARER_TOKEN_BEDROCK) and
+// the given model ID. The model is a runtime concern, not an env var.
+func NewBedrockProviderFromEnv(modelID string) (*BedrockProvider, error) {
 	region := os.Getenv("AWS_REGION")
 	token := os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
-	modelID := os.Getenv("RUNTIME_BEDROCK_MODEL")
-	if modelID == "" {
-		modelID = "us.anthropic.claude-sonnet-4-5-20250514-v1:0"
-	}
 
 	p, err := NewBedrockProvider(BedrockConfig{
 		Region:    region,
@@ -310,18 +343,18 @@ func NewZAIProvider(cfg ZAIConfig) (*ZAIProvider, error) {
 	}, nil
 }
 
-// NewZAIProviderFromEnv creates a Z.AI provider from environment variables:
-// ZAI_API_KEY and RUNTIME_ZAI_MODEL.
-func NewZAIProviderFromEnv() (*ZAIProvider, error) {
+// NewZAIProviderFromEnv creates a Z.AI provider using credentials from
+// environment variables (ZAI_API_KEY) and the given model ID. The model
+// is a runtime concern, not an env var. The base URL defaults to
+// https://api.z.ai/api/anthropic unless ZAI_BASE_URL is set.
+func NewZAIProviderFromEnv(modelID string) (*ZAIProvider, error) {
 	apiKey := os.Getenv("ZAI_API_KEY")
-	modelID := os.Getenv("RUNTIME_ZAI_MODEL")
-	if modelID == "" {
-		modelID = "glm-4.7"
-	}
+	baseURL := os.Getenv("ZAI_BASE_URL")
 
 	p, err := NewZAIProvider(ZAIConfig{
 		APIKey:  apiKey,
 		ModelID: modelID,
+		BaseURL: baseURL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("zai from env: %w", err)
@@ -417,15 +450,12 @@ func NewFireworksProvider(cfg FireworksConfig) (*FireworksProvider, error) {
 	}, nil
 }
 
-// NewFireworksProviderFromEnv creates a Fireworks provider from environment
-// variables: FIREWORKS_API_KEY, RUNTIME_FIREWORKS_MODEL, and optionally
-// FIREWORKS_BASE_URL.
-func NewFireworksProviderFromEnv() (*FireworksProvider, error) {
+// NewFireworksProviderFromEnv creates a Fireworks provider using credentials
+// from environment variables (FIREWORKS_API_KEY) and the given model ID.
+// The model is a runtime concern, not an env var. The base URL defaults to
+// https://api.fireworks.ai/inference unless FIREWORKS_BASE_URL is set.
+func NewFireworksProviderFromEnv(modelID string) (*FireworksProvider, error) {
 	apiKey := os.Getenv("FIREWORKS_API_KEY")
-	modelID := os.Getenv("RUNTIME_FIREWORKS_MODEL")
-	if modelID == "" {
-		modelID = "accounts/fireworks/models/llama4-maverick-instruct-basic"
-	}
 	baseURL := os.Getenv("FIREWORKS_BASE_URL")
 
 	p, err := NewFireworksProvider(FireworksConfig{
@@ -454,7 +484,6 @@ func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespo
 	}
 
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
@@ -471,10 +500,9 @@ func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespo
 
 func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	ar := anthropicRequest{
-		Model:            p.modelID,
-		MaxTokens:        defaultMaxTokens(req.MaxTokens),
-		AnthropicVersion: "2023-06-01",
-		Stream:           false,
+		Model:     p.modelID,
+		MaxTokens: defaultMaxTokens(req.MaxTokens),
+		Stream:    false,
 	}
 
 	if req.System != "" {
@@ -761,20 +789,174 @@ func canonicalJSON(raw json.RawMessage) json.RawMessage {
 	return b
 }
 
-// ResolveProvider creates the configured real provider from environment
-// variables. It tries Bedrock first (if AWS_BEARER_TOKEN_BEDROCK is set),
-// then Z.AI (if ZAI_API_KEY is set), then Fireworks (if FIREWORKS_API_KEY
-// is set). If none is configured, it returns nil, indicating that the stub
-// provider should be used instead.
+// ModelInfo describes a supported model and its associated provider.
+type ModelInfo struct {
+	// ID is the model identifier used in API requests (provider-specific).
+	ID string `json:"id"`
+
+	// DisplayName is a human-readable name for logging and UI.
+	DisplayName string `json:"display_name"`
+
+	// Provider is the provider name that serves this model (e.g., "zai",
+	// "fireworks", "bedrock").
+	Provider string `json:"provider"`
+
+	// MaxOutputTokens is the maximum output tokens for this model.
+	MaxOutputTokens int `json:"max_output_tokens"`
+}
+
+// SupportedModels returns the list of models that the provider package
+// can serve. These are derived from the Droid settings.json customModels
+// configuration.
+func SupportedModels() []ModelInfo {
+	return []ModelInfo{
+		// Bedrock models (cross-region inference IDs)
+		{
+			ID:              "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+			DisplayName:     "Claude Haiku 4.5",
+			Provider:        "bedrock",
+			MaxOutputTokens: 8192,
+		},
+		{
+			ID:              "us.anthropic.claude-sonnet-4-6",
+			DisplayName:     "Claude Sonnet 4.6",
+			Provider:        "bedrock",
+			MaxOutputTokens: 65536,
+		},
+		{
+			ID:              "us.anthropic.claude-opus-4-6-v1",
+			DisplayName:     "Claude Opus 4.6",
+			Provider:        "bedrock",
+			MaxOutputTokens: 32768,
+		},
+		// Z.AI models
+		{
+			ID:              "glm-5.1",
+			DisplayName:     "GLM-5.1",
+			Provider:        "zai",
+			MaxOutputTokens: 131072,
+		},
+		{
+			ID:              "glm-5-turbo",
+			DisplayName:     "GLM-5-Turbo",
+			Provider:        "zai",
+			MaxOutputTokens: 131072,
+		},
+		// Fireworks models
+		{
+			ID:              "accounts/fireworks/routers/kimi-k2p5-turbo",
+			DisplayName:     "Kimi K2.5",
+			Provider:        "fireworks",
+			MaxOutputTokens: 131072,
+		},
+	}
+}
+
+// MultiProvider holds multiple provider backends keyed by name. It enables
+// the runtime to reference providers for different models simultaneously
+// without requiring model routing logic (which is its own scope).
 //
-// This preserves the later gateway boundary: the runtime does not directly
-// expose provider credentials to the browser; it only uses them internally.
-// The full gateway milestone will move this credential injection behind
-// an explicit gateway service boundary.
-func ResolveProvider() (Provider, error) {
-	// Try Bedrock first.
+// Usage: callers initialize specific providers and register them; the
+// MultiProvider simply stores them for later retrieval. Model routing is
+// explicitly out of scope for this type.
+type MultiProvider struct {
+	providers map[string]Provider
+}
+
+// NewMultiProvider creates an empty MultiProvider.
+func NewMultiProvider() *MultiProvider {
+	return &MultiProvider{
+		providers: make(map[string]Provider),
+	}
+}
+
+// Register adds a provider under the given name. If a provider with the
+// same name already exists it is replaced.
+func (mp *MultiProvider) Register(name string, p Provider) {
+	mp.providers[name] = p
+}
+
+// Get returns the provider registered under the given name, or nil.
+func (mp *MultiProvider) Get(name string) Provider {
+	return mp.providers[name]
+}
+
+// Names returns all registered provider names.
+func (mp *MultiProvider) Names() []string {
+	names := make([]string, 0, len(mp.providers))
+	for name := range mp.providers {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ResolveAll creates and registers all providers for which credentials are
+// available in the environment, using the given ProviderConfig for model
+// selection. It returns the MultiProvider with whatever providers could be
+// initialized (may be empty if no credentials are set).
+//
+// Model selection is a runtime concern passed via cfg; credentials are
+// resolved from environment variables. Model routing is out of scope.
+func ResolveAll(cfg ProviderConfig) *MultiProvider {
+	mp := NewMultiProvider()
+
+	// Try Bedrock — one provider per model.
 	if os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
-		p, err := NewBedrockProviderFromEnv()
+		for i, modelID := range cfg.BedrockModels {
+			if p, err := NewBedrockProviderFromEnv(modelID); err == nil {
+				name := "bedrock"
+				if i > 0 {
+					name = "bedrock-" + modelID
+				}
+				mp.Register(name, p)
+				log.Printf("provider: resolved %s (region=%s model=%s)", name, p.region, redactModel(p.modelID))
+			}
+		}
+	}
+
+	// Try Z.AI — one provider per model.
+	if os.Getenv("ZAI_API_KEY") != "" {
+		for i, modelID := range cfg.ZAIModels {
+			if p, err := NewZAIProviderFromEnv(modelID); err == nil {
+				name := "zai"
+				if i > 0 {
+					name = "zai-" + modelID
+				}
+				mp.Register(name, p)
+				log.Printf("provider: resolved %s (model=%s)", name, p.modelID)
+			}
+		}
+	}
+
+	// Try Fireworks — one provider per model.
+	if os.Getenv("FIREWORKS_API_KEY") != "" {
+		for i, modelID := range cfg.FireworksModels {
+			if p, err := NewFireworksProviderFromEnv(modelID); err == nil {
+				name := "fireworks"
+				if i > 0 {
+					name = "fireworks-" + modelID
+				}
+				mp.Register(name, p)
+				log.Printf("provider: resolved %s (model=%s)", name, p.modelID)
+			}
+		}
+	}
+
+	return mp
+}
+
+// ResolveProvider creates the first available real provider from environment
+// credentials using the given ProviderConfig for model selection. It tries
+// Bedrock first, then Z.AI (first model), then Fireworks. If none is
+// configured, it returns nil, indicating that the stub provider should be
+// used instead.
+//
+// This preserves the gateway boundary: the runtime does not directly expose
+// provider credentials to the browser; it only uses them internally.
+func ResolveProvider(cfg ProviderConfig) (Provider, error) {
+	// Try Bedrock first (first model).
+	if os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" && len(cfg.BedrockModels) > 0 {
+		p, err := NewBedrockProviderFromEnv(cfg.BedrockModels[0])
 		if err != nil {
 			return nil, fmt.Errorf("resolve provider: %w", err)
 		}
@@ -782,9 +964,9 @@ func ResolveProvider() (Provider, error) {
 		return p, nil
 	}
 
-	// Try Z.AI.
-	if os.Getenv("ZAI_API_KEY") != "" {
-		p, err := NewZAIProviderFromEnv()
+	// Try Z.AI (first model).
+	if os.Getenv("ZAI_API_KEY") != "" && len(cfg.ZAIModels) > 0 {
+		p, err := NewZAIProviderFromEnv(cfg.ZAIModels[0])
 		if err != nil {
 			return nil, fmt.Errorf("resolve provider: %w", err)
 		}
@@ -792,9 +974,9 @@ func ResolveProvider() (Provider, error) {
 		return p, nil
 	}
 
-	// Try Fireworks.
-	if os.Getenv("FIREWORKS_API_KEY") != "" {
-		p, err := NewFireworksProviderFromEnv()
+	// Try Fireworks (first model).
+	if os.Getenv("FIREWORKS_API_KEY") != "" && len(cfg.FireworksModels) > 0 {
+		p, err := NewFireworksProviderFromEnv(cfg.FireworksModels[0])
 		if err != nil {
 			return nil, fmt.Errorf("resolve provider: %w", err)
 		}

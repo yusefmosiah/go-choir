@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/yusefmosiah/go-choir/internal/events"
 	"github.com/yusefmosiah/go-choir/internal/gateway"
@@ -72,7 +73,7 @@ func main() {
 		rtProvider = provider.NewGatewayBridgeProvider(client)
 		log.Printf("sandbox: using gateway provider (url=%s)", gatewayURL)
 	} else {
-		realProvider, err := provider.ResolveProvider()
+		realProvider, err := provider.ResolveProvider(loadProviderConfig())
 		if err != nil {
 			log.Printf("sandbox: provider resolution failed, using stub: %v", err)
 		}
@@ -126,4 +127,33 @@ func storeDir(path string) string {
 		}
 	}
 	return "."
+}
+
+// loadProviderConfig builds a ProviderConfig from environment variables.
+// Model selection is a runtime concern resolved here at the sandbox entry
+// point, not inside the provider package.
+func loadProviderConfig() provider.ProviderConfig {
+	cfg := provider.ProviderConfig{
+		BedrockModels: []string{
+			"us.anthropic.claude-haiku-4-5-20251001-v1:0",
+			"us.anthropic.claude-sonnet-4-6",
+			"us.anthropic.claude-opus-4-6-v1",
+		},
+		ZAIModels: []string{"glm-5.1", "glm-5-turbo"},
+		FireworksModels: []string{
+			"accounts/fireworks/routers/kimi-k2p5-turbo",
+		},
+	}
+
+	if v := os.Getenv("SANDBOX_BEDROCK_MODELS"); v != "" {
+		cfg.BedrockModels = strings.Split(v, ",")
+	}
+	if v := os.Getenv("SANDBOX_ZAI_MODELS"); v != "" {
+		cfg.ZAIModels = strings.Split(v, ",")
+	}
+	if v := os.Getenv("SANDBOX_FIREWORKS_MODELS"); v != "" {
+		cfg.FireworksModels = strings.Split(v, ",")
+	}
+
+	return cfg
 }
