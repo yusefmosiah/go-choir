@@ -51,11 +51,11 @@
       size = 2048;
     }];
 
-    # virtio-blk interface for the nix store disk.
-    # erofs is used automatically when shares = [] (no virtiofs/9p).
-    # The erofs disk provides a shared nix store that can be shared
+    # Use upstream microvm.nix API for the nix store disk.
+    # erofs provides a shared nix store that can be shared
     # across VMs with KSM deduplication on the host.
-    storeDiskInterface = "blk";
+    storeOnDisk = true;
+    storeDiskType = "erofs";
 
     # No virtiofs or 9p shares. With shares = [], microvm.nix
     # automatically generates an erofs disk for the nix store closure.
