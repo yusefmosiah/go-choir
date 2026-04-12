@@ -44,6 +44,18 @@ type spawnResponse struct {
 	CreatedAt string          `json:"created_at"`
 }
 
+// cancelRequest is the JSON payload for POST /api/agent/cancel.
+// It cancels a running or pending task (VAL-CHOIR-010).
+type cancelRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+// cancelResponse is the JSON response for POST /api/agent/cancel.
+type cancelResponse struct {
+	TaskID string          `json:"task_id"`
+	State  types.TaskState `json:"state"`
+}
+
 // taskSubmitResponse is the JSON response for POST /api/agent/task.
 // It returns the stable task handle and initial lifecycle state
 // (VAL-RUNTIME-003).
@@ -209,6 +221,54 @@ func (h *APIHandler) HandleSpawn(w http.ResponseWriter, r *http.Request) {
 		State:     rec.State,
 		OwnerID:   rec.OwnerID,
 		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+	})
+}
+
+// HandleCancel handles POST /api/agent/cancel.
+// It cancels a running or pending task, transitioning it to cancelled state.
+// The cancel endpoint is owner-scoped — a request for a task owned by a
+// different user returns 404 to prevent IDOR probing (VAL-CHOIR-010).
+func (h *APIHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	var req cancelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+
+	if strings.TrimSpace(req.TaskID) == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "task_id is required"})
+		return
+	}
+
+	err = h.rt.CancelTask(r.Context(), req.TaskID, ownerID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+			return
+		}
+		if strings.Contains(err.Error(), "cannot cancel") {
+			writeAPIJSON(w, http.StatusConflict, apiError{Error: err.Error()})
+			return
+		}
+		log.Printf("runtime api: cancel task: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to cancel task"})
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, cancelResponse{
+		TaskID: req.TaskID,
+		State:  types.TaskCancelled,
 	})
 }
 
@@ -463,6 +523,7 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
+	s.HandleFunc("/api/agent/cancel", h.HandleCancel)
 	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
 	s.HandleFunc("/api/agent/", h.HandleTaskStatusByID) // matches /api/agent/{id}/status
 	s.HandleFunc("/api/events", h.HandleEvents)

@@ -253,6 +253,63 @@ func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID s
 	return rec, nil
 }
 
+// CancelTask cancels a running or pending task. It validates that the task
+// exists and belongs to the given owner, then cancels the task's context
+// and transitions it to cancelled state (VAL-CHOIR-010).
+//
+// Returns an error if:
+//   - the task does not exist
+//   - the task belongs to a different owner
+//   - the task is already in a terminal state
+func (rt *Runtime) CancelTask(ctx context.Context, taskID, ownerID string) error {
+	rec, err := rt.store.GetTask(ctx, taskID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return fmt.Errorf("task not found: %s", taskID)
+		}
+		return fmt.Errorf("lookup task: %w", err)
+	}
+
+	// Ownership check.
+	if rec.OwnerID != ownerID {
+		return store.ErrNotFound
+	}
+
+	// Only running or pending tasks can be cancelled.
+	if rec.State.Terminal() {
+		return fmt.Errorf("cannot cancel task in %s state", rec.State)
+	}
+
+	// Cancel the task's execution context.
+	rt.mu.Lock()
+	cancel, ok := rt.running[taskID]
+	if ok {
+		cancel()
+		delete(rt.running, taskID)
+	}
+	rt.mu.Unlock()
+
+	if !ok {
+		// Task was not running in this process (e.g., pending or recovered).
+		// Transition it directly to cancelled.
+		now := time.Now().UTC()
+		rec.State = types.TaskCancelled
+		rec.UpdatedAt = now
+		rec.FinishedAt = &now
+		if err := rt.store.UpdateTask(ctx, rec); err != nil {
+			return fmt.Errorf("update cancelled task: %w", err)
+		}
+
+		errPayload, _ := json.Marshal(map[string]string{"error": "task cancelled"})
+		rt.emitEvent(ctx, &rec, types.EventTaskCancelled, events.CauseTaskLifecycle, errPayload)
+
+		// Update work item state.
+		rt.updateWorkItemState(ctx, taskID, types.TaskCancelled, "", "task cancelled")
+	}
+
+	return nil
+}
+
 // ListTasksByOwner returns recent tasks for the given owner, ordered by
 // creation time descending.
 func (rt *Runtime) ListTasksByOwner(ctx context.Context, ownerID string, limit int) ([]types.TaskRecord, error) {
@@ -644,6 +701,11 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 // handleExecutionError transitions a task to failed/blocked and emits the
 // appropriate event. The runtime remains available for later tasks
 // (VAL-RUNTIME-008).
+//
+// Note: When the error is caused by context cancellation (runtime shutdown),
+// the passed ctx will be cancelled. We use context.Background() for the
+// critical store updates so that the task state is properly persisted even
+// during shutdown (VAL-CHOIR-009, VAL-CHOIR-010).
 func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskRecord, err error) {
 	now := time.Now().UTC()
 
@@ -653,8 +715,8 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	cause := events.CauseProviderFailure
 
 	if ctx.Err() != nil {
-		// Context cancellation means the runtime is shutting down, not a
-		// provider failure. Treat as cancelled.
+		// Context cancellation means the runtime is shutting down or the
+		// task was cancelled, not a provider failure. Treat as cancelled.
 		state = types.TaskCancelled
 		kind = types.EventTaskCancelled
 		cause = events.CauseTaskLifecycle
@@ -664,24 +726,28 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	rec.Error = err.Error()
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
-	if updateErr := rt.store.UpdateTask(ctx, *rec); updateErr != nil {
+
+	// Use background context for persistence so that cancelled-task state
+	// transitions are persisted even when the task context is cancelled.
+	persistCtx := context.Background()
+	if updateErr := rt.store.UpdateTask(persistCtx, *rec); updateErr != nil {
 		log.Printf("runtime: update task %s to %s: %v", rec.TaskID, state, updateErr)
 	}
 
 	errPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-	rt.emitEvent(ctx, rec, kind, cause, errPayload)
+	rt.emitEvent(persistCtx, rec, kind, cause, errPayload)
 
 	// If this is an etext agent revision task, mark the mutation as failed
 	// and emit the etext-specific failure event.
 	if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
-		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
 				"doc_id":  docID,
 				"task_id": rec.TaskID,
 				"error":   err.Error(),
 			})
-			rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionFailed,
+			rt.emitEtextAgentEvent(persistCtx, rec, types.EventEtextAgentRevisionFailed,
 				events.CauseProviderFailure, failPayload)
 		}
 	}
@@ -689,11 +755,11 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	log.Printf("runtime: task %s → %s: %v", rec.TaskID, state, err)
 
 	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(ctx, rec.TaskID, state, "", err.Error())
+	rt.updateWorkItemState(persistCtx, rec.TaskID, state, "", err.Error())
 
 	// Notify parent channel of child task failure (VAL-CHOIR-006, VAL-CHOIR-009).
 	if state == types.TaskFailed || state == types.TaskCancelled {
-		rt.notifyParent(ctx, rec)
+		rt.notifyParent(persistCtx, rec)
 	}
 }
 
