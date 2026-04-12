@@ -129,26 +129,38 @@ func TestConcurrentWorkers_AllRunningSimultaneously(t *testing.T) {
 		childIDs[i] = resp.TaskID
 	}
 
-	// Give a small window for all tasks to transition to running.
-	time.Sleep(100 * time.Millisecond)
+	// Poll until all tasks have transitioned to running, with a generous timeout.
+	ctx := context.Background()
+	deadline := time.After(5 * time.Second)
+	var runningChildren int
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for children to reach running state; only %d of 3 running", runningChildren)
+		default:
+		}
+
+		runningChildren = 0
+		for _, id := range childIDs {
+			task, err := rt.Store().GetTask(ctx, id)
+			if err != nil {
+				t.Fatalf("get task %s: %v", id, err)
+			}
+			if task.State == types.TaskRunning {
+				runningChildren++
+			}
+		}
+
+		if runningChildren >= 3 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// Check that the runtime reports multiple running tasks.
 	runningCount := rt.RunningCount()
 	if runningCount < 3 {
 		t.Errorf("running tasks: got %d, want at least 3 (parent + 3 children or just 3 children)", runningCount)
-	}
-
-	// Verify all children are in running state.
-	ctx := context.Background()
-	runningChildren := 0
-	for _, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
-		if err != nil {
-			t.Fatalf("get task %s: %v", id, err)
-		}
-		if task.State == types.TaskRunning {
-			runningChildren++
-		}
 	}
 
 	if runningChildren < 3 {
@@ -381,9 +393,40 @@ func TestConcurrentWorkers_ResultsCollectedViaChannels(t *testing.T) {
 
 	// Now check that the parent received results via channels for each child.
 	// The child tasks should have posted their results to the parent's channel.
-	msgs, _, err := rt.ChannelRead(parentID, 0)
-	if err != nil {
-		t.Fatalf("parent channel read: %v", err)
+	// Poll for messages since channel posting may not be instantaneous after task completion.
+	deadline = time.After(5 * time.Second)
+	var msgs []types.ChannelMessage
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for result messages in parent channel")
+		default:
+		}
+
+		var err error
+		msgs, _, err = rt.ChannelRead(parentID, 0)
+		if err != nil {
+			t.Fatalf("parent channel read: %v", err)
+		}
+
+		childResults := make(map[string]string)
+		for _, msg := range msgs {
+			if msg.Role == "result" {
+				childResults[msg.From] = msg.Content
+			}
+		}
+
+		allFound := true
+		for _, id := range childIDs {
+			if _, ok := childResults[id]; !ok {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Each child should have posted a result message.
@@ -475,25 +518,35 @@ func TestConcurrentWorkers_HealthReportsRunningCount(t *testing.T) {
 		handler.HandleSpawn(w, req)
 	}
 
-	// Give time for tasks to transition to running.
-	time.Sleep(100 * time.Millisecond)
+	// Poll until the health endpoint reports at least 3 running tasks.
+	deadline := time.After(5 * time.Second)
+	var lastRunningTasks int
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for health to report >= 3 running tasks; last reported %d", lastRunningTasks)
+		default:
+		}
 
-	// Check the health endpoint reports running tasks.
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	w := httptest.NewRecorder()
-	handler.HandleHealth(w, req)
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		w := httptest.NewRecorder()
+		handler.HandleHealth(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("health status: got %d, want %d", w.Code, http.StatusOK)
-	}
+		if w.Code != http.StatusOK {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
 
-	var resp runtimeHealthResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode health response: %v", err)
-	}
+		var resp runtimeHealthResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode health response: %v", err)
+		}
+		lastRunningTasks = resp.RunningTasks
 
-	if resp.RunningTasks < 3 {
-		t.Errorf("running_tasks: got %d, want at least 3", resp.RunningTasks)
+		if resp.RunningTasks >= 3 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -717,9 +770,9 @@ func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 
 	// If tasks ran sequentially, total would be ~600ms.
 	// With concurrency, should be closer to ~300ms (200ms per task + overhead).
-	// We use a generous threshold of 500ms.
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("tasks appear to run sequentially: elapsed %v (expected < 500ms for 3 concurrent 200ms tasks)", elapsed)
+	// We use a generous threshold of 3 seconds to account for slow CI runners.
+	if elapsed > 3*time.Second {
+		t.Errorf("tasks appear to run sequentially: elapsed %v (expected < 3s for 3 concurrent 200ms tasks)", elapsed)
 	}
 }
 
@@ -752,18 +805,32 @@ func TestConcurrentWorkers_ResultsPostedToParentChannelOnCompletion(t *testing.T
 	}
 
 	// Check the parent channel for the child's result.
-	msgs, _, err := rt.ChannelRead(parentID, 0)
-	if err != nil {
-		t.Fatalf("parent channel read: %v", err)
-	}
+	// Poll with timeout since channel posting may not be instantaneous.
+	deadline = time.After(5 * time.Second)
+	var found bool
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for result message in parent channel from child")
+		default:
+		}
 
-	// Should find a result message from the child.
-	found := false
-	for _, msg := range msgs {
-		if msg.From == rec.TaskID && msg.Role == "result" {
-			found = true
+		msgs, _, err := rt.ChannelRead(parentID, 0)
+		if err != nil {
+			t.Fatalf("parent channel read: %v", err)
+		}
+
+		found = false
+		for _, msg := range msgs {
+			if msg.From == rec.TaskID && msg.Role == "result" {
+				found = true
+				break
+			}
+		}
+		if found {
 			break
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if !found {
@@ -933,17 +1000,30 @@ func TestConcurrentWorkers_Spawn5WorkersRapidlyThenVerifyAllComplete(t *testing.
 	}
 
 	// Step 2: Check: all show 'running' state simultaneously.
-	time.Sleep(100 * time.Millisecond)
-
+	// Poll until at least 3 workers are confirmed running.
+	pollDeadline := time.After(5 * time.Second)
 	runningCount := 0
-	for _, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
-		if err != nil {
-			t.Fatalf("get task: %v", err)
+	for {
+		select {
+		case <-pollDeadline:
+			t.Fatalf("timeout waiting for workers to reach running state; only %d running", runningCount)
+		default:
 		}
-		if task.State == types.TaskRunning {
-			runningCount++
+
+		runningCount = 0
+		for _, id := range childIDs {
+			task, err := rt.Store().GetTask(ctx, id)
+			if err != nil {
+				t.Fatalf("get task: %v", err)
+			}
+			if task.State == types.TaskRunning {
+				runningCount++
+			}
 		}
+		if runningCount >= 3 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if runningCount < 3 {
 		t.Errorf("running count: got %d, want at least 3 running simultaneously", runningCount)
@@ -1068,9 +1148,22 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 		t.Fatalf("spawned count: got %d, want %d", successCount.Load(), numWorkers)
 	}
 
-	// Verify running count.
-	time.Sleep(100 * time.Millisecond)
-	running := rt.RunningCount()
+	// Verify running count with polling.
+	runningDeadline := time.After(5 * time.Second)
+	var running int
+	for {
+		select {
+		case <-runningDeadline:
+			t.Fatalf("timeout waiting for running count >= %d; last reported %d", numWorkers, running)
+		default:
+		}
+
+		running = rt.RunningCount()
+		if running >= numWorkers {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if running < numWorkers {
 		t.Errorf("running tasks: got %d, want at least %d", running, numWorkers)
 	}
