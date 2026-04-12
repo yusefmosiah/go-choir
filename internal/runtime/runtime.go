@@ -390,6 +390,10 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		rt.handleExecutionError(ctx, rec, fmt.Errorf("update task state: %w", err))
 		return
 	}
+
+	// Update work item state to running if this is a spawned child task.
+	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskRunning, "", "")
+
 	rt.emitEvent(ctx, rec, types.EventTaskStarted, events.CauseTaskLifecycle,
 		json.RawMessage(`{}`))
 
@@ -478,6 +482,12 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	})
 	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
+	// Update work item state for spawned child tasks (VAL-CHOIR-008).
+	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskCompleted, rec.Result, "")
+
+	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
+	rt.notifyParent(ctx, rec)
+
 	// Post-completion: handle feature-specific side effects (e.g., etext
 	// agent revision canonical revision creation).
 	rt.handleTaskCompletion(ctx, rec)
@@ -511,6 +521,12 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	}
 	resultLenPayload, _ := json.Marshal(map[string]int{"result_length": len(result)})
 	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+
+	// Update work item state for spawned child tasks (VAL-CHOIR-008).
+	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskCompleted, rec.Result, "")
+
+	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
+	rt.notifyParent(ctx, rec)
 
 	// Post-completion: handle feature-specific side effects (e.g., etext
 	// agent revision canonical revision creation).
@@ -671,6 +687,14 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	}
 
 	log.Printf("runtime: task %s → %s: %v", rec.TaskID, state, err)
+
+	// Update work item state for spawned child tasks (VAL-CHOIR-008).
+	rt.updateWorkItemState(ctx, rec.TaskID, state, "", err.Error())
+
+	// Notify parent channel of child task failure (VAL-CHOIR-006, VAL-CHOIR-009).
+	if state == types.TaskFailed || state == types.TaskCancelled {
+		rt.notifyParent(ctx, rec)
+	}
 }
 
 // providerResult returns the result text from the provider, if available.
@@ -723,4 +747,64 @@ func (rt *Runtime) removeRunning(taskID string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	delete(rt.running, taskID)
+}
+
+// updateWorkItemState updates the work item state in the registry if the task
+// is a spawned child (has a work item record). It silently skips if no work
+// item exists (e.g., for root tasks submitted via SubmitTask). This keeps the
+// work registry in sync with the runtime task lifecycle
+// (VAL-CHOIR-001, VAL-CHOIR-003, VAL-CHOIR-008).
+func (rt *Runtime) updateWorkItemState(ctx context.Context, taskID string, state types.TaskState, result, errMsg string) {
+	item, err := rt.store.GetWorkItem(ctx, taskID)
+	if err != nil {
+		// Not a spawned task — no work item. This is normal for root tasks.
+		return
+	}
+
+	now := time.Now().UTC()
+	item.State = state
+	item.UpdatedAt = now
+
+	if result != "" {
+		item.Result = result
+	}
+	if errMsg != "" {
+		item.Error = errMsg
+	}
+
+	if err := rt.store.UpdateWorkItem(ctx, item); err != nil {
+		log.Printf("runtime: update work item %s to %s: %v", taskID, state, err)
+	}
+}
+
+// notifyParent posts a result or error message to the parent's channel when
+// a spawned child task reaches a terminal state. This enables the parent to
+// collect results from all its children via channels
+// (VAL-CHOIR-006, VAL-CHOIR-008).
+//
+// If the task has no parent_id in metadata, this is a no-op.
+func (rt *Runtime) notifyParent(ctx context.Context, rec *types.TaskRecord) {
+	parentID, _ := rec.Metadata["parent_id"].(string)
+	if parentID == "" {
+		return
+	}
+
+	switch rec.State {
+	case types.TaskCompleted:
+		result := rec.Result
+		if result == "" {
+			result = "(task completed with no result)"
+		}
+		if _, err := rt.PostChildResult(ctx, parentID, rec.TaskID, result); err != nil {
+			log.Printf("runtime: notify parent %s of child %s completion: %v", parentID, rec.TaskID, err)
+		}
+	case types.TaskFailed:
+		errMsg := rec.Error
+		if errMsg == "" {
+			errMsg = "(task failed with no error message)"
+		}
+		if _, err := rt.PostChildError(ctx, parentID, rec.TaskID, errMsg); err != nil {
+			log.Printf("runtime: notify parent %s of child %s failure: %v", parentID, rec.TaskID, err)
+		}
+	}
 }
