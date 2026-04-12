@@ -1,0 +1,41 @@
+{
+  "featureId": "scheduler-concurrent-workers",
+  "reviewedAt": "2026-04-12T12:55:00Z",
+  "commitId": "1815c28",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Excellent implementation of concurrent worker support for choir-in-choir. The feature correctly enables parents to spawn multiple children that run concurrently with independent channels and isolated results. The implementation adds auto-notification mechanisms (updateWorkItemState and notifyParent) properly integrated into all task execution paths (executeWithProvider, executeWithToolLoop, handleExecutionError). Comprehensive test coverage with 16 test cases validates all VAL-CHOIR-008 requirements including concurrent spawning, simultaneous execution, independent completion, channel isolation, no sibling interference, work item sync, and health reporting.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The concurrent-workers.md library documentation was created with excellent detail covering: auto-notification behavior, work item state sync, channel-based parent notification, concurrency model (goroutines, WAL mode, MaxOpenConns), and test coverage summary. This is a good pattern for documenting complex runtime features.",
+      "evidence": ".factory/library/concurrent-workers.md - 69 lines covering all key implementation details and gotchas"
+    },
+    {
+      "area": "conventions",
+      "observation": "The test file establishes a strong pattern for concurrent testing: testConcurrentSetup helper creates fresh Runtime with slow StubProvider (500ms delay) to ensure tasks stay running long enough for concurrent observation. This pattern should be referenced for future concurrent feature tests.",
+      "evidence": "internal/runtime/concurrent_workers_test.go:33-62 - testConcurrentSetup helper with slow provider configuration"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The conditionalFailProvider test helper demonstrates a useful pattern for testing mixed pass/fail scenarios by matching on prompt content. This enables deterministic failure injection without complex mocking.",
+      "evidence": "internal/runtime/concurrent_workers_test.go:1178-1205 - conditionalFailProvider that fails tasks containing specific prefix in prompt"
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed go-worker skill procedure: wrote 16 comprehensive tests first (TDD), then implemented the feature, updated existing tests to account for auto-notification behavior, and added library documentation. All validators passed.",
+      "evidence": "handoff.skillFeedback.followedProcedure: true, handoff.verification.commandsRun all show exitCode: 0"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The timing test (TestConcurrentWorkers_TasksActuallyRunConcurrently) uses a smart validation approach: 3 tasks of 200ms each should complete in <500ms if truly concurrent vs ~600ms if serial. This is a reliable pattern for verifying actual concurrency vs serialized execution.",
+      "evidence": "internal/runtime/concurrent_workers_test.go:810-870 - timing-based concurrency verification with 500ms threshold"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The scheduler-concurrent-workers feature is fully implemented and well-tested. The code correctly handles: (1) Concurrent goroutine spawning - each child runs independently via `go rt.executeTask()`; (2) Goroutine management - tracked in `rt.running` map with cancel functions, proper WaitGroup usage in tests; (3) Isolation between siblings - each worker has independent channel, state stored separately, no shared data; (4) Independent result collection - results auto-posted to parent channel on completion via notifyParent(); (5) Resource management - SQLite WAL mode with SetMaxOpenConns(1), stress tests up to 10 concurrent workers pass; (6) Health reporting - RunningCount() correctly reflects concurrent tasks. All 16 new tests pass including race condition detection (-race flag), timing verification, and mixed pass/fail scenarios. Library documentation added to .factory/library/concurrent-workers.md."
+}

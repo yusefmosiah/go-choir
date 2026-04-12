@@ -1,0 +1,36 @@
+{
+  "featureId": "etext-research-button",
+  "reviewedAt": "2026-04-12T09:45:00Z",
+  "commitId": "3d63d5b",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The etext-research-button feature is fully implemented and meets all requirements. The Research button (🔍 Research) was added to the ETextEditor.svelte toolbar with proper UI state management. The implementation correctly uses POST /api/agent/task to spawn standalone research workers (a deliberate design choice documented in the library), includes a pulsing progress indicator, shows results in a panel with Apply/Dismiss buttons, and properly resets state on navigation. The 9 Playwright tests comprehensively cover button visibility, task spawning with metadata, progress indication, results display, apply/dismiss actions, disabled state during execution, context passing (doc_id), and auth gating.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "services",
+      "observation": "The services.yaml defines all required services (auth, proxy, vmctl, gateway, sandbox, frontend) with proper healthchecks. The research feature relies on the runtime (via sandbox/proxy) for task execution which is properly configured.",
+      "evidence": ".factory/services.yaml lists sandbox service on port 8085 which hosts the runtime that executes spawned tasks"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The worker correctly documented in etext-research-button.md why POST /api/agent/task is used instead of POST /api/agent/spawn - research workers are standalone tasks that don't need parent-child relationships. This is an important architectural decision that future workers should consider.",
+      "evidence": ".factory/library/etext-research-button.md: 'Uses POST /api/agent/task (not POST /api/agent/spawn) because the research worker is a standalone task — it doesn't need a parent task reference'"
+    },
+    {
+      "area": "conventions",
+      "observation": "The worker correctly followed frontend patterns: data-* attributes for test targeting (data-etext-research, data-etext-research-progress, data-etext-research-result, data-etext-research-apply, data-etext-research-dismiss), proper use of fetchWithRenewal for auth-aware API calls, and proper error handling with AuthRequiredError dispatch.",
+      "evidence": "frontend/src/lib/ETextEditor.svelte lines 651-710 for button UI; frontend/src/lib/etext.js lines 369-424 for API functions"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The task metadata pattern (type, doc_id) established here should be documented as a convention for context passing. This fulfills VAL-CHOIR-013's requirement for parent context passing to workers.",
+      "evidence": "frontend/src/lib/etext.js lines 396-401: metadata includes {type: 'etext_research', doc_id: docId}"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The etext-research-button feature is fully implemented and passes review. All expected behaviors from VAL-CHOIR-007, VAL-CHOIR-012, and VAL-CHOIR-013 are working: button visibility, non-blocking task spawning, progress indicator, results display, apply/dismiss actions, rapid resubmission prevention, and metadata context passing. The 9 Playwright tests provide comprehensive coverage. The library documentation correctly captures the architectural decision to use the standalone task endpoint. No blocking or non-blocking issues found."
+}
