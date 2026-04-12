@@ -328,6 +328,331 @@ func TestHandleTaskStatusFailedOutcome(t *testing.T) {
 	}
 }
 
+// --- Task Status By Path ID Tests (VAL-CHOIR-002, VAL-CHOIR-005) ---
+// GET /api/agent/{id}/status
+
+func TestHandleTaskStatusByIDReturnsTaskRecord(t *testing.T) {
+	// VAL-CHOIR-002: GET /api/agent/{id}/status returns task record.
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "test status by id", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait for task to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// Response includes all required fields (VAL-CHOIR-002).
+	if resp.TaskID != rec.TaskID {
+		t.Errorf("task_id: got %q, want %q", resp.TaskID, rec.TaskID)
+	}
+	if resp.OwnerID != "user-alice" {
+		t.Errorf("owner_id: got %q, want user-alice", resp.OwnerID)
+	}
+	if resp.State == "" {
+		t.Error("state should not be empty")
+	}
+	if resp.Prompt == "" {
+		t.Error("prompt should not be empty")
+	}
+	if resp.CreatedAt == "" {
+		t.Error("created_at should not be empty")
+	}
+	if resp.UpdatedAt == "" {
+		t.Error("updated_at should not be empty")
+	}
+}
+
+func TestHandleTaskStatusByIDCompletedResult(t *testing.T) {
+	// VAL-CHOIR-005: completed task has result and finished_at.
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "result check prompt", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait for task to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.State != types.TaskCompleted {
+		t.Errorf("state: got %q, want %q", resp.State, types.TaskCompleted)
+	}
+	if resp.Result == "" {
+		t.Error("result should not be empty for completed task (VAL-CHOIR-005)")
+	}
+	if resp.FinishedAt == nil || *resp.FinishedAt == "" {
+		t.Error("finished_at should be set for completed task (VAL-CHOIR-005)")
+	}
+}
+
+func TestHandleTaskStatusByIDAuthGated(t *testing.T) {
+	// VAL-CHOIR-002: unauthenticated request returns 401.
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/some-id/status", "", "")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleTaskStatusByIDCallerScoped(t *testing.T) {
+	// VAL-CHOIR-002: 404 for task owned by different user (403 in spec,
+	// but we use 404 to prevent IDOR probing — same as query-param handler).
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "alice private task", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Eve tries to see Alice's task.
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-eve")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d (caller-scoped denial)", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleTaskStatusByIDNotFound(t *testing.T) {
+	// VAL-CHOIR-002: 404 for non-existent task.
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodGet,
+		"/api/agent/nonexistent-task-id/status", "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleTaskStatusByIDFailedOutcome(t *testing.T) {
+	// VAL-CHOIR-002: status exposes error information for failed tasks.
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	_ = os.Remove(dbPath)
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	bus := events.NewEventBus()
+	provider := &StubProvider{
+		Delay:   10 * time.Millisecond,
+		FailErr: errors.New("provider timeout for by-id test"),
+	}
+
+	cfg := Config{
+		SandboxID:           "sandbox-test",
+		StorePath:           dbPath,
+		ProviderTimeout:     10 * time.Millisecond,
+		SupervisionInterval: 1 * time.Hour,
+	}
+
+	rt := New(cfg, s, bus, provider)
+	handler := NewAPIHandler(rt)
+
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s.Close()
+		_ = os.Remove(dbPath)
+	})
+
+	rec, err := rt.SubmitTask(context.Background(), "failing by-id prompt", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Wait for the task to fail.
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.State != types.TaskFailed {
+		t.Errorf("state: got %q, want %q", resp.State, types.TaskFailed)
+	}
+	if resp.Error == "" {
+		t.Error("error should not be empty for failed task")
+	}
+	if resp.FinishedAt == nil || *resp.FinishedAt == "" {
+		t.Error("finished_at should be set for failed task")
+	}
+}
+
+func TestHandleTaskStatusByIDMethodNotAllowed(t *testing.T) {
+	// Only GET is allowed.
+	_, handler := testAPISetup(t)
+
+	req := authenticatedRequest(http.MethodPost, "/api/agent/some-id/status", "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleTaskStatusByIDSpawnedChildTask(t *testing.T) {
+	// VAL-CHOIR-002: status works for spawned child tasks too.
+	rt, handler := testAPISetup(t)
+
+	// Create a parent task first.
+	parent, err := rt.SubmitTask(context.Background(), "parent task", "user-alice")
+	if err != nil {
+		t.Fatalf("submit parent task: %v", err)
+	}
+
+	// Spawn a child task.
+	child, err := rt.SpawnTask(context.Background(), parent.TaskID, "child objective", "user-alice", nil)
+	if err != nil {
+		t.Fatalf("spawn child task: %v", err)
+	}
+
+	// Wait for the child task to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", child.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.TaskID != child.TaskID {
+		t.Errorf("task_id: got %q, want %q", resp.TaskID, child.TaskID)
+	}
+	if resp.State == "" {
+		t.Error("state should not be empty")
+	}
+	// Verify metadata includes parent_id.
+	if resp.Metadata == nil {
+		t.Error("metadata should not be nil for spawned task")
+	} else if pid, _ := resp.Metadata["parent_id"].(string); pid != parent.TaskID {
+		t.Errorf("metadata.parent_id: got %q, want %q", pid, parent.TaskID)
+	}
+}
+
+func TestHandleTaskStatusByIDStateTransitions(t *testing.T) {
+	// VAL-CHOIR-002: state transitions reflected in status.
+	// Verify that status shows different states as the task progresses.
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTask(context.Background(), "state transition test", "user-alice")
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	// Immediately check — should be at least pending (may already be running).
+	req := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+	w := httptest.NewRecorder()
+	handler.HandleTaskStatusByID(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var initialResp taskStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&initialResp); err != nil {
+		t.Fatalf("decode initial response: %v", err)
+	}
+
+	// The initial state should be pending or running.
+	if initialResp.State != types.TaskPending && initialResp.State != types.TaskRunning && initialResp.State != types.TaskCompleted {
+		t.Errorf("initial state: got %q, want pending/running/completed", initialResp.State)
+	}
+
+	// Wait for task to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	req2 := authenticatedRequest(http.MethodGet,
+		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+	w2 := httptest.NewRecorder()
+	handler.HandleTaskStatusByID(w2, req2)
+
+	var finalResp taskStatusResponse
+	if err := json.NewDecoder(w2.Body).Decode(&finalResp); err != nil {
+		t.Fatalf("decode final response: %v", err)
+	}
+
+	if finalResp.State != types.TaskCompleted {
+		t.Errorf("final state: got %q, want %q", finalResp.State, types.TaskCompleted)
+	}
+
+	// UpdatedAt should be >= CreatedAt.
+	if finalResp.UpdatedAt < finalResp.CreatedAt {
+		t.Errorf("updated_at %q should be >= created_at %q", finalResp.UpdatedAt, finalResp.CreatedAt)
+	}
+}
+
 // --- Events Tests ---
 
 func TestHandleEventsAuthGated(t *testing.T) {

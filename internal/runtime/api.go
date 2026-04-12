@@ -264,6 +264,70 @@ func (h *APIHandler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleTaskStatusByID handles GET /api/agent/{id}/status.
+// It returns the full task record for the task identified by the URL path
+// parameter {id}. The response includes state, result (if complete), error
+// (if failed), and timestamps (VAL-CHOIR-002, VAL-CHOIR-005).
+// Access is scoped to the authenticated owner — a request for a task owned
+// by a different user returns 404 to prevent IDOR probing. State updates
+// are visible immediately after change.
+func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	// Extract task ID from URL path: /api/agent/{id}/status
+	// Expected prefix: /api/agent/  and suffix: /status
+	path := r.URL.Path
+	prefix := "/api/agent/"
+	suffix := "/status"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid status path"})
+		return
+	}
+	taskID := strings.TrimPrefix(path, prefix)
+	taskID = strings.TrimSuffix(taskID, suffix)
+	if taskID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "task ID is required"})
+		return
+	}
+
+	rec, err := h.rt.GetTask(r.Context(), taskID, ownerID)
+	if err != nil {
+		// ErrNotFound covers both "task doesn't exist" and "task belongs to
+		// another user" so callers cannot probe for other users' tasks.
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+		return
+	}
+
+	var finishedAt *string
+	if rec.FinishedAt != nil {
+		s := rec.FinishedAt.Format("2006-01-02T15:04:05.000Z")
+		finishedAt = &s
+	}
+
+	writeAPIJSON(w, http.StatusOK, taskStatusResponse{
+		TaskID:     rec.TaskID,
+		OwnerID:    rec.OwnerID,
+		SandboxID:  rec.SandboxID,
+		State:      rec.State,
+		Prompt:     rec.Prompt,
+		Result:     rec.Result,
+		Error:      rec.Error,
+		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
+		FinishedAt: finishedAt,
+		Metadata:   rec.Metadata,
+	})
+}
+
 // HandleEvents handles GET /api/events.
 // It provides a long-lived incremental event stream through the authenticated
 // same-origin proxy path, emitting ordered lifecycle updates correlated to
@@ -400,6 +464,7 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
+	s.HandleFunc("/api/agent/", h.HandleTaskStatusByID) // matches /api/agent/{id}/status
 	s.HandleFunc("/api/events", h.HandleEvents)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
 
