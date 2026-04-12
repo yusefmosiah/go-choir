@@ -7,17 +7,60 @@
 
 ## Project Vision
 
-**go-choir** is a distributed multi-agent operating system - a Go rewrite of ChoirOS (Rust), unified with Cogent's capabilities. The goal is a web desktop where:
+**go-choir** is a distributed multi-agent operating system - unifying **ChoirOS** (web desktop, microVMs) + **Cogent** (hierarchical MAS, overnight runs).
 
-- **Each user has their own microVM** containing their data, apps, and agent runtime
-- **Conductor (prompt bar)** receives user input and routes to AppAgents within the user's microVM
-- **AppAgents** (like etext) handle domain-specific work within the user's microVM
-- **Workers** spawn as separate microVMs that autoscale for code execution (not terminal agents themselves)
-- **Web desktop UX** follows ChoirOS pattern: desktop icons, floating windows, bottom prompt bar
+### Why Cogent Matters
+
+Cogent provides the **hierarchical multi-agent system** that enables "choir in choir":
+
+**Cogent's 3-Tier Hierarchy:**
+1. **Host** - The agent that calls cogent (e.g., E-Text AppAgent)
+2. **Supervisor** - LLM-driven orchestrator that claims work and delegates
+3. **Workers** - Including verifiers that check work before attestation
+
+**Key cogent patterns for choir:**
+- **Work graph:** SQLite-backed DAG of work items, edges, attestations
+- **Overnight coding runs:** Long-horizon work with resume capability
+- **Attestation:** Work isn't "done" until verified with evidence
+- **Database:** Should be **Dolt** (not SQLite) for version control
+
+### 3-Tier Architecture (Unified Vision)
+
+**Control Plane (Host/Hypervisor):**
+- Auth service (WebAuthn, JWT)
+- Proxy (routing to user microVMs)
+- Gateway (LLM provider + **web search** proxy)
+- VM lifecycle management (vmctl)
+
+**Runtime Plane (Per-User MicroVM):**
+- One microVM per user with **full cogent system inside**
+- **Cogent Supervisor** - Claims work, delegates to workers
+- **Cogent Workers** - Terminal (bash), Researcher (web search via gateway), Verifiers
+- **AppAgents** - E-Text (orchestrates via cogent supervisor)
+- Database: **Dolt** (version-controlled work graph)
+
+**Client Plane (Browser):**
+- Web desktop UI (Svelte)
+- Shows cogent work progress inline in etext
+- Communicates via HTTP/WebSocket → Proxy → Sandbox → Cogent
+
+### Agent Hierarchy (Cogent-Powered)
+
+**Host (E-Text AppAgent)** - User-facing, owns document state, calls cogent  
+**Cogent Supervisor** - LLM-driven, claims ready work from work graph, delegates  
+**Cogent Workers** - Execute tasks, report results, may spawn coagents  
+**Verifiers** - Check work quality before attestation
+
+**Key principle:** Cogent enables long-horizon work. User can say "build me an app" and come back tomorrow to find it done with full history.
+
+### MicroVM + Cogent Lifecycle
+
+- **Per-user microVM:** Contains full cogent system (supervisor, workers, Dolt DB)
+- **Snapshot-based:** VMs load from snapshots (fast resume)
+- **Background forking:** For choir-in-choir, fork VM to build new app in background
+- **Dolt database:** Version-controlled work graph survives hibernation
 
 **Key architectural principle:** Agents may always stop, the system may always resume.
-
-**Correction from choiros-rs:** User data lives in their dedicated microVM. The system autoscales worker execution to separate microVMs, but terminal agents and AppAgents run within the user's primary microVM.
 
 ---
 
@@ -164,17 +207,22 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 
 **Blockers:** None (just needs execution)
 
-### Mission 6: Desktop UX Rewrite (PLANNED)
-**Goal:** Rewrite frontend to match ChoirOS desktop paradigm
+### Mission 6: E-Text UX + Choir-in-Choir (PLANNED)
+**Goal:** Realize the full vision - single editor UX + background app building
 
-**Doc:** `docs/mission-6-desktop-ux-rewrite.md`
+**E-Text Vision:**
+- Single responsive text editor, no sidebars
+- User prompt = Version 0
+- Agent creates Version 1, spawns workers
+- Workers message back, agent creates subsequent versions
+- Users "reprompt" by editing text inline anywhere
+- Citations, metadata integrated into text (not sidebar)
+- Show artifacts (images, videos) inline
 
-**Key tasks:**
-1. Desktop icons on left rail (not top bar)
-2. Floating, draggable, resizable windows
-3. Prompt bar at bottom (conductor)
-4. Simple e-text editor (no research button, no sidebar)
-5. Responsive for mobile/tablet/desktop
+**Choir-in-Choir:**
+- Fork microVM to build new apps in background
+- Stream progress/artifacts to etext
+- Switch to new app when ready
 
 **Reference:** `~/choiros-rs/docs/archive/DESKTOP_ARCHITECTURE_DESIGN.md`
 
