@@ -245,9 +245,9 @@ func (m *ChannelManager) PostToChannel(workID string, message ChannelMessage, em
 	// Emit observable event for the channel message.
 	if emit != nil {
 		payload, _ := json.Marshal(map[string]any{
-			"work_id":   workID,
-			"from":      message.From,
-			"role":      message.Role,
+			"work_id":     workID,
+			"from":        message.From,
+			"role":        message.Role,
 			"content_len": len(message.Content),
 		})
 		emit(types.EventChannelMessage, "channel", payload)
@@ -320,4 +320,97 @@ func (rt *Runtime) ChannelWait(ctx context.Context, workID string, cursor uint64
 		return nil, cursor, err
 	}
 	return ch.Wait(ctx, cursor)
+}
+
+// --- Parent-Child Channel Helpers ---
+
+// ensureParentChildChannels creates channels for both the parent and child
+// task IDs, enabling immediate bidirectional communication. The parent
+// channel is keyed by the parent task ID, and the child channel is keyed
+// by the child task ID. Children post results to the parent's channel,
+// and the parent can wait/read from either channel.
+//
+// This is called automatically during SpawnTask to ensure channels are
+// available without explicit setup.
+func (m *ChannelManager) ensureParentChildChannels(parentID, childID string) error {
+	if _, err := m.Channel(parentID); err != nil {
+		return fmt.Errorf("ensure parent channel: %w", err)
+	}
+	if _, err := m.Channel(childID); err != nil {
+		return fmt.Errorf("ensure child channel: %w", err)
+	}
+	return nil
+}
+
+// PostChildResult is a convenience method that posts a result message from
+// a child task to its parent's channel. The message is tagged with
+// role="result" and the child's task ID as the sender. This is the primary
+// way for child workers to report completion to their parent
+// (VAL-CHOIR-006).
+func (rt *Runtime) PostChildResult(ctx context.Context, parentID, childID, result string) (uint64, error) {
+	return rt.ChannelPost(ctx, parentID, childID, "result", result)
+}
+
+// PostChildError is a convenience method that posts an error message from
+// a child task to its parent's channel. The message is tagged with
+// role="error" and the child's task ID as the sender. This enables parents
+// to receive error notifications from failed children (VAL-CHOIR-009).
+func (rt *Runtime) PostChildError(ctx context.Context, parentID, childID, errMsg string) (uint64, error) {
+	return rt.ChannelPost(ctx, parentID, childID, "error", errMsg)
+}
+
+// PostChildProgress is a convenience method that posts a progress message
+// from a child task to its parent's channel. The message is tagged with
+// role="status" and the child's task ID as the sender. This enables parents
+// to track child task progress (VAL-CHOIR-011).
+func (rt *Runtime) PostChildProgress(ctx context.Context, parentID, childID, progress string) (uint64, error) {
+	return rt.ChannelPost(ctx, parentID, childID, "status", progress)
+}
+
+// WaitForChildResult waits for messages from a specific child on the parent's
+// channel. It filters messages to return only those from the specified childID
+// with the given role (e.g., "result", "error", "status").
+func (rt *Runtime) WaitForChildResult(ctx context.Context, parentID, childID, role string) ([]ChannelMessage, uint64, error) {
+	// First check for existing messages from this child.
+	ch, err := rt.channelMgr.Channel(parentID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Scan existing messages for matching child+role.
+	msgs, cursor, err := ch.ReadSince(0)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	filtered := filterMessages(msgs, childID, role)
+	if len(filtered) > 0 {
+		return filtered, cursor, nil
+	}
+
+	// No matching messages yet — wait for new ones.
+	for {
+		newMsgs, newCursor, err := ch.Wait(ctx, cursor)
+		if err != nil {
+			return nil, cursor, err
+		}
+		cursor = newCursor
+
+		filtered = filterMessages(newMsgs, childID, role)
+		if len(filtered) > 0 {
+			return filtered, cursor, nil
+		}
+		// Keep waiting if we got messages but not from the right child/role.
+	}
+}
+
+// filterMessages filters channel messages by sender and role.
+func filterMessages(msgs []ChannelMessage, from, role string) []ChannelMessage {
+	var result []ChannelMessage
+	for _, m := range msgs {
+		if m.From == from && (role == "" || m.Role == role) {
+			result = append(result, m)
+		}
+	}
+	return result
 }

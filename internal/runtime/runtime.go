@@ -242,6 +242,14 @@ func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID s
 
 	log.Printf("runtime: spawned child task %s for parent %s (owner=%s)", taskID, parentID, ownerID)
 
+	// Ensure channels exist for both parent and child, enabling immediate
+	// bidirectional communication (VAL-CHOIR-006). Children post results to
+	// the parent's channel; parents can read/wait on it.
+	if err := rt.channelMgr.ensureParentChildChannels(parentID, taskID); err != nil {
+		log.Printf("runtime: ensure channels for spawned task %s: %v", taskID, err)
+		// Non-fatal: channels will be created lazily on first access.
+	}
+
 	return rec, nil
 }
 
