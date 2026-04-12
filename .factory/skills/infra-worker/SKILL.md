@@ -1,6 +1,6 @@
 ---
 name: infra-worker
-description: Builds deploy, NixOS, Caddy, VM-image, and Node B operational configuration for Mission 3
+description: Builds deploy, NixOS, Caddy, VM-image, and Node B operational configuration
 ---
 
 # Infra Worker
@@ -9,101 +9,91 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use for features that change:
-- NixOS modules or systemd units on Node B
-- Caddy routing and public route preservation
-- flake/frontend packaging used by deploy
-- Firecracker guest image wiring and runtime configuration
-- deploy/runtime configuration for auth/proxy/gateway/vmctl/sandbox
-- monitoring, alerting, and load-harness setup
-- secret or persistent-path wiring needed for deployed validation
+Use this skill for:
+- NixOS configuration updates for Node B
+- Caddy configuration changes
+- VM image (guest) updates
+- CI/CD pipeline changes (GitHub Actions)
+- Deployment credential management
+- Provider API key deployment to Node B
 
 ## Required Skills
 
-None
+- **agent-browser** (for deployment verification): Use to verify deployed services work end-to-end after deployment.
 
 ## Work Procedure
 
-1. **Read the mission contract before editing infra**
-   - Read the feature, `mission.md`, `AGENTS.md`, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, `.factory/library/user-testing.md`, and `.factory/services.yaml`.
-   - Preserve the public route contract and Mission 3 boundaries.
-   - If `deploy-readiness` is not complete yet, treat public-origin correctness on `https://draft.choir-ip.com` as the hard gate before later milestones.
+### 1. Understand the Deployment Change
+Read the feature. Identify:
+- Which NixOS service configs need updates
+- What environment variables/secrets need deployment
+- What health checks verify success
 
-2. **Inspect the existing infra first**
-   - Read `flake.nix`, `nix/*.nix`, and any relevant workflow/runtime files before changing them.
-   - Keep ports on `8081-8085` unless the feature explicitly requires otherwise.
-   - Treat Node B as the only deploy/acceptance host for this mission.
+### 2. Test Locally First
+- Build Nix configuration: `nix build .#nixosConfigurations.node-b.config.system.build.toplevel`
+- Check for syntax errors
+- Verify secrets file structure (don't commit secrets)
 
-3. **Apply Mission 3 infra rules**
-   - Caddy must use `handle`, not `handle_path`, for the public prefixes this mission depends on.
-   - Do not expose internal service ports externally.
-   - Keep secrets out of git and out of the Nix store.
-   - If auth, gateway, or vmctl need runtime keys/paths on Node B, wire them through runtime files or systemd credentials.
-   - The deploy-readiness milestone must restore the real SPA at `draft.choir-ip.com`, not just pass internal health checks.
-   - VM-isolation acceptance is Linux/Node B only; do not claim macOS Firecracker proof.
+### 3. Update Configuration
+- Modify `nix/node-b.nix` for service changes
+- Update `nix/sandbox-vm.nix` for guest image changes
+- Update GitHub Actions workflow if CI changes needed
+- Document any new secrets required
 
-4. **Verify the Node B runtime story**
-   - Make sure the deployed services have the files, directories, and environment they need.
-   - Keep `draft.choir-ip.com` as the deployed acceptance origin.
-   - If the feature changes runtime backing for protected requests, verify the public path still lands on the intended backend.
-   - Do not broaden scope to Node A promotion.
+### 4. Deploy to Node B
+- SSH to Node B (credentials in user's private notes)
+- Git pull, nix build, nixos-rebuild switch
+- Verify health endpoints
+- Check service logs: `journalctl -u go-choir-auth -f`
 
-5. **Run infra validation**
-   - Prefer syntax/evaluation checks that are safe on this machine.
-   - Verify that service ports, routes, runtime files, and secret paths line up with the mission contract.
-   - If the feature changes a browser-visible deploy/runtime path, include a public-origin smoke check rather than only local/Nix evaluation.
-   - If Linux-only validation cannot be run locally, record the strongest safe local verification and the exact remaining Node B proof required.
+### 5. Verify Deployment
+- Test health endpoints: `curl https://draft.choir-ip.com/auth/health`
+- Run smoke tests
+- Invoke `agent-browser` to verify full flows work on deployed instance
 
-6. **Return a precise handoff**
-   - Name the exact files changed, the public routes affected, the runtime secrets/paths introduced, and how you verified they stay outside the repo/Nix store.
-   - If the feature changes deploy artifacts, state how you proved the public root or runtime now serves the intended build/product surface.
+### 6. Monitor for Issues
+- Check logs for errors
+- Verify all services running: `systemctl status go-choir-*`
+- Rollback if critical issues
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Restored the real frontend deploy artifact on Node B and aligned Caddy/systemd wiring so `https://draft.choir-ip.com` serves the Mission 2 auth shell instead of the placeholder page. Verified the public root now serves built assets and that the protected-request backend restarts cleanly under the configured systemd units.",
-  "whatWasImplemented": "Updated the flake/frontend packaging and Node B runtime wiring so the deployed root serves the built Svelte frontend bundle instead of a handwritten placeholder artifact. Preserved prefix-stable `/auth/*` and `/api/*` routing, kept internal service ports private, and kept runtime secrets and persistence paths in writable runtime locations outside git and the Nix store.",
-  "whatWasLeftUndone": "Full public-origin browser validation remains for milestone validation after implementation features complete.",
+  "salientSummary": "Deployed Fireworks and Z.AI API keys to Node B. Updated nix/node-b.nix to inject keys via environment variables. Verified both providers respond correctly through gateway. All health checks passing.",
+  "whatWasImplemented": "Added FIREWORKS_API_KEY and ZAI_API_KEY to node-b.nix environment variables for gateway service. Keys sourced from /var/lib/go-choir/secrets/ directory. Updated deploy script to set proper permissions. Ran nixos-rebuild switch on Node B.",
+  "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {
-        "command": "nix flake show",
-        "exitCode": 0,
-        "observation": "The flake still evaluates and exposes the expected packages/configuration."
-      },
-      {
-        "command": "go build ./cmd/...",
-        "exitCode": 0,
-        "observation": "Service binaries referenced by the NixOS modules still compile."
-      },
-      {
-        "command": "cd frontend && pnpm build",
-        "exitCode": 0,
-        "observation": "The frontend build artifact required by the deploy path is generated successfully."
-      }
+      {"command": "ssh root@147.135.70.196 'systemctl status go-choir-gateway'", "exitCode": 0, "observation": "Gateway service active and running"},
+      {"command": "curl -s https://draft.choir-ip.com/provider/v1/health", "exitCode": 0, "observation": "Gateway health endpoint returns 200"},
+      {"command": "ssh root@147.135.70.196 'journalctl -u go-choir-gateway -n 20'", "exitCode": 0, "observation": "No errors, keys loaded successfully"}
     ],
     "interactiveChecks": [
       {
-        "action": "Reviewed the public root artifact path and Caddy route definitions after the change",
-        "observed": "The public root serves the built frontend artifact and public prefixes remain preserved with `handle`."
-      },
-      {
-        "action": "Reviewed runtime secret/persistence paths",
-        "observed": "Auth DB, signing material, and future runtime secret paths remain in writable runtime locations, not in git or the Nix store."
+        "action": "agent-browser: Navigate to draft.choir-ip.com, login, submit etext prompt with Fireworks model",
+        "observed": "Streaming response received, content generated successfully"
       }
     ]
   },
   "tests": {
     "added": []
   },
-  "discoveredIssues": []
+  "discoveredIssues": [
+    {
+      "severity": "medium",
+      "description": "Secret file permissions were 644, changed to 600",
+      "suggestedFix": "Added chmod 600 to deploy script"
+    }
+  ]
 }
 ```
 
 ## When to Return to Orchestrator
 
-- The feature requires a mission-boundary change (ports, hosts, public exposure, or Node A work)
-- Runtime secrets, provider credentials, or deploy credentials are missing and cannot be created safely from within the repo
-- The only way forward would place secrets in git, the Nix store, or guest-visible VM state
-- Linux-only VM/runtime behavior cannot be safely verified from this environment and the remaining proof requires Node B access or user intervention
+Return if:
+- SSH credentials not available or don't work
+- NixOS build fails with complex errors
+- Service fails to start after deployment (needs investigation)
+- User needs to provide secrets or approve credential changes
+- Rollback needed due to deployment failure

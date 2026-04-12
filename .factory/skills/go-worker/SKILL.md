@@ -1,6 +1,6 @@
 ---
 name: go-worker
-description: Builds Go services, runtime/store packages, gateway/vmctl logic, and backend APIs for Mission 3
+description: Implements Go backend services, runtime, store, and APIs for go-choir
 ---
 
 # Go Worker
@@ -9,132 +9,102 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use for Mission 3 backend features such as:
-- Node B deploy-readiness fixes that require Go service changes
-- proxy/auth contract changes that preserve the public browser surface
-- sandbox runtime APIs, supervision, events, and persistence
-- Dolt-backed store/types/scheduler/appagent backend work
-- gateway provider access and caller authentication
-- vmctl ownership registry and VM lifecycle APIs
-- admin/status APIs exposed by Go services
+Use this skill for:
+- Auth service fixes and email migration
+- Provider gateway integration (Fireworks, Z.AI)
+- Scheduler and work registry implementation
+- Task spawning and parent-child relationships
+- Store/DB schema changes
+- Runtime tool loop and channel updates
+- Any Go backend API or service work
 
 ## Required Skills
 
-None
+- **agent-browser** (if feature involves browser-facing flows): Use to verify auth flows, etext interactions, and task spawning UI. Invoke after implementation to test end-to-end.
 
 ## Work Procedure
 
-1. **Read the feature and contract first**
-   - Read the feature description, `mission.md`, `AGENTS.md`, `validation-contract.md`, `.factory/library/architecture.md`, `.factory/library/environment.md`, `.factory/library/user-testing.md`, `.factory/library/mission-3-references.md`, and `.factory/services.yaml`.
-   - Identify exactly which contract assertions this feature fulfills.
-   - If the current top milestone is still `deploy-readiness`, treat restoring `https://draft.choir-ip.com` as a hard execution gate for later work rather than optional cleanup.
+### 1. Understand the Feature
+Read the feature description in features.json. Identify:
+- What files need to change (auth handlers, store, runtime, gateway, etc.)
+- What tests already exist vs what needs to be added
+- What the verification steps require
 
-2. **Read the existing Go surface before editing**
-   - Inspect the relevant `cmd/*`, `internal/*`, `go.mod`, and Nix/runtime config touched by the feature.
-   - Reuse existing `internal/server` patterns where sensible.
-   - Preserve browser-facing route invariants unless the feature explicitly owns a validated contract change.
-   - For runtime/gateway/vmctl work, keep boundaries explicit: proxy is the browser ingress, gateway owns provider credential use, vmctl owns VM lifecycle, and appagents own canonical writes.
+### 2. Write Tests First (TDD)
+Write failing tests before implementation:
+- Add table-driven tests in `*_test.go` files
+- Test both success and error cases
+- Test edge cases (empty inputs, boundary conditions, concurrent access)
+- Tests must FAIL before implementation (red phase)
 
-3. **Write failing tests first**
-   - Add or extend `_test.go` coverage before implementation.
-   - Cover the happy path plus the contract-critical denial, recovery, and boundary cases for the feature.
-   - Confirm the new tests fail first before writing production code.
+### 3. Implement the Feature
+Implement to make tests pass:
+- Follow existing code patterns in the codebase
+- Use strong typing, proper error handling
+- Add structured logging for debugging
+- Update schemas with migrations if needed
 
-4. **Implement the smallest correct slice**
-   - Write the minimum production code to make the tests pass.
-   - Match Mission 3 decisions:
-     - no CLI subprocess loop inside sandbox
-     - no adapter-wrapper process around the runtime loop
-     - cookie-backed same-origin auth remains the browser trust model
-     - users and appagents are peer canonical editors
-     - subordinate workers never become canonical authors
-     - Bedrock and/or Z.AI are the first required real-provider paths
-   - Reuse already-adopted libraries and patterns where possible; add new dependencies only when the feature requires them and after confirming they are appropriate for the repo.
+### 4. Manual Verification
+Run verification steps from the feature:
+- Start services: `source start-services.sh` or manual start
+- Test with curl: `curl -X POST http://localhost:8081/auth/...`
+- Check logs: `tail -f auth.log`, `tail -f sandbox.log`
+- Verify on Node B if deployment-related
 
-5. **Verify the contract surface directly**
-   - Use `curl` for HTTP/API contracts, including auth denial, same-origin proxy paths, status/event surfaces, and operator APIs.
-   - If the feature changes a browser-visible contract, run an `agent-browser` smoke check against the affected public flow and add focused Playwright coverage when the behavior is stateful or regression-prone.
-   - When the feature changes runtime/gateway/vmctl behavior, capture evidence that proves the expected boundary: no auth bypass, no client-supplied identity trust, no direct-browser provider calls, no guest-side secret leakage.
-   - When the feature touches persisted state, prove the resulting state survives the restart/reload scope named in the feature.
-   - When the feature affects task submission or canonical mutation, explicitly check that renewal/retry/recovery does not duplicate the effect.
-   - Do not leave long-running processes behind; if you start a service, you must stop it.
+### 5. Run Validators
+- `go test ./internal/auth/...` (or relevant package)
+- `go vet ./...`
+- `gofmt -l .`
 
-6. **Run validators before handoff**
-   - `go test ./... -count=1 -p 4`
-   - `go vet ./...`
-   - `go build ./cmd/...`
-   - `cd frontend && pnpm build` when the feature changes routes or payloads consumed by the frontend
-   - run any focused additional command required by the feature (for example `nix flake show .` for Nix-coupled backend changes)
-
-7. **Return a concrete handoff**
-   - Record the exact tests you added, the focused verification commands you ran, and the curl/log/browser evidence that proves the contract behavior.
-   - If anything remained partial, say exactly what and why.
+### 6. Browser Verification (if applicable)
+If the feature has browser-facing aspects:
+- Invoke `agent-browser` skill
+- Test the full flow: registration → login → feature usage
+- Document observations in handoff
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Implemented authenticated runtime task/status/event APIs with stable task handles and Dolt-backed task recovery. Verified signed-out requests fail closed, signed-in requests receive stable handles, and status remains recoverable after restarting the sandbox process.",
-  "whatWasImplemented": "Added the runtime task submission, status lookup, and event-stream backend for the Mission 3 host-process runtime, including stable task IDs, persisted task state, and restart-safe recovery behavior. Wired the proxy-facing same-origin contract so `/api/agent/task`, `/api/agent/status`, and `/api/events` all stay behind cookie-backed auth instead of exposing direct sandbox ports or alternate hosts.",
-  "whatWasLeftUndone": "Browser prompt UI and agent-browser verification of the shell prompt surface belong to the frontend feature that consumes these APIs.",
+  "salientSummary": "Fixed auth re-login bug by correcting sign counter persistence in credentials table. Migrated username to email with unique constraint enforcement. Added 12 new test cases covering re-login scenarios.",
+  "whatWasImplemented": "Updated internal/auth/handlers.go to properly update sign counter after each login. Modified internal/auth/store.go to add email column with UNIQUE constraint. Updated internal/auth/webauthn_user.go to use email for display name. Changed beginRequest struct to use Email field. All registration/login flows now email-based.",
+  "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {
-        "command": "go test ./... -count=1 -p 4",
-        "exitCode": 0,
-        "observation": "Runtime API, persistence, and restart-recovery tests pass."
-      },
-      {
-        "command": "go vet ./...",
-        "exitCode": 0,
-        "observation": "No vet findings."
-      },
-      {
-        "command": "go build ./cmd/...",
-        "exitCode": 0,
-        "observation": "All service binaries still compile."
-      }
+      {"command": "go test ./internal/auth/... -v", "exitCode": 0, "observation": "14 tests passed including 3 new re-login tests"},
+      {"command": "curl -s http://localhost:8081/auth/register/begin -d '{\"email\":\"test@example.com\"}'", "exitCode": 0, "observation": "Returned valid WebAuthn creation options"},
+      {"command": "curl -s http://localhost:8081/auth/login/begin -d '{\"email\":\"test@example.com\"}'", "exitCode": 0, "observation": "Returned valid WebAuthn assertion options"}
     ],
     "interactiveChecks": [
       {
-        "action": "POSTed to `/api/agent/task`, polled `/api/agent/status`, restarted the sandbox, and polled status again by the same task handle",
-        "observed": "Signed-out submission failed with 401, signed-in submission returned a stable task ID, and post-restart status lookup still returned the accepted task instead of losing it."
-      },
-      {
-        "action": "Opened `/api/events` with valid auth and then repeated with invalid auth",
-        "observed": "The signed-in stream emitted incremental task lifecycle events; the invalid-auth attempt failed closed."
+        "action": "Register with email test@example.com, complete WebAuthn, logout, wait 5 minutes, re-login",
+        "observed": "Re-login successful with same passkey, sign counter incremented correctly"
       }
     ]
   },
   "tests": {
     "added": [
-      {
-        "file": "internal/runtime/api_test.go",
-        "cases": [
-          {
-            "name": "TestTaskSubmissionReturnsStableHandle",
-            "verifies": "Accepted runtime work returns a stable task ID and initial lifecycle state."
-          },
-          {
-            "name": "TestStatusLookupSurvivesRestart",
-            "verifies": "Accepted work remains recoverable after sandbox restart."
-          },
-          {
-            "name": "TestEventsRequireAuth",
-            "verifies": "Runtime event streaming fails closed without valid auth."
-          }
-        ]
-      }
+      {"file": "internal/auth/handlers_test.go", "cases": [
+        {"name": "TestReLoginWithSamePasskey", "verifies": "User can re-login after logout with same credential"},
+        {"name": "TestSignCounterIncrement", "verifies": "Sign counter increments on each successful login"},
+        {"name": "TestDuplicateEmailRejected", "verifies": "Registration with duplicate email returns 409"}
+      ]}
     ]
   },
-  "discoveredIssues": []
+  "discoveredIssues": [
+    {
+      "severity": "low",
+      "description": "Sign counter was not being updated in the credentials table after login",
+      "suggestedFix": "Added tx.Exec to update sign_count in HandleLoginFinish"
+    }
+  ]
 }
 ```
 
 ## When to Return to Orchestrator
 
-- The feature requires Nix/Caddy/systemd or Node B secret-management changes beyond a small local adjustment
-- The feature needs a new mission boundary, new public route, or provider/VM exposure model not already captured in shared state
-- Real-provider validation is blocked by missing credentials or missing Node B/Linux capabilities
-- The feature would require a local auth bypass, direct-browser access to service ports, or guest-side provider credentials
-- A contract-critical verification path cannot be exercised with the current services or test setup
+Return if:
+- The bug root cause is deeper than expected (e.g., WebAuthn library issue, not handler logic)
+- Feature requires schema changes that conflict with existing data requiring migration strategy
+- Provider API behaves unexpectedly (rate limits, auth failures)
+- Need user decision on design tradeoff (e.g., how to handle existing username-based users)
