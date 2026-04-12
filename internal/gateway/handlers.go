@@ -16,12 +16,13 @@ import (
 
 // HealthResponse is the JSON structure returned by GET /health.
 type gatewayHealthResponse struct {
-	Status               string `json:"status"`
-	Service              string `json:"service"`
-	Provider             string `json:"provider"`
-	ActiveIdentities     int    `json:"active_identities"`
-	RateLimitMaxRequests int    `json:"rate_limit_max_requests,omitempty"`
-	RateLimitWindowMs    int64  `json:"rate_limit_window_ms,omitempty"`
+	Status               string   `json:"status"`
+	Service              string   `json:"service"`
+	Provider             string   `json:"provider"`
+	ActiveIdentities     int      `json:"active_identities"`
+	RateLimitMaxRequests int      `json:"rate_limit_max_requests,omitempty"`
+	RateLimitWindowMs    int64    `json:"rate_limit_window_ms,omitempty"`
+	SearchProviders      []string `json:"search_providers,omitempty"`
 }
 
 // ProviderRequest is the JSON payload for POST /provider/v1/inference.
@@ -86,10 +87,11 @@ type ErrorResponse struct {
 
 // Handler provides HTTP handlers for the gateway service.
 type Handler struct {
-	registry    *IdentityRegistry
-	provider    provider.Provider       // single provider mode (backward compat)
-	providers   *provider.MultiProvider // multi-provider mode (may be nil)
-	rateLimiter *PerSandboxRateLimiter  // per-sandbox rate limiter (may be nil)
+	registry     *IdentityRegistry
+	provider     provider.Provider       // single provider mode (backward compat)
+	providers    *provider.MultiProvider // multi-provider mode (may be nil)
+	rateLimiter  *PerSandboxRateLimiter  // per-sandbox rate limiter (may be nil)
+	searchClient *SearchClient           // web search client with rotation (may be nil)
 }
 
 // NewHandler creates a gateway Handler with the given identity registry
@@ -98,10 +100,11 @@ type Handler struct {
 // No rate limiting is applied when using this constructor.
 func NewHandler(registry *IdentityRegistry, p provider.Provider) *Handler {
 	return &Handler{
-		registry:    registry,
-		provider:    p,
-		providers:   nil,
-		rateLimiter: nil,
+		registry:     registry,
+		provider:     p,
+		providers:    nil,
+		rateLimiter:  nil,
+		searchClient: NewSearchClient(),
 	}
 }
 
@@ -111,10 +114,11 @@ func NewHandler(registry *IdentityRegistry, p provider.Provider) *Handler {
 // (VAL-GATEWAY-005, VAL-CROSS-115).
 func NewHandlerWithRateLimit(registry *IdentityRegistry, p provider.Provider, rl *PerSandboxRateLimiter) *Handler {
 	return &Handler{
-		registry:    registry,
-		provider:    p,
-		providers:   nil,
-		rateLimiter: rl,
+		registry:     registry,
+		provider:     p,
+		providers:    nil,
+		rateLimiter:  rl,
+		searchClient: NewSearchClient(),
 	}
 }
 
@@ -123,10 +127,11 @@ func NewHandlerWithRateLimit(registry *IdentityRegistry, p provider.Provider, rl
 // provider field or model parameter (VAL-LLM-001, VAL-LLM-005).
 func NewMultiHandler(registry *IdentityRegistry, mp *provider.MultiProvider) *Handler {
 	return &Handler{
-		registry:    registry,
-		provider:    nil,
-		providers:   mp,
-		rateLimiter: nil,
+		registry:     registry,
+		provider:     nil,
+		providers:    mp,
+		rateLimiter:  nil,
+		searchClient: NewSearchClient(),
 	}
 }
 
@@ -134,10 +139,11 @@ func NewMultiHandler(registry *IdentityRegistry, mp *provider.MultiProvider) *Ha
 // routing and per-sandbox rate limiting.
 func NewMultiHandlerWithRateLimit(registry *IdentityRegistry, mp *provider.MultiProvider, rl *PerSandboxRateLimiter) *Handler {
 	return &Handler{
-		registry:    registry,
-		provider:    nil,
-		providers:   mp,
-		rateLimiter: rl,
+		registry:     registry,
+		provider:     nil,
+		providers:    mp,
+		rateLimiter:  rl,
+		searchClient: NewSearchClient(),
 	}
 }
 
@@ -180,6 +186,10 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		_ = resetIn
 		resp.RateLimitMaxRequests = limit
 		resp.RateLimitWindowMs = h.rateLimiter.window.Milliseconds()
+	}
+
+	if h.searchClient != nil {
+		resp.SearchProviders = h.searchClient.AvailableProviders()
 	}
 
 	writeGatewayJSON(w, http.StatusOK, resp)
@@ -599,10 +609,86 @@ func drainBody(resp *http.Response) {
 	}
 }
 
+// HandleSearch handles POST /provider/v1/search for web search requests.
+// It authenticates the sandbox caller, validates the request, and routes
+// to available search providers with round-robin rotation and fallback.
+func (h *Handler) HandleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeGatewayJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
+		return
+	}
+
+	// Step 1: Authenticate the sandbox caller.
+	sandboxID, err := h.authenticateSandbox(r)
+	if err != nil {
+		log.Printf("gateway: search authentication denied: %v", err)
+		writeGatewayJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "authentication required"})
+		return
+	}
+
+	// Step 2: Enforce per-sandbox rate limiting.
+	if h.rateLimiter != nil {
+		if !h.rateLimiter.Record(sandboxID) {
+			_, _, resetIn := h.rateLimiter.Status(sandboxID)
+			retrySeconds := int(resetIn.Seconds())
+			if retrySeconds < 1 {
+				retrySeconds = 1
+			}
+			log.Printf("gateway: search rate limit exceeded for sandbox %s", sandboxID)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySeconds))
+			writeGatewayJSON(w, http.StatusTooManyRequests, ErrorResponse{
+				Error: fmt.Sprintf("rate limit exceeded for sandbox %s", sandboxID),
+			})
+			return
+		}
+	}
+
+	// Step 3: Decode the request.
+	var req SearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
+		return
+	}
+
+	if req.Query == "" {
+		writeGatewayJSON(w, http.StatusBadRequest, ErrorResponse{Error: "query is required"})
+		return
+	}
+
+	// Step 4: Check if search is configured.
+	if h.searchClient == nil || len(h.searchClient.AvailableProviders()) == 0 {
+		writeGatewayJSON(w, http.StatusServiceUnavailable, ErrorResponse{
+			Error: "search not configured: no search providers available",
+		})
+		return
+	}
+
+	log.Printf("gateway: search request from sandbox %s (query=%q max_results=%d)",
+		sandboxID, req.Query, req.MaxResults)
+
+	// Step 5: Execute the search with timeout.
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	resp, err := h.searchClient.Search(ctx, req)
+	if err != nil {
+		sanitized := sanitizeError(err)
+		log.Printf("gateway: search failed for sandbox %s: %v", sandboxID, sanitized)
+		writeGatewayJSON(w, http.StatusBadGateway, ErrorResponse{Error: sanitized})
+		return
+	}
+
+	log.Printf("gateway: search succeeded for sandbox %s (provider=%s results=%d)",
+		sandboxID, resp.Provider, len(resp.Results))
+
+	writeGatewayJSON(w, http.StatusOK, resp)
+}
+
 // RegisterRoutes registers all gateway routes on the given server.
 func RegisterRoutes(s *server.Server, h *Handler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/provider/v1/inference", h.HandleInference)
+	s.HandleFunc("/provider/v1/search", h.HandleSearch)
 	s.HandleFunc("/provider/v1/credentials/issue", h.HandleIssueCredential)
 	s.HandleFunc("/provider/v1/credentials/revoke", h.HandleRevokeCredential)
 	s.HandleFunc("/provider/v1/credentials/rotate", h.HandleRotateCredential)

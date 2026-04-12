@@ -259,11 +259,22 @@ in
       ExecStart = "${goChoirPackages.gateway}/bin/gateway";
       Restart = "on-failure";
       RestartSec = 3;
-      # Provider credentials are injected via an EnvironmentFile that lives
-      # in a writable runtime location outside the Nix store. The file is
+      # Provider credentials (LLM and search) are injected via an EnvironmentFile
+      # that lives in a writable runtime location outside the Nix store. The file is
       # created/updated by the deploy script and never committed to git.
       # This satisfies VAL-GATEWAY-004 and VAL-OPS-006: credentials stay
       # out of the repo, the Nix store, and guest-visible surfaces.
+      #
+      # The EnvironmentFile should contain:
+      #   # LLM Provider Keys
+      #   AWS_BEARER_TOKEN_BEDROCK=...
+      #   ZAI_API_KEY=...
+      #   FIREWORKS_API_KEY=...
+      #   # Search Provider Keys
+      #   TAVILY_API_KEY=...
+      #   BRAVE_API_KEY=...
+      #   EXA_API_KEY=...
+      #   SERPER_API_KEY=...
       EnvironmentFile = "-/var/lib/go-choir/gateway-provider.env";
       ReadWritePaths = [ "/var/lib/go-choir" ];
       Environment = [
