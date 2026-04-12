@@ -24,14 +24,34 @@ type taskSubmitRequest struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// spawnRequest is the JSON payload for POST /api/agent/spawn.
+// It creates a child task linked to a parent, with an objective and optional
+// constraints (VAL-CHOIR-001).
+type spawnRequest struct {
+	ParentID    string         `json:"parent_id"`
+	Objective   string         `json:"objective"`
+	Constraints map[string]any `json:"constraints,omitempty"`
+}
+
+// spawnResponse is the JSON response for POST /api/agent/spawn.
+// It returns the child task handle with the parent linkage (VAL-CHOIR-001,
+// VAL-CHOIR-004).
+type spawnResponse struct {
+	TaskID    string          `json:"task_id"`
+	ParentID  string          `json:"parent_id"`
+	State     types.TaskState `json:"state"`
+	OwnerID   string          `json:"owner_id"`
+	CreatedAt string          `json:"created_at"`
+}
+
 // taskSubmitResponse is the JSON response for POST /api/agent/task.
 // It returns the stable task handle and initial lifecycle state
 // (VAL-RUNTIME-003).
 type taskSubmitResponse struct {
-	TaskID    string         `json:"task_id"`
+	TaskID    string          `json:"task_id"`
 	State     types.TaskState `json:"state"`
-	OwnerID   string         `json:"owner_id"`
-	CreatedAt string         `json:"created_at"`
+	OwnerID   string          `json:"owner_id"`
+	CreatedAt string          `json:"created_at"`
 }
 
 // taskStatusResponse is the JSON response for GET /api/agent/status.
@@ -57,12 +77,12 @@ type taskStatusResponse struct {
 // (VAL-RUNTIME-001). The active provider name is included so operators
 // can distinguish real-provider paths from stub/canned paths.
 type runtimeHealthResponse struct {
-	Status         string                  `json:"status"`
-	Service        string                  `json:"service"`
-	SandboxID      string                  `json:"sandbox_id"`
+	Status         string                   `json:"status"`
+	Service        string                   `json:"service"`
+	SandboxID      string                   `json:"sandbox_id"`
 	RuntimeHealth  types.RuntimeHealthState `json:"runtime_health"`
-	RunningTasks   int                     `json:"running_tasks"`
-	ActiveProvider string                  `json:"active_provider"`
+	RunningTasks   int                      `json:"running_tasks"`
+	ActiveProvider string                   `json:"active_provider"`
 }
 
 // APIHandler provides HTTP handlers for the runtime API endpoints.
@@ -132,6 +152,60 @@ func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request
 
 	writeAPIJSON(w, http.StatusAccepted, taskSubmitResponse{
 		TaskID:    rec.TaskID,
+		State:     rec.State,
+		OwnerID:   rec.OwnerID,
+		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+	})
+}
+
+// HandleSpawn handles POST /api/agent/spawn.
+// It creates a child task linked to the given parent task, tracking it in
+// the work registry with parent-child relationships (VAL-CHOIR-001,
+// VAL-CHOIR-004). The child task inherits the owner from the authenticated
+// user context and begins in pending state.
+func (h *APIHandler) HandleSpawn(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	var req spawnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+
+	if strings.TrimSpace(req.ParentID) == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "parent_id is required"})
+		return
+	}
+
+	if strings.TrimSpace(req.Objective) == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "objective is required"})
+		return
+	}
+
+	rec, err := h.rt.SpawnTask(r.Context(), req.ParentID, req.Objective, ownerID, req.Constraints)
+	if err != nil {
+		// Check if the parent was not found.
+		if strings.Contains(err.Error(), "parent task not found") {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "parent task not found"})
+			return
+		}
+		log.Printf("runtime api: spawn task: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to spawn task"})
+		return
+	}
+
+	writeAPIJSON(w, http.StatusAccepted, spawnResponse{
+		TaskID:    rec.TaskID,
+		ParentID:  req.ParentID,
 		State:     rec.State,
 		OwnerID:   rec.OwnerID,
 		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -324,6 +398,7 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
+	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
 	s.HandleFunc("/api/events", h.HandleEvents)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)

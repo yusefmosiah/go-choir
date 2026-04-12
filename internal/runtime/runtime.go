@@ -25,9 +25,9 @@ type Runtime struct {
 	bus      *events.EventBus
 	provider Provider
 
-	mu       sync.Mutex
-	health   types.RuntimeHealthState
-	running  map[string]context.CancelFunc // task_id → cancel function
+	mu      sync.Mutex
+	health  types.RuntimeHealthState
+	running map[string]context.CancelFunc // task_id → cancel function
 
 	supervisor   *Supervisor
 	wg           sync.WaitGroup
@@ -41,12 +41,12 @@ type Runtime struct {
 // loop for task execution instead of the simple provider bridge path.
 func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, opts ...RuntimeOption) *Runtime {
 	rt := &Runtime{
-		cfg:      cfg,
-		store:    s,
-		bus:      bus,
-		provider: provider,
-		health:   types.HealthReady,
-		running:  make(map[string]context.CancelFunc),
+		cfg:        cfg,
+		store:      s,
+		bus:        bus,
+		provider:   provider,
+		health:     types.HealthReady,
+		running:    make(map[string]context.CancelFunc),
 		channelMgr: NewChannelManager(),
 	}
 	for _, opt := range opts {
@@ -157,6 +157,92 @@ func (rt *Runtime) GetTask(ctx context.Context, taskID, ownerID string) (*types.
 		return nil, store.ErrNotFound
 	}
 	return &rec, nil
+}
+
+// SpawnTask creates a child task linked to a parent task. It validates that
+// the parent task exists, creates both a runtime TaskRecord and a WorkItem
+// in the registry for parent-child tracking, and begins execution in a
+// goroutine (VAL-CHOIR-001, VAL-CHOIR-004).
+//
+// The child task inherits the owner from the ownerID parameter (derived from
+// auth context). Constraints are stored in the task metadata for use during
+// execution.
+func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID string, constraints map[string]any) (*types.TaskRecord, error) {
+	// Validate that the parent task exists.
+	_, err := rt.store.GetTask(ctx, parentID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return nil, fmt.Errorf("parent task not found: %s", parentID)
+		}
+		return nil, fmt.Errorf("lookup parent task: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	// Build metadata from constraints and parent reference.
+	metadata := map[string]any{
+		"parent_id":  parentID,
+		"spawned_by": ownerID,
+	}
+	for k, v := range constraints {
+		metadata[k] = v
+	}
+
+	taskID := uuid.New().String()
+
+	// Create the runtime task record.
+	rec := &types.TaskRecord{
+		TaskID:    taskID,
+		OwnerID:   ownerID,
+		SandboxID: rt.cfg.SandboxID,
+		State:     types.TaskPending,
+		Prompt:    objective,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Metadata:  metadata,
+	}
+
+	if err := rt.store.CreateTask(ctx, *rec); err != nil {
+		return nil, fmt.Errorf("persist spawned task: %w", err)
+	}
+
+	// Create the work item in the registry for parent-child tracking.
+	workItem := types.WorkItem{
+		ID:        taskID,
+		ParentID:  parentID,
+		OwnerID:   ownerID,
+		Objective: objective,
+		State:     types.TaskPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := rt.store.CreateWorkItem(ctx, workItem); err != nil {
+		return nil, fmt.Errorf("persist work item: %w", err)
+	}
+
+	// Emit submitted event.
+	objectiveLenPayload, _ := json.Marshal(map[string]any{
+		"prompt_length": len(objective),
+		"parent_id":     parentID,
+	})
+	rt.emitEvent(ctx, rec, types.EventTaskSubmitted, events.CauseTaskLifecycle, objectiveLenPayload)
+
+	// Begin execution in a goroutine. Use a copy of the record to avoid
+	// racing with the caller (the returned rec must retain TaskPending).
+	taskRec := *rec
+
+	taskCtx, cancel := context.WithCancel(context.Background())
+	rt.mu.Lock()
+	rt.running[rec.TaskID] = cancel
+	rt.mu.Unlock()
+
+	rt.wg.Add(1)
+	go rt.executeTask(taskCtx, &taskRec)
+
+	log.Printf("runtime: spawned child task %s for parent %s (owner=%s)", taskID, parentID, ownerID)
+
+	return rec, nil
 }
 
 // ListTasksByOwner returns recent tasks for the given owner, ordered by
