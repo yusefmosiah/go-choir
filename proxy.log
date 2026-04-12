@@ -1,5 +1,0 @@
-2026/04/11 05:46:19 proxy: starting server on 127.0.0.1:8082
-2026/04/11 05:48:50 proxy WS relay client->sandbox: read error: websocket: close 1005 (no status)
-2026/04/11 05:49:18 proxy WS relay client->sandbox: read error: websocket: close 1005 (no status)
-2026/04/11 11:20:17 proxy WS relay client->sandbox: read error: websocket: close 1005 (no status)
-2026/04/11 11:21:19 proxy WS relay client->sandbox: read error: websocket: close 1005 (no status)

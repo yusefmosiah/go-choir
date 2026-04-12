@@ -28,3 +28,9 @@ vendor/
 # Frontend
 node_modules/
 frontend/dist/
+
+# Local dev artifacts
+auth.db
+auth.log
+proxy.log
+sandbox.log

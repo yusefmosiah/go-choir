@@ -1,3 +1,0 @@
-2026/04/11 05:46:14 auth: starting server on 127.0.0.1:8081
-2026/04/11 05:46:14 auth: failed to listen on 127.0.0.1:8081: listen tcp 127.0.0.1:8081: bind: address already in use
-exit status 1
