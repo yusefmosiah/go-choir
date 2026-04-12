@@ -83,6 +83,14 @@ type finishResponse struct {
 
 // --- Helper functions ---
 
+// hashEmail returns a short, non-reversible hash of the email for logging.
+// This avoids storing raw email addresses in log files while still allowing
+// correlation across log lines. The hash is the first 8 hex chars of SHA-256.
+func hashEmail(email string) string {
+	h := sha256.Sum256([]byte(strings.TrimSpace(strings.ToLower(email))))
+	return fmt.Sprintf("%x", h)[:8]
+}
+
 // writeJSON writes a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -390,6 +398,8 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	emailHash := hashEmail(req.Email)
+
 	// Look up the user by email.
 	user, err := h.store.GetUserByEmail(req.Email)
 	if err != nil {
@@ -397,32 +407,34 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		userID := uuid.NewString()
 		user, err = h.store.CreateUser(userID, req.Email)
 		if err != nil {
-			log.Printf("auth register begin: create user: %v", err)
+			log.Printf("[auth] operation=register_begin email_hash=%s result=error step=create_user error=%q", emailHash, err)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create user"})
 			return
 		}
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s step=user_created", emailHash, user.ID)
 	} else {
 		// User exists — check if they already have credentials.
 		creds, credErr := h.store.GetCredentialsByUserID(user.ID)
 		if credErr != nil {
-			log.Printf("auth register begin: check credentials: %v", credErr)
+			log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=error step=check_credentials error=%q", emailHash, user.ID, credErr)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 			return
 		}
 		if len(creds) > 0 {
 			// User already has registered passkeys — reject duplicate registration.
-			log.Printf("auth register begin: duplicate registration attempt for %q", req.Email)
+			log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=rejected reason=duplicate_registration", emailHash, user.ID)
 			writeJSON(w, http.StatusConflict, errorResponse{Error: "email already registered"})
 			return
 		}
 		// User exists but has no credentials (started but didn't complete registration).
 		// Allow them to proceed with registration.
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s step=resume_incomplete_registration", emailHash, user.ID)
 	}
 
 	// Build a WebAuthn user adapter.
 	waUser, err := newWebAuthnUser(user, nil) // no credentials for registration
 	if err != nil {
-		log.Printf("auth register begin: webauthn user adapter: %v", err)
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=error step=webauthn_adapter error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -435,7 +447,7 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 	if err != nil {
-		log.Printf("auth register begin: begin registration: %v", err)
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=error step=begin_registration error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to begin registration"})
 		return
 	}
@@ -443,7 +455,7 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	// Serialize the WebAuthn session data for the finish handler.
 	sessionDataJSON, err := json.Marshal(session)
 	if err != nil {
-		log.Printf("auth register begin: marshal session data: %v", err)
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=error step=marshal_session error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -459,11 +471,12 @@ func (h *Handler) HandleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:           time.Now().UTC().Add(SessionChallengeTTL),
 	}
 	if err := h.store.SaveChallengeState(challengeState); err != nil {
-		log.Printf("auth register begin: save challenge: %v", err)
+		log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=error step=save_challenge error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save challenge"})
 		return
 	}
 
+	log.Printf("[auth] operation=register_begin email_hash=%s user_id=%s result=success challenge_type=registration", emailHash, user.ID)
 	writeJSON(w, http.StatusOK, creation)
 }
 
@@ -492,9 +505,12 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	emailHash := hashEmail(req.Email)
+
 	// Look up the user.
 	user, err := h.store.GetUserByEmail(req.Email)
 	if err != nil {
+		log.Printf("[auth] operation=login_begin email_hash=%s result=not_found", emailHash)
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "user not found"})
 		return
 	}
@@ -502,12 +518,13 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 	// Fetch their credentials.
 	creds, err := h.store.GetCredentialsByUserID(user.ID)
 	if err != nil {
-		log.Printf("auth login begin: get credentials: %v", err)
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=error step=get_credentials error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
 	if len(creds) == 0 {
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=no_credentials", emailHash, user.ID)
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "user has no registered passkeys"})
 		return
 	}
@@ -515,7 +532,7 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 	// Build a WebAuthn user adapter with credentials.
 	waUser, err := newWebAuthnUser(user, creds)
 	if err != nil {
-		log.Printf("auth login begin: webauthn user adapter: %v", err)
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=error step=webauthn_adapter error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -523,7 +540,7 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 	// Begin the WebAuthn login ceremony.
 	assertion, session, err := h.webauthn.BeginLogin(waUser)
 	if err != nil {
-		log.Printf("auth login begin: begin login: %v", err)
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=error step=begin_login error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to begin login"})
 		return
 	}
@@ -531,7 +548,7 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 	// Serialize the WebAuthn session data for the finish handler.
 	sessionDataJSON, err := json.Marshal(session)
 	if err != nil {
-		log.Printf("auth login begin: marshal session data: %v", err)
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=error step=marshal_session error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -555,11 +572,12 @@ func (h *Handler) HandleLoginBegin(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:           time.Now().UTC().Add(SessionChallengeTTL),
 	}
 	if err := h.store.SaveChallengeState(challengeState); err != nil {
-		log.Printf("auth login begin: save challenge: %v", err)
+		log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=error step=save_challenge error=%q", emailHash, user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save challenge"})
 		return
 	}
 
+	log.Printf("[auth] operation=login_begin email_hash=%s user_id=%s result=success credential_count=%d challenge_type=login", emailHash, user.ID, len(creds))
 	writeJSON(w, http.StatusOK, assertion)
 }
 
@@ -591,12 +609,16 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	// Look up the challenge state.
 	cs, err := h.store.GetChallengeStateByID(challengeID)
 	if err != nil {
+		log.Printf("[auth] operation=register_finish result=error step=challenge_lookup error=%q", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge not found or already used"})
 		return
 	}
 
+	log.Printf("[auth] operation=register_finish user_id=%s challenge_type=registration step=challenge_found", cs.UserID)
+
 	// Validate challenge type.
 	if cs.Type != "registration" {
+		log.Printf("[auth] operation=register_finish user_id=%s result=error reason=challenge_type_mismatch expected=registration got=%s", cs.UserID, cs.Type)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge type mismatch"})
 		return
 	}
@@ -604,6 +626,7 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	// Check challenge not expired.
 	if time.Now().UTC().After(cs.ExpiresAt) {
 		_ = h.store.DeleteChallengeStateByID(cs.ID)
+		log.Printf("[auth] operation=register_finish user_id=%s result=error reason=challenge_expired", cs.UserID)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge expired"})
 		return
 	}
@@ -612,8 +635,10 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	// the WebAuthn verification succeeds. This ensures that a replayed finish
 	// payload cannot find the challenge again.
 	if err := h.store.DeleteChallengeStateByID(cs.ID); err != nil {
-		log.Printf("auth register finish: delete challenge: %v", err)
+		log.Printf("[auth] operation=register_finish user_id=%s step=delete_challenge error=%q", cs.UserID, err)
 		// Continue anyway — the challenge is consumed.
+	} else {
+		log.Printf("[auth] operation=register_finish user_id=%s step=challenge_consumed", cs.UserID)
 	}
 
 	// Deserialize the WebAuthn session data.
@@ -653,6 +678,7 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	// Verify the WebAuthn registration.
 	credential, err := h.webauthn.CreateCredential(waUser, sessionData, parsedResponse)
 	if err != nil {
+		log.Printf("[auth] operation=register_finish user_id=%s result=error step=verify_credential error=%q", user.ID, err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "registration verification failed: " + err.Error()})
 		return
 	}
@@ -670,19 +696,22 @@ func (h *Handler) HandleRegisterFinish(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.store.CreateCredential(dbCred); err != nil {
-		log.Printf("auth register finish: store credential: %v", err)
+		log.Printf("[auth] operation=register_finish user_id=%s result=error step=store_credential error=%q", user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to store credential"})
 		return
 	}
 
+	log.Printf("[auth] operation=register_finish user_id=%s credential_id=%s sign_count=%d result=success step=credential_stored", user.ID, dbCred.ID, dbCred.SignCount)
+
 	// Issue cookie-backed auth state.
 	userInfo, err := h.issueSession(w, user)
 	if err != nil {
-		log.Printf("auth register finish: issue session: %v", err)
+		log.Printf("[auth] operation=register_finish user_id=%s result=error step=issue_session error=%q", user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create session"})
 		return
 	}
 
+	log.Printf("[auth] operation=register_finish user_id=%s credential_id=%s result=success step=session_issued", user.ID, dbCred.ID)
 	writeJSON(w, http.StatusOK, finishResponse{OK: true, User: userInfo})
 }
 
@@ -713,12 +742,16 @@ func (h *Handler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// Look up the challenge state.
 	cs, err := h.store.GetChallengeStateByID(challengeID)
 	if err != nil {
+		log.Printf("[auth] operation=login_finish result=error step=challenge_lookup error=%q", err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge not found or already used"})
 		return
 	}
 
+	log.Printf("[auth] operation=login_finish user_id=%s challenge_type=login step=challenge_found", cs.UserID)
+
 	// Validate challenge type.
 	if cs.Type != "login" {
+		log.Printf("[auth] operation=login_finish user_id=%s result=error reason=challenge_type_mismatch expected=login got=%s", cs.UserID, cs.Type)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge type mismatch"})
 		return
 	}
@@ -726,13 +759,16 @@ func (h *Handler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// Check challenge not expired.
 	if time.Now().UTC().After(cs.ExpiresAt) {
 		_ = h.store.DeleteChallengeStateByID(cs.ID)
+		log.Printf("[auth] operation=login_finish user_id=%s result=error reason=challenge_expired", cs.UserID)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "challenge expired"})
 		return
 	}
 
 	// Delete the challenge immediately to prevent replay.
 	if err := h.store.DeleteChallengeStateByID(cs.ID); err != nil {
-		log.Printf("auth login finish: delete challenge: %v", err)
+		log.Printf("[auth] operation=login_finish user_id=%s step=delete_challenge error=%q", cs.UserID, err)
+	} else {
+		log.Printf("[auth] operation=login_finish user_id=%s step=challenge_consumed", cs.UserID)
 	}
 
 	// Deserialize the WebAuthn session data.
@@ -777,24 +813,29 @@ func (h *Handler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// Verify the WebAuthn login.
 	credential, err := h.webauthn.ValidateLogin(waUser, sessionData, parsedResponse)
 	if err != nil {
+		log.Printf("[auth] operation=login_finish user_id=%s result=error step=verify_login error=%q", user.ID, err)
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "login verification failed: " + err.Error()})
 		return
 	}
 
 	// Update the credential sign count.
-	if err := h.store.UpdateCredentialSignCount(string(credential.ID), int64(credential.Authenticator.SignCount)); err != nil {
-		log.Printf("auth login finish: update sign count: %v", err)
+	newSignCount := int64(credential.Authenticator.SignCount)
+	if err := h.store.UpdateCredentialSignCount(string(credential.ID), newSignCount); err != nil {
+		log.Printf("[auth] operation=login_finish user_id=%s credential_id=%s result=warning step=update_sign_count error=%q", user.ID, string(credential.ID), err)
 		// Non-fatal — the session is still valid.
+	} else {
+		log.Printf("[auth] operation=login_finish user_id=%s credential_id=%s sign_count=%d step=sign_count_updated", user.ID, string(credential.ID), newSignCount)
 	}
 
 	// Issue cookie-backed auth state.
 	userInfo, err := h.issueSession(w, user)
 	if err != nil {
-		log.Printf("auth login finish: issue session: %v", err)
+		log.Printf("[auth] operation=login_finish user_id=%s credential_id=%s result=error step=issue_session error=%q", user.ID, string(credential.ID), err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create session"})
 		return
 	}
 
+	log.Printf("[auth] operation=login_finish user_id=%s credential_id=%s result=success step=session_issued", user.ID, string(credential.ID))
 	writeJSON(w, http.StatusOK, finishResponse{OK: true, User: userInfo})
 }
 
@@ -876,10 +917,12 @@ func (h *Handler) tryRefreshRotation(w http.ResponseWriter, r *http.Request) {
 
 	// Rotate the refresh session and issue new cookies.
 	if err := h.rotateRefreshSession(w, rs, user); err != nil {
-		log.Printf("auth session: refresh rotation failed: %v", err)
+		log.Printf("[auth] operation=session_refresh user_id=%s result=error step=rotate_refresh error=%q", user.ID, err)
 		writeJSON(w, http.StatusOK, sessionResponse{Authenticated: false})
 		return
 	}
+
+	log.Printf("[auth] operation=session_refresh user_id=%s result=success", user.ID)
 
 	writeJSON(w, http.StatusOK, sessionResponse{
 		Authenticated: true,
@@ -909,9 +952,13 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// Delete all refresh sessions for the user (prevents silent restoration).
 	if userID != "" {
 		if err := h.store.DeleteRefreshSessionsByUserID(userID); err != nil {
-			log.Printf("auth logout: delete refresh sessions for user %q: %v", userID, err)
+			log.Printf("[auth] operation=logout user_id=%s result=error step=delete_refresh_sessions error=%q", userID, err)
 			// Continue anyway — we still clear the cookies.
+		} else {
+			log.Printf("[auth] operation=logout user_id=%s result=success step=refresh_sessions_deleted", userID)
 		}
+	} else {
+		log.Printf("[auth] operation=logout result=success note=no_user_id_found_cookies_cleared")
 	}
 
 	// Clear both auth cookies by setting MaxAge=-1 with empty values.
