@@ -6,6 +6,9 @@
  *   - activeWindowId: currently focused window ID
  *   - nextZIndex: next z-index counter for window stacking
  *   - liveStatus: WebSocket connection status
+ *   - iconPositions: positions of floating desktop icons
+ *   - showDesktopMode: whether all windows are minimized (show desktop)
+ *   - selectedIconId: currently selected desktop icon (single-click)
  *
  * Each window object has:
  *   { windowId, appId, title, icon, x, y, width, height, mode, zIndex, restoredGeometry, appContext }
@@ -25,6 +28,11 @@ export const APP_REGISTRY = [
   { id: 'etext', name: 'E-Text', icon: '📝', description: 'Document Editor' },
 ];
 
+/** The 4 main apps shown as floating desktop icons */
+export const DESKTOP_ICON_APPS = APP_REGISTRY.filter((app) =>
+  ['files', 'browser', 'terminal', 'settings'].includes(app.id)
+);
+
 // ---- Window counter ----
 
 let windowCounter = 0;
@@ -32,6 +40,21 @@ let windowCounter = 0;
 function generateWindowId() {
   windowCounter++;
   return `win-${Date.now()}-${windowCounter}`;
+}
+
+// ---- Default icon grid positions ----
+
+/** Default grid positions for floating desktop icons (column layout, left side) */
+export function getDefaultIconPositions() {
+  const positions = {};
+  const startX = 32;
+  const startY = 32;
+  const colWidth = 100;
+  const rowHeight = 90;
+  DESKTOP_ICON_APPS.forEach((app, i) => {
+    positions[app.id] = { x: startX, y: startY + i * rowHeight };
+  });
+  return positions;
 }
 
 // ---- Stores ----
@@ -47,6 +70,15 @@ export const nextZIndex = writable(1);
 
 /** @type {import('svelte/store').Writable<string>} */
 export const liveStatus = writable('disconnected');
+
+/** @type {import('svelte/store').Writable<Object>} */
+export const iconPositions = writable(getDefaultIconPositions());
+
+/** @type {import('svelte/store').Writable<boolean>} */
+export const showDesktopMode = writable(false);
+
+/** @type {import('svelte/store').Writable<string>} */
+export const selectedIconId = writable('');
 
 // ---- Derived stores ----
 
@@ -273,6 +305,58 @@ export function setWindows(newWindows, newActiveId) {
   if (newWindows.length > 0) {
     const maxZ = Math.max(...newWindows.map((w) => w.zIndex || 1));
     nextZIndex.set(maxZ + 1);
+  }
+}
+
+// ---- Icon position actions ----
+
+/** Move a desktop icon to a new position */
+export function moveIcon(appId, x, y) {
+  iconPositions.update((positions) => ({
+    ...positions,
+    [appId]: { x, y },
+  }));
+}
+
+/** Set icon positions (used for loading from server) */
+export function setIconPositions(positions) {
+  if (positions && Object.keys(positions).length > 0) {
+    iconPositions.set(positions);
+  } else {
+    iconPositions.set(getDefaultIconPositions());
+  }
+}
+
+// ---- Show Desktop actions ----
+
+/** Toggle show desktop mode (minimize/restore all windows) */
+export function toggleShowDesktop() {
+  let currentShowDesktop;
+  showDesktopMode.subscribe((v) => { currentShowDesktop = v; })();
+
+  if (currentShowDesktop) {
+    // Restore all windows that were minimized by show desktop
+    windows.update(($windows) =>
+      $windows.map((w) => {
+        if (w._showDesktopMinimized) {
+          const { _showDesktopMinimized, _showDesktopPrevMode, ...rest } = w;
+          return { ...rest, mode: _showDesktopPrevMode || 'normal' };
+        }
+        return w;
+      })
+    );
+    showDesktopMode.set(false);
+  } else {
+    // Minimize all visible windows and remember their previous mode
+    windows.update(($windows) =>
+      $windows.map((w) => {
+        if (w.mode !== 'closed' && w.mode !== 'hidden' && w.mode !== 'minimized') {
+          return { ...w, _showDesktopMinimized: true, _showDesktopPrevMode: w.mode, mode: 'minimized' };
+        }
+        return w;
+      })
+    );
+    showDesktopMode.set(true);
   }
 }
 

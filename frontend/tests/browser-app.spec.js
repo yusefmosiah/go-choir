@@ -27,30 +27,27 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
-// Helper: open the Browser app from the left rail
+// Helper: open the Browser app from the floating desktop icon
 async function openBrowserApp(page) {
-  const browserIcon = page.locator('[data-app-id="browser"]');
-  await browserIcon.click();
+  const browserIcon = page.locator('[data-desktop-icon-id="browser"]');
+  await browserIcon.dblclick();
   // Wait for browser app to appear
   await page.locator('[data-browser-app]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
 // ---------------------------------------------------------------
-// Test: Browser app launches from left rail Browser icon
+// Test: Browser app launches from floating desktop icon
 // ---------------------------------------------------------------
-test('browser app launches from left rail', async ({ page, authenticator }) => {
+test('browser app launches from floating desktop icon', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Click the Browser icon in the left rail
-  const browserIcon = page.locator('[data-app-id="browser"]');
-  await expect(browserIcon).toBeVisible();
-
-  await browserIcon.click();
+  // Double-click the Browser floating desktop icon
+  await openBrowserApp(page);
 
   // Browser app window should appear
   const browserApp = page.locator('[data-browser-app]');
-  await expect(browserApp).toBeVisible({ timeout: 10000 });
+  await expect(browserApp).toBeVisible();
 
   // Window should have title "Browser"
   const windowEl = page.locator('[data-window]').filter({ has: page.locator('[data-browser-app]') });
@@ -233,21 +230,20 @@ test('url auto-prefixes https protocol', async ({ page, authenticator }) => {
 });
 
 // ---------------------------------------------------------------
-// Test: Single-instance — clicking rail icon again focuses existing window
+// Test: Single-instance — clicking icon again focuses existing window
 // ---------------------------------------------------------------
-test('clicking browser rail icon again focuses existing window', async ({ page, authenticator }) => {
+test('clicking browser icon again focuses existing window', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open browser app
-  await page.locator('[data-app-id="browser"]').click();
-  await page.locator('[data-browser-app]').waitFor({ state: 'visible', timeout: 10000 });
+  // Open browser app via double-click
+  await openBrowserApp(page);
 
   // Count windows
   const windowCount = await page.locator('[data-window][data-window-id]').count();
 
-  // Click browser icon again
-  await page.locator('[data-app-id="browser"]').click();
+  // Double-click browser icon again
+  await page.locator('[data-desktop-icon-id="browser"]').dblclick();
   await page.waitForTimeout(500);
 
   // Should still have the same number of windows (no duplicate)
@@ -265,16 +261,8 @@ test('browser app works in mobile focus mode', async ({ page, authenticator }) =
   await page.setViewportSize({ width: 375, height: 812 });
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open hamburger menu
-  const hamburgerBtn = page.locator('[data-hamburger-btn]');
-  await expect(hamburgerBtn).toBeVisible();
-  await hamburgerBtn.click();
-
-  // Wait for rail overlay
-  await page.locator('[data-desktop-rail]').waitFor({ state: 'visible', timeout: 5000 });
-
-  // Click browser icon in overlay
-  await page.locator('[data-app-id="browser"]').click();
+  // Double-click the Browser floating desktop icon
+  await openBrowserApp(page);
 
   // Browser app should appear in full-width focus mode
   const browserApp = page.locator('[data-browser-app]');

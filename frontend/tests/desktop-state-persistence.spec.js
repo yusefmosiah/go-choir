@@ -27,9 +27,9 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
-// Helper: open a specific app from the left rail
+// Helper: open a specific app from the floating desktop icon
 async function openApp(page, appId) {
-  await page.locator(`[data-app-id="${appId}"]`).click();
+  await page.locator(`[data-desktop-icon-id="${appId}"]`).dblclick();
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 }
 

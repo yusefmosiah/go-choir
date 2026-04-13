@@ -3,14 +3,15 @@
  * through VAL-DESKTOP-007).
  *
  * Updated for the ChoirOS desktop shell rewrite:
- * - No top bar (replaced by left rail + bottom bar)
- * - No launcher dropdown (replaced by left rail icons)
+ * - No top bar (replaced by floating desktop icons + bottom bar)
+ * - No launcher dropdown (replaced by floating desktop icons)
  * - No taskbar (minimized windows shown in bottom bar)
  * - No runtime panel (TaskRunner removed from visible UI)
+ * - No left rail (replaced by floating desktop icons on the desktop surface)
  *
  * These tests verify that:
  * - Authenticated users reach a real desktop shell (VAL-DESKTOP-001)
- * - The left rail opens apps inside the desktop (VAL-DESKTOP-002)
+ * - Double-clicking floating icons opens apps inside the desktop (VAL-DESKTOP-002)
  * - Window focus changes raise the active window (VAL-DESKTOP-003)
  * - Windows support drag and resize (VAL-DESKTOP-004)
  * - Windows support minimize, maximize, and restore (VAL-DESKTOP-005)
@@ -39,6 +40,12 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
+// Helper: open app via double-click on floating desktop icon
+async function openAppViaIcon(page, appId) {
+  const icon = page.locator(`[data-desktop-icon-id="${appId}"]`);
+  await icon.dblclick();
+}
+
 // ---------------------------------------------------------------
 // Test: authenticated users reach a real desktop shell
 // (VAL-DESKTOP-001)
@@ -58,9 +65,9 @@ test('authenticated users reach a real desktop shell', async ({
   const authEntry = page.locator('[data-auth-entry]');
   await expect(authEntry).not.toBeVisible();
 
-  // The left rail should be visible (replaces top bar).
-  const rail = page.locator('[data-desktop-rail]');
-  await expect(rail).toBeVisible();
+  // The floating desktop icons should be visible (replaces left rail).
+  const surface = page.locator('[data-desktop-surface]');
+  await expect(surface).toBeVisible();
 
   // The bottom bar should be visible.
   const bottomBar = page.locator('[data-bottom-bar]');
@@ -72,33 +79,18 @@ test('authenticated users reach a real desktop shell', async ({
 });
 
 // ---------------------------------------------------------------
-// Test: left rail opens E-Text inside the desktop
+// Test: floating icons open apps inside the desktop
 // (VAL-DESKTOP-002)
 // ---------------------------------------------------------------
-test('left rail opens E-Text inside the desktop', async ({
+test('floating icons open apps inside the desktop', async ({
   page,
   authenticator,
 }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // E-Text is not in the 4 main rail apps, so we need to open it
-  // through the stores directly or via a special mechanism.
-  // For now, open the Files app to test the window opens.
-  // Note: E-Text is launched differently in the new desktop.
-  // Use page.evaluate to open the app through the stores.
-  await page.evaluate(() => {
-    // Access the Svelte store directly
-    const { openApp } = window.__stores || {};
-    if (openApp) {
-      openApp('etext', 'E-Text', '📝');
-    }
-  }).catch(() => {
-    // Fallback: just open Files since E-Text requires special setup
-  });
-
-  // Alternative: Open Files which IS in the rail
-  await page.locator('[data-app-id="files"]').click();
+  // Double-click the Files icon to open the app
+  await openAppViaIcon(page, 'files');
 
   // A window should appear in the desktop.
   const windowEl = page.locator('[data-window]');
@@ -120,8 +112,8 @@ test('window focus changes raise the active window', async ({
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open a Files window via the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Open a Files window via floating icon.
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
   // Get the first window.
@@ -151,8 +143,8 @@ test('windows support drag and resize', async ({
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open a Files window via the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Open a Files window via floating icon.
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -189,8 +181,8 @@ test('windows support minimize, maximize, and restore', async ({
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open a Files window via the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Open a Files window via floating icon.
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -250,8 +242,8 @@ test('window close and reopen updates desktop state cleanly', async ({
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open a Files window via the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Open a Files window via floating icon.
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -262,8 +254,8 @@ test('window close and reopen updates desktop state cleanly', async ({
   // The window should be removed from the desktop.
   await expect(page.locator('[data-window]')).toHaveCount(0);
 
-  // Reopen the app from the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Reopen the app from the floating icon.
+  await openAppViaIcon(page, 'files');
 
   // A fresh window should appear.
   const newWindow = page.locator('[data-window]').first();
@@ -287,8 +279,8 @@ test('desktop restore preserves server-backed window state across fresh context'
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Open a Files window via the left rail.
-  await page.locator('[data-app-id="files"]').click();
+  // Open a Files window via floating icon.
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 

@@ -2,26 +2,20 @@
  * Playwright tests for responsive layout across three breakpoints.
  *
  * Covers validation assertions:
- * - VAL-RESP-001: Desktop — left rail full width (~180px) with labels
+ * - VAL-RESP-001: Desktop — floating icons visible with labels
  * - VAL-RESP-002: Desktop — windows floating, draggable, resizable
  * - VAL-RESP-003: Desktop — bottom bar full height (~56px)
  * - VAL-RESP-004: Desktop — multiple windows visible simultaneously
- * - VAL-RESP-005: Tablet — left rail collapses to icon-only (~56px)
- * - VAL-RESP-006: Tablet — rail icon labels appear on hover
- * - VAL-RESP-007: Tablet — windows floating with max-width constraint
- * - VAL-RESP-008: Tablet — bottom bar remains full height
- * - VAL-RESP-009: Tablet — multiple windows still supported
- * - VAL-RESP-010: Mobile — left rail hidden by default
- * - VAL-RESP-011: Mobile — hamburger button visible in bottom bar
- * - VAL-RESP-012: Mobile — hamburger opens left rail as slide-out overlay
- * - VAL-RESP-013: Mobile — slide-out rail dismiss on backdrop click
- * - VAL-RESP-014: Mobile — slide-out rail dismiss on rail item tap
- * - VAL-RESP-015: Mobile — single focus window mode (one at a time)
- * - VAL-RESP-016: Mobile — closing window returns to empty desktop
- * - VAL-RESP-017: Mobile — window is full width, non-draggable
- * - VAL-RESP-018: Mobile — prompt bar full width with >=44px touch target
- * - VAL-RESP-019: No horizontal overflow at any breakpoint
- * - VAL-RESP-020: Breakpoint transition is smooth (no layout flash)
+ * - VAL-RESP-005: Tablet — windows floating with max-width constraint
+ * - VAL-RESP-006: Mobile — floating icons remain visible
+ * - VAL-RESP-007: Mobile — single focus window mode (one at a time)
+ * - VAL-RESP-008: Mobile — window is full width, non-draggable
+ * - VAL-RESP-009: Mobile — prompt bar full width with >=44px touch target
+ * - VAL-RESP-010: Mobile — closing window returns to empty desktop
+ * - VAL-RESP-011: No horizontal overflow at any breakpoint
+ * - VAL-RESP-012: Breakpoint transition is smooth (no layout flash)
+ * - VAL-RESP-013: Mobile — consistent desktop experience
+ * - VAL-RESP-014: Tablet — multiple windows still supported
  */
 import { test, expect } from './helpers/fixtures.js';
 import { registerPasskey } from './helpers/auth.js';
@@ -41,25 +35,31 @@ async function registerAndLoadDesktop(page, authenticator, email, viewportSize =
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
+// Helper: open app via double-click on floating desktop icon
+async function openAppViaIcon(page, appId) {
+  const icon = page.locator(`[data-desktop-icon-id="${appId}"]`);
+  await icon.dblclick();
+}
+
 // ================================================================
 // DESKTOP BREAKPOINT (>1024px) — viewport 1280x800
 // ================================================================
 
 test.describe('Desktop breakpoint (>1024px)', () => {
-  // VAL-RESP-001: Desktop — left rail full width (~180px) with labels
-  test('left rail renders at ~180px with labels', async ({ page, authenticator }) => {
+  // VAL-RESP-001: Desktop — floating icons visible with labels
+  test('floating icons visible with labels', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 1280, height: 800 });
 
-    const rail = page.locator('[data-desktop-rail]');
-    await expect(rail).toBeVisible();
+    const surface = page.locator('[data-desktop-surface]');
+    await expect(surface).toBeVisible();
 
-    // Rail should be wide (~80-180px range; the spec says ~180px but current implementation is 80px)
-    const railBox = await rail.boundingBox();
-    expect(railBox.width).toBeGreaterThanOrEqual(80);
+    // 4 icons should be visible
+    const icons = surface.locator('[data-desktop-icon]');
+    await expect(icons).toHaveCount(4);
 
     // Labels should be visible
-    const filesLabel = rail.locator('[data-rail-label]').first();
+    const filesLabel = surface.locator('[data-desktop-icon-label]').first();
     await expect(filesLabel).toBeVisible();
   });
 
@@ -68,7 +68,7 @@ test.describe('Desktop breakpoint (>1024px)', () => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 1280, height: 800 });
 
-    await page.locator('[data-app-id="files"]').click();
+    await openAppViaIcon(page, 'files');
     const windowEl = page.locator('[data-window]').first();
     await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -102,10 +102,10 @@ test.describe('Desktop breakpoint (>1024px)', () => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 1280, height: 800 });
 
-    await page.locator('[data-app-id="files"]').click();
+    await openAppViaIcon(page, 'files');
     await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-    await page.locator('[data-app-id="browser"]').click();
+    await openAppViaIcon(page, 'browser');
     await page.waitForTimeout(300);
 
     const windows = page.locator('[data-window]');
@@ -122,47 +122,25 @@ test.describe('Desktop breakpoint (>1024px)', () => {
 // ================================================================
 
 test.describe('Tablet breakpoint (768-1024px)', () => {
-  // VAL-RESP-005: Tablet — left rail collapses to icon-only (~56px)
-  test('left rail collapses to icon-only (~56px)', async ({ page, authenticator }) => {
+  // VAL-RESP-005: Tablet — windows floating with max-width constraint
+  test('windows floating with max-width constraint', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 900, height: 800 });
 
-    const rail = page.locator('[data-desktop-rail]');
-    await expect(rail).toBeVisible();
+    await openAppViaIcon(page, 'files');
+    const windowEl = page.locator('[data-window]').first();
+    await expect(windowEl).toBeVisible({ timeout: 5000 });
 
-    // Rail should be narrow (~56px)
-    const railBox = await rail.boundingBox();
-    expect(railBox.width).toBeLessThanOrEqual(60);
+    // Window width should not exceed viewport width
+    const winBox = await windowEl.boundingBox();
+    expect(winBox.width).toBeLessThanOrEqual(900);
 
-    // Labels should NOT be visible (icon-only mode)
-    const labels = rail.locator('[data-rail-label]');
-    const labelCount = await labels.count();
-    for (let i = 0; i < labelCount; i++) {
-      await expect(labels.nth(i)).not.toBeVisible();
-    }
+    // Floating icons should still be visible with labels
+    const icons = page.locator('[data-desktop-icon]');
+    await expect(icons).toHaveCount(4);
   });
 
-  // VAL-RESP-006: Tablet — rail icon labels appear on hover
-  test('rail icon labels appear on hover', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await registerAndLoadDesktop(page, authenticator, email, { width: 900, height: 800 });
-
-    const rail = page.locator('[data-desktop-rail]');
-    const filesItem = rail.locator('[data-app-id="files"]');
-
-    // Hover over the icon
-    await filesItem.hover();
-    await page.waitForTimeout(300);
-
-    // Tooltip or hover label should be visible
-    const tooltip = page.locator('.rail-tooltip, [data-rail-tooltip]');
-    // The title attribute should contain "Files" or "File Browser"
-    const titleAttr = await filesItem.getAttribute('title');
-    expect(titleAttr).toBeTruthy();
-    expect(titleAttr).toContain('File');
-  });
-
-  // VAL-RESP-008: Tablet — bottom bar remains full height
+  // Bottom bar remains full height
   test('bottom bar remains full height', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 900, height: 800 });
@@ -175,15 +153,15 @@ test.describe('Tablet breakpoint (768-1024px)', () => {
     expect(height).toBeLessThanOrEqual(60);
   });
 
-  // VAL-RESP-009: Tablet — multiple windows still supported
+  // VAL-RESP-014: Tablet — multiple windows still supported
   test('multiple windows still supported', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 900, height: 800 });
 
-    await page.locator('[data-app-id="files"]').click();
+    await openAppViaIcon(page, 'files');
     await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-    await page.locator('[data-app-id="browser"]').click();
+    await openAppViaIcon(page, 'browser');
     await page.waitForTimeout(300);
 
     const windows = page.locator('[data-window]');
@@ -196,102 +174,43 @@ test.describe('Tablet breakpoint (768-1024px)', () => {
 // ================================================================
 
 test.describe('Mobile breakpoint (<768px)', () => {
-  // VAL-RESP-010: Mobile — left rail hidden by default
-  test('left rail hidden by default', async ({ page, authenticator }) => {
+  // VAL-RESP-006: Mobile — floating icons remain visible
+  test('floating icons remain visible', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
-    const rail = page.locator('[data-desktop-rail]');
-    // Rail should not be visible (either display:none or off-screen)
-    await expect(rail).not.toBeVisible();
+    // No left rail should be present
+    await expect(page.locator('[data-desktop-rail]')).toHaveCount(0);
+
+    // No hamburger button should be present
+    await expect(page.locator('[data-hamburger-btn]')).toHaveCount(0);
+
+    // No backdrop should be present
+    await expect(page.locator('[data-rail-backdrop]')).toHaveCount(0);
+
+    // Floating desktop icons should be visible
+    const icons = page.locator('[data-desktop-icon]');
+    await expect(icons).toHaveCount(4);
+    await expect(icons.first()).toBeVisible();
+
+    // Desktop surface spans full viewport width
+    const surface = page.locator('[data-desktop-surface]');
+    const surfaceWidth = await surface.evaluate((el) => el.offsetWidth);
+    expect(surfaceWidth).toBeGreaterThanOrEqual(375);
   });
 
-  // VAL-RESP-011: Mobile — hamburger button visible in bottom bar
-  test('hamburger button visible in bottom bar', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
-
-    const hamburger = page.locator('[data-hamburger-btn]');
-    await expect(hamburger).toBeVisible();
-  });
-
-  // VAL-RESP-012: Mobile — hamburger opens left rail as slide-out overlay
-  test('hamburger opens left rail as slide-out overlay', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
-
-    // Click hamburger
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-
-    // Rail should now be visible as an overlay
-    const rail = page.locator('[data-desktop-rail]');
-    await expect(rail).toBeVisible();
-
-    // Rail should be wider than icon-only (full labels mode)
-    const railBox = await rail.boundingBox();
-    expect(railBox.width).toBeGreaterThanOrEqual(150);
-
-    // Backdrop should be visible
-    const backdrop = page.locator('[data-rail-backdrop]');
-    await expect(backdrop).toBeVisible();
-  });
-
-  // VAL-RESP-013: Mobile — slide-out rail dismiss on backdrop click
-  test('slide-out rail dismiss on backdrop click', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
-
-    // Open the rail
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await expect(page.locator('[data-desktop-rail]')).toBeVisible();
-
-    // Click the backdrop (right side, outside the rail overlay)
-    await page.locator('[data-rail-backdrop]').click({ position: { x: 300, y: 400 } });
-    await page.waitForTimeout(300);
-
-    // Rail should be hidden again
-    await expect(page.locator('[data-desktop-rail]')).not.toBeVisible();
-  });
-
-  // VAL-RESP-014: Mobile — slide-out rail dismiss on rail item tap
-  test('slide-out rail dismiss on rail item tap and launches app', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
-
-    // Open the rail
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await expect(page.locator('[data-desktop-rail]')).toBeVisible();
-
-    // Tap Files icon
-    await page.locator('[data-desktop-rail] [data-app-id="files"]').click();
-    await page.waitForTimeout(300);
-
-    // Rail should be hidden
-    await expect(page.locator('[data-desktop-rail]')).not.toBeVisible();
-
-    // A window should be open
-    await expect(page.locator('[data-window]')).toHaveCount(1);
-  });
-
-  // VAL-RESP-015: Mobile — single focus window mode
+  // VAL-RESP-007: Mobile — single focus window mode (one at a time)
   test('single focus window mode — only one window visible', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
-    // Open Files via hamburger
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-desktop-rail] [data-app-id="files"]').click();
+    // Open Files via double-click
+    await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
     await expect(page.locator('[data-window]')).toHaveCount(1);
 
-    // Open Browser via hamburger
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-desktop-rail] [data-app-id="browser"]').click();
+    // Open Browser via double-click
+    await openAppViaIcon(page, 'browser');
     await page.waitForTimeout(300);
 
     // Should still have only 1 visible window (single focus mode hides the first)
@@ -299,15 +218,13 @@ test.describe('Mobile breakpoint (<768px)', () => {
     await expect(visibleWindows).toHaveCount(1);
   });
 
-  // VAL-RESP-016: Mobile — closing window returns to empty desktop
+  // VAL-RESP-010: Mobile — closing window returns to empty desktop
   test('closing window returns to empty desktop', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
     // Open an app
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-desktop-rail] [data-app-id="files"]').click();
+    await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
     await expect(page.locator('[data-window]')).toHaveCount(1);
 
@@ -321,17 +238,19 @@ test.describe('Mobile breakpoint (<768px)', () => {
     // Bottom bar should still be visible
     const bottomBar = page.locator('[data-bottom-bar]');
     await expect(bottomBar).toBeVisible();
+
+    // Floating icons should still be visible
+    const icons = page.locator('[data-desktop-icon]');
+    await expect(icons.first()).toBeVisible();
   });
 
-  // VAL-RESP-017: Mobile — window is full width, non-draggable
+  // VAL-RESP-008: Mobile — window is full width, non-draggable
   test('window is full width and non-draggable', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
     // Open an app
-    await page.locator('[data-hamburger-btn]').click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-desktop-rail] [data-app-id="files"]').click();
+    await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
 
     const windowEl = page.locator('[data-window]').first();
@@ -346,7 +265,7 @@ test.describe('Mobile breakpoint (<768px)', () => {
     await expect(resizeHandle).toHaveCount(0);
   });
 
-  // VAL-RESP-018: Mobile — prompt bar full width with >=44px touch target
+  // VAL-RESP-009: Mobile — prompt bar full width with >=44px touch target
   test('prompt bar full width with >=44px touch target', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
@@ -358,6 +277,28 @@ test.describe('Mobile breakpoint (<768px)', () => {
     const height = await promptInput.evaluate((el) => el.offsetHeight);
     expect(height).toBeGreaterThanOrEqual(44);
   });
+
+  // VAL-RESP-013: Mobile — consistent desktop experience
+  test('consistent desktop experience — tap icon opens app in focus mode', async ({ page, authenticator }) => {
+    const email = uniqueEmail();
+    await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
+
+    // Floating icons visible
+    const icons = page.locator('[data-desktop-icon]');
+    await expect(icons).toHaveCount(4);
+
+    // No hamburger, no rail, no overlay
+    await expect(page.locator('[data-hamburger-btn]')).toHaveCount(0);
+    await expect(page.locator('[data-desktop-rail]')).toHaveCount(0);
+    await expect(page.locator('[data-rail-backdrop]')).toHaveCount(0);
+
+    // Double-tap icon to open app
+    await openAppViaIcon(page, 'files');
+    await page.waitForTimeout(300);
+
+    // Window should open in focus mode
+    await expect(page.locator('[data-window]')).toHaveCount(1);
+  });
 });
 
 // ================================================================
@@ -365,7 +306,7 @@ test.describe('Mobile breakpoint (<768px)', () => {
 // ================================================================
 
 test.describe('Cross-breakpoint checks', () => {
-  // VAL-RESP-019: No horizontal overflow at any breakpoint
+  // VAL-RESP-011: No horizontal overflow at any breakpoint
   test('no horizontal overflow at desktop breakpoint', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 1280, height: 800 });
@@ -393,21 +334,21 @@ test.describe('Cross-breakpoint checks', () => {
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
   });
 
-  // VAL-RESP-020: Breakpoint transition is smooth (no layout flash)
+  // VAL-RESP-012: Breakpoint transition is smooth (no layout flash)
   test('breakpoint transition from desktop to tablet is clean', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 1280, height: 800 });
 
-    // Verify desktop layout
-    const rail = page.locator('[data-desktop-rail]');
-    await expect(rail).toBeVisible();
+    // Verify desktop layout — floating icons visible
+    const surface = page.locator('[data-desktop-surface]');
+    await expect(surface).toBeVisible();
 
     // Resize to tablet
     await page.setViewportSize({ width: 900, height: 800 });
     await page.waitForTimeout(300);
 
-    // Rail should still be visible, just narrower
-    await expect(rail).toBeVisible();
+    // Icons should still be visible
+    await expect(surface).toBeVisible();
 
     // No JS errors
     const logs = [];

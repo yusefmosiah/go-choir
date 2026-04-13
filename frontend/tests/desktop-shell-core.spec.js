@@ -4,16 +4,16 @@
  *
  * These tests verify the desktop shell rewrite:
  * - No top bar rendered (VAL-SHELL-001)
- * - Left rail renders with all app icons (VAL-SHELL-002)
- * - Left rail click opens single-instance window (VAL-SHELL-003)
- * - Active window indicator on rail icon (VAL-SHELL-004)
- * - Left rail scrollable on overflow (VAL-SHELL-005)
+ * - Floating desktop icons render with emoji and labels (VAL-SHELL-002)
+ * - Double-click icon opens single-instance window (VAL-SHELL-003)
+ * - Active window indicator on desktop icon (VAL-SHELL-004)
  * - Bottom bar always visible (VAL-SHELL-006)
  * - Bottom bar prompt input (VAL-SHELL-007)
  * - Minimized window indicators in bottom bar (VAL-SHELL-008)
  * - User info and logout in bottom bar (VAL-SHELL-009)
  * - Live connection status dot (VAL-SHELL-010)
  * - No bootstrap accordion or runtime panel (VAL-SHELL-024)
+ * - No left rail, no hamburger button, no backdrop (VAL-SHELL-026)
  */
 import { test, expect } from './helpers/fixtures.js';
 import { registerPasskey, getSession } from './helpers/auth.js';
@@ -32,6 +32,12 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
+// Helper: open app via double-click on floating desktop icon
+async function openAppViaIcon(page, appId) {
+  const icon = page.locator(`[data-desktop-icon-id="${appId}"]`);
+  await icon.dblclick();
+}
+
 // ---------------------------------------------------------------
 // Test: no top bar present after rewrite (VAL-SHELL-001)
 // ---------------------------------------------------------------
@@ -45,50 +51,67 @@ test('no top bar present after rewrite', async ({ page, authenticator }) => {
 });
 
 // ---------------------------------------------------------------
-// Test: left rail renders with all app icons (VAL-SHELL-002)
+// Test: no left rail, no hamburger, no backdrop (VAL-SHELL-026)
 // ---------------------------------------------------------------
-test('left rail renders with all app icons', async ({ page, authenticator }) => {
+test('no left rail, no hamburger button, no backdrop', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  const rail = page.locator('[data-desktop-rail]');
-  await expect(rail).toBeVisible();
+  // data-desktop-rail must be absent
+  await expect(page.locator('[data-desktop-rail]')).toHaveCount(0);
 
-  // Should have exactly 4 rail items (Files, Browser, Terminal, Settings)
-  const railItems = rail.locator('[data-rail-item]');
-  await expect(railItems).toHaveCount(4);
+  // data-hamburger-btn must be absent
+  await expect(page.locator('[data-hamburger-btn]')).toHaveCount(0);
+
+  // data-rail-backdrop must be absent
+  await expect(page.locator('[data-rail-backdrop]')).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------
+// Test: floating desktop icons render with emoji and labels (VAL-SHELL-002)
+// ---------------------------------------------------------------
+test('floating desktop icons render with emoji and labels', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const surface = page.locator('[data-desktop-surface]');
+  await expect(surface).toBeVisible();
+
+  // Should have exactly 4 desktop icons (Files, Browser, Terminal, Settings)
+  const icons = surface.locator('[data-desktop-icon]');
+  await expect(icons).toHaveCount(4);
 
   // Verify each app icon is present
-  await expect(rail.locator('[data-app-id="files"]')).toBeVisible();
-  await expect(rail.locator('[data-app-id="browser"]')).toBeVisible();
-  await expect(rail.locator('[data-app-id="terminal"]')).toBeVisible();
-  await expect(rail.locator('[data-app-id="settings"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="files"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="browser"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="terminal"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="settings"]')).toBeVisible();
 
   // Each icon should have an emoji and a label
-  const filesIcon = rail.locator('[data-app-id="files"] [data-rail-icon]');
-  await expect(filesIcon).toContainText('📁');
+  const filesEmoji = surface.locator('[data-desktop-icon-id="files"] [data-desktop-icon-emoji]');
+  await expect(filesEmoji).toContainText('📁');
 
-  const filesLabel = rail.locator('[data-app-id="files"] [data-rail-label]');
+  const filesLabel = surface.locator('[data-desktop-icon-id="files"] [data-desktop-icon-label]');
   await expect(filesLabel).toContainText('Files');
 });
 
 // ---------------------------------------------------------------
-// Test: clicking rail icon opens single-instance window (VAL-SHELL-003)
+// Test: double-click icon opens single-instance window (VAL-SHELL-003)
 // ---------------------------------------------------------------
-test('clicking rail icon opens single-instance window', async ({ page, authenticator }) => {
+test('double-click icon opens single-instance window', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Click the Files icon
-  await page.locator('[data-app-id="files"]').click();
+  // Double-click the Files icon
+  await openAppViaIcon(page, 'files');
 
   // A window should appear
   const windowEl = page.locator('[data-window]');
   await expect(windowEl).toHaveCount(1);
   await expect(windowEl.first()).toBeVisible({ timeout: 5000 });
 
-  // Click the same icon again — should NOT open a second window
-  await page.locator('[data-app-id="files"]').click();
+  // Double-click the same icon again — should NOT open a second window
+  await openAppViaIcon(page, 'files');
   await expect(page.locator('[data-window]')).toHaveCount(1);
 
   // The window title should match
@@ -97,27 +120,27 @@ test('clicking rail icon opens single-instance window', async ({ page, authentic
 });
 
 // ---------------------------------------------------------------
-// Test: left rail active indicator (VAL-SHELL-004)
+// Test: floating icon active indicator (VAL-SHELL-004)
 // ---------------------------------------------------------------
-test('left rail active indicator highlights open app', async ({ page, authenticator }) => {
+test('floating icon active indicator highlights open app', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files app
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  // Files rail icon should have active class
-  const filesItem = page.locator('[data-app-id="files"].active');
-  await expect(filesItem).toBeVisible();
+  // Files icon should have icon-active class
+  const filesIcon = page.locator('[data-desktop-icon-id="files"].icon-active');
+  await expect(filesIcon).toBeVisible();
 
   // Open another app — Browser
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
   // Browser should now be active
-  const browserItem = page.locator('[data-app-id="browser"].active');
-  await expect(browserItem).toBeVisible();
+  const browserIcon = page.locator('[data-desktop-icon-id="browser"].icon-active');
+  await expect(browserIcon).toBeVisible();
 });
 
 // ---------------------------------------------------------------
@@ -136,7 +159,7 @@ test('bottom bar always visible', async ({ page, authenticator }) => {
   expect(height).toBeLessThanOrEqual(60);
 
   // Open a window and check bottom bar is still visible
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
   await expect(bottomBar).toBeVisible();
 });
@@ -172,7 +195,7 @@ test('minimized window indicators in bottom bar', async ({ page, authenticator }
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -256,7 +279,7 @@ test('no bootstrap accordion or runtime panel', async ({ page, authenticator }) 
   // No task runner should be visible
   await expect(page.locator('[data-task-runner]')).toHaveCount(0);
 
-  // No launcher toggle should be present (replaced by rail)
+  // No launcher toggle should be present
   await expect(page.locator('[data-launcher-toggle]')).toHaveCount(0);
 });
 
@@ -268,7 +291,7 @@ test('floating window close removes from DOM', async ({ page, authenticator }) =
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
   // Close it
@@ -286,7 +309,7 @@ test('floating window minimize hides and shows indicator', async ({ page, authen
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
   // Minimize
@@ -306,7 +329,7 @@ test('floating window maximize fills desktop area', async ({ page, authenticator
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -332,19 +355,19 @@ test('floating window maximize fills desktop area', async ({ page, authenticator
 });
 
 // ---------------------------------------------------------------
-// Test: aria labels on rail icons and window controls (VAL-SHELL-031)
+// Test: aria labels on desktop icons and window controls (VAL-SHELL-031)
 // ---------------------------------------------------------------
-test('aria labels on rail icons and window controls', async ({ page, authenticator }) => {
+test('aria labels on desktop icons and window controls', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Check rail icons have aria-labels
-  const filesBtn = page.locator('[data-app-id="files"]');
-  const filesAria = await filesBtn.getAttribute('aria-label');
+  // Check desktop icons have aria-labels
+  const filesIcon = page.locator('[data-desktop-icon-id="files"]');
+  const filesAria = await filesIcon.getAttribute('aria-label');
   expect(filesAria).toBe('Files');
 
   // Open a window and check its controls have aria-labels
-  await filesBtn.click();
+  await filesIcon.dblclick();
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
   const closeBtn = page.locator('[data-window-close]').first();

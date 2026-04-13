@@ -31,6 +31,12 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
+// Helper: open app via double-click on floating desktop icon
+async function openAppViaIcon(page, appId) {
+  const icon = page.locator(`[data-desktop-icon-id="${appId}"]`);
+  await icon.dblclick();
+}
+
 // ---------------------------------------------------------------
 // Test: floating window open and render (VAL-SHELL-011)
 // ---------------------------------------------------------------
@@ -38,8 +44,8 @@ test('floating window open and render', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Click Files icon in left rail to open a window
-  await page.locator('[data-app-id="files"]').click();
+  // Double-click Files icon on desktop surface to open a window
+  await openAppViaIcon(page, 'files');
 
   // A floating window should appear
   const windowEl = page.locator('[data-window]').first();
@@ -73,10 +79,10 @@ test('floating window close removes from DOM', async ({ page, authenticator }) =
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open two windows
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
   // Should have 2 windows
@@ -101,7 +107,7 @@ test('floating window minimize hides and preserves geometry', async ({ page, aut
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -144,7 +150,7 @@ test('floating window maximize fills desktop area', async ({ page, authenticator
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -168,10 +174,8 @@ test('floating window maximize fills desktop area', async ({ page, authenticator
   expect(maxBox.width).toBeGreaterThan(normalBox.width);
   expect(maxBox.height).toBeGreaterThan(normalBox.height);
 
-  // Window should not overlap the left rail (starts after rail width)
-  const railEl = page.locator('[data-desktop-rail]');
-  const railBox = await railEl.boundingBox();
-  expect(maxBox.x).toBeGreaterThanOrEqual(railBox.x + railBox.width - 2);
+  // Maximized window should fill the desktop area (starts at x=0, no rail)
+  expect(maxBox.x).toBeGreaterThanOrEqual(0);
 });
 
 // ---------------------------------------------------------------
@@ -182,7 +186,7 @@ test('floating window restore from maximized preserves geometry', async ({ page,
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -218,7 +222,7 @@ test('floating window restore from minimized via bottom bar', async ({ page, aut
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -244,7 +248,7 @@ test('floating window drag via title bar only', async ({ page, authenticator }) 
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -270,7 +274,7 @@ test('floating window has only bottom-right resize handle', async ({ page, authe
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -291,7 +295,7 @@ test('floating window enforces minimum dimensions', async ({ page, authenticator
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -311,7 +315,7 @@ test('maximized window has no resize handle', async ({ page, authenticator }) =>
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 
@@ -332,10 +336,10 @@ test('clicking window brings it to front', async ({ page, authenticator }) => {
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open two windows
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
   // Both windows should exist
@@ -365,13 +369,13 @@ test('new windows cascade with 30px offset', async ({ page, authenticator }) => 
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open three windows
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
-  await page.locator('[data-app-id="terminal"]').click();
+  await openAppViaIcon(page, 'terminal');
   await page.waitForTimeout(300);
 
   // Should have 3 windows
@@ -401,10 +405,10 @@ test('active window has visual highlight', async ({ page, authenticator }) => {
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open two windows
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
   const windows = page.locator('[data-window]');
@@ -433,13 +437,13 @@ test('window close transfers focus to next window', async ({ page, authenticator
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open three windows
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   await page.locator('[data-window]').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  await page.locator('[data-app-id="browser"]').click();
+  await openAppViaIcon(page, 'browser');
   await page.waitForTimeout(300);
 
-  await page.locator('[data-app-id="terminal"]').click();
+  await openAppViaIcon(page, 'terminal');
   await page.waitForTimeout(300);
 
   // Close the topmost window (terminal, opened last)
@@ -462,7 +466,7 @@ test('maximized window is not draggable', async ({ page, authenticator }) => {
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Open Files window
-  await page.locator('[data-app-id="files"]').click();
+  await openAppViaIcon(page, 'files');
   const windowEl = page.locator('[data-window]').first();
   await expect(windowEl).toBeVisible({ timeout: 5000 });
 

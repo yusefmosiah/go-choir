@@ -2,13 +2,13 @@
   BottomBar — fixed bottom bar for the ChoirOS desktop.
 
   Contains:
-    - Left: minimized window indicators (click to restore)
-    - Right: prompt bar input with "Ask anything..." placeholder
-    - Bottom-left: user email + logout button
-    - Connection status dot (green/yellow/red)
+    - Left: Show Desktop button + minimized window indicators (click to restore)
+    - Center: prompt bar input with "Ask anything..." placeholder
+    - Right: connection status dot, user email + logout button
 
   Data attributes for test targeting:
     data-bottom-bar         — root bar container
+    data-show-desktop-btn   — Show Desktop toggle button
     data-minimized-indicator — minimized window indicator
     data-prompt-input       — prompt text input
     data-bottom-user        — user info area
@@ -21,6 +21,8 @@
     minimizedWindows,
     restoreWindow,
     focusWindow,
+    showDesktopMode,
+    toggleShowDesktop,
   } from './stores/desktop.js';
 
   export let currentUser = null;
@@ -32,6 +34,10 @@
 
   function handleRestore(windowId) {
     restoreWindow(windowId);
+  }
+
+  function handleShowDesktop() {
+    toggleShowDesktop();
   }
 
   function handlePromptKeydown(event) {
@@ -64,16 +70,17 @@
 </script>
 
 <div class="bottom-bar" data-bottom-bar>
-  <!-- Left section: minimized windows + user info -->
+  <!-- Left section: show desktop + minimized windows -->
   <div class="bar-left">
-    <!-- Hamburger button (mobile only — always in DOM for CSS to control) -->
+    <!-- Show Desktop button -->
     <button
-      class="hamburger-btn"
-      data-hamburger-btn
-      on:click={() => dispatch('togglehamburger')}
-      aria-label="Open navigation menu"
+      class="show-desktop-btn"
+      data-show-desktop-btn
+      on:click={handleShowDesktop}
+      aria-label="Show Desktop"
+      title="Show Desktop"
     >
-      <span class="hamburger-icon">☰</span>
+      <span class="show-desktop-icon">⊞</span>
     </button>
 
     <!-- Minimized window indicators -->
@@ -169,10 +176,10 @@
     min-width: 0;
   }
 
-  .hamburger-btn {
-    display: none; /* hidden by default, shown on mobile via media query */
+  .show-desktop-btn {
     width: 36px;
     height: 36px;
+    display: flex;
     align-items: center;
     justify-content: center;
     background: transparent;
@@ -182,9 +189,15 @@
     color: #c0c0d0;
     font-size: 1.1rem;
     flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
   }
 
-  .hamburger-btn:focus-visible {
+  .show-desktop-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: #444;
+  }
+
+  .show-desktop-btn:focus-visible {
     outline: 2px solid #3b82f6;
     outline-offset: 2px;
   }
@@ -358,10 +371,6 @@
     .bottom-bar {
       padding: 0 8px;
       gap: 8px;
-    }
-
-    .hamburger-btn {
-      display: flex;
     }
 
     .bar-center {

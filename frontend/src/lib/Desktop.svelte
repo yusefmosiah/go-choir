@@ -1,16 +1,20 @@
 <!--
-  Desktop — ChoirOS desktop shell with left rail, floating windows, and bottom bar.
+  Desktop — ChoirOS desktop shell with floating desktop icons, floating windows, and bottom bar.
+
+  Layout:
+    - Floating desktop icons freely draggable on the desktop surface
+    - Floating windows draggable/resizable on top of icons
+    - Bottom bar fixed at viewport bottom
 
   Responsive layout across three breakpoints:
-    - Desktop (>1024px): full left rail (~180px) with labels, floating draggable windows
-    - Tablet (768-1024px): icon-only left rail (~56px), floating windows with max-width
-    - Mobile (<768px): left rail hidden, hamburger opens slide-out overlay,
-      single focus window mode (one window at a time, full width, non-draggable)
+    - Desktop (>1024px): full floating icons with labels, floating draggable windows
+    - Tablet (768-1024px): floating icons, windows with max-width constraint
+    - Mobile (<768px): floating icons, single focus window mode (one at a time, full width)
 
   Data attributes for test targeting:
     data-desktop             — root desktop container
     data-desktop-windows     — window container area
-    data-rail-backdrop       — mobile overlay backdrop
+    data-desktop-surface     — desktop surface with floating icons
     data-shell               — backward compat with existing tests
 -->
 <script>
@@ -19,7 +23,7 @@
   import { onDestroy } from 'svelte';
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
   import { fetchDesktopState, saveDesktopState } from './desktop.js';
-  import DesktopIcons from './DesktopIcons.svelte';
+  import FloatingDesktopIcons from './FloatingDesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
   import FloatingWindow from './FloatingWindow.svelte';
   import ETextEditor from './ETextEditor.svelte';
@@ -29,6 +33,9 @@
     windows,
     activeWindowId,
     liveStatus,
+    iconPositions,
+    showDesktopMode,
+    selectedIconId,
     openApp,
     closeWindow,
     focusWindow,
@@ -40,7 +47,9 @@
     setWindows,
     hideWindow,
     showWindow,
-    visibleWindows,
+    setIconPositions,
+    getDefaultIconPositions,
+    toggleShowDesktop,
   } from './stores/desktop.js';
 
   export let currentUser = null;
@@ -68,12 +77,9 @@
 
   // ---- Responsive state ----
   let isMobile = false;
-  let hamburgerOpen = false;
 
   function updateViewport() {
     isMobile = window.innerWidth < 768;
-    // Close hamburger if resizing to desktop/tablet
-    if (!isMobile) hamburgerOpen = false;
   }
 
   // ---- Desktop state persistence ----
@@ -81,24 +87,31 @@
   async function loadDesktopState() {
     try {
       const state = await fetchDesktopState();
-      if (state && state.windows && state.windows.length > 0) {
-        const restoredWindows = state.windows.map((w) => ({
-          windowId: w.window_id,
-          appId: w.app_id,
-          title: w.title,
-          icon: getIconForApp(w.app_id),
-          x: w.geometry?.x ?? 100,
-          y: w.geometry?.y ?? 100,
-          width: w.geometry?.width ?? 600,
-          height: w.geometry?.height ?? 400,
-          mode: w.mode ?? 'normal',
-          zIndex: w.z_index ?? 1,
-          restoredGeometry: w.restored_geometry
-            ? { x: w.restored_geometry.x, y: w.restored_geometry.y, width: w.restored_geometry.width, height: w.restored_geometry.height }
-            : null,
-          appContext: w.app_context ?? {},
-        }));
-        setWindows(restoredWindows, state.active_window_id || '');
+      if (state) {
+        // Restore icon positions
+        if (state.icon_positions && Object.keys(state.icon_positions).length > 0) {
+          setIconPositions(state.icon_positions);
+        }
+        // Restore windows
+        if (state.windows && state.windows.length > 0) {
+          const restoredWindows = state.windows.map((w) => ({
+            windowId: w.window_id,
+            appId: w.app_id,
+            title: w.title,
+            icon: getIconForApp(w.app_id),
+            x: w.geometry?.x ?? 100,
+            y: w.geometry?.y ?? 100,
+            width: w.geometry?.width ?? 600,
+            height: w.geometry?.height ?? 400,
+            mode: w.mode ?? 'normal',
+            zIndex: w.z_index ?? 1,
+            restoredGeometry: w.restored_geometry
+              ? { x: w.restored_geometry.x, y: w.restored_geometry.y, width: w.restored_geometry.width, height: w.restored_geometry.height }
+              : null,
+            appContext: w.app_context ?? {},
+          }));
+          setWindows(restoredWindows, state.active_window_id || '');
+        }
       }
     } catch (err) {
       if (err instanceof AuthRequiredError) {
@@ -129,8 +142,10 @@
     try {
       let currentWindows;
       let currentActiveId;
+      let currentIconPositions;
       windows.subscribe((w) => { currentWindows = w; })();
       activeWindowId.subscribe((id) => { currentActiveId = id; })();
+      iconPositions.subscribe((p) => { currentIconPositions = p; })();
 
       const state = {
         windows: currentWindows
@@ -146,6 +161,7 @@
             app_context: w.appContext,
           })),
         active_window_id: currentActiveId || '',
+        icon_positions: currentIconPositions,
       };
       await saveDesktopState(state);
     } catch (err) {
@@ -159,6 +175,7 @@
 
   let unsubscribeWindows;
   let unsubscribeActive;
+  let unsubscribeIconPositions;
 
   // ---- Bootstrap fetch (preserved for session renewal, not displayed) ----
 
@@ -289,7 +306,6 @@
     } else {
       openApp(event.detail.appId, event.detail.appName, event.detail.icon);
     }
-    hamburgerOpen = false;
   }
 
   function handleWindowClose(event) {
@@ -363,12 +379,8 @@
     // For now, just log it. Future: opens a Chat app or sends to runtime.
   }
 
-  function handleToggleHamburger() {
-    hamburgerOpen = !hamburgerOpen;
-  }
-
-  function handleBackdropClick() {
-    hamburgerOpen = false;
+  function handleIconPositionsChanged() {
+    scheduleSave();
   }
 
   // ---- Lifecycle ----
@@ -388,6 +400,9 @@
     unsubscribeActive = activeWindowId.subscribe(() => {
       if (stateLoaded) scheduleSave();
     });
+    unsubscribeIconPositions = iconPositions.subscribe(() => {
+      if (stateLoaded) scheduleSave();
+    });
   });
 
   onDestroy(() => {
@@ -400,23 +415,17 @@
     if (saveTimer) clearTimeout(saveTimer);
     if (unsubscribeWindows) unsubscribeWindows();
     if (unsubscribeActive) unsubscribeActive();
+    if (unsubscribeIconPositions) unsubscribeIconPositions();
   });
 </script>
 
 <div class="desktop" data-desktop data-shell>
-  <!-- Backdrop for mobile slide-out overlay -->
-  {#if hamburgerOpen && isMobile}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="rail-backdrop" data-rail-backdrop role="presentation" on:click={handleBackdropClick}></div>
-  {/if}
-
-  <!-- Left rail -->
-  <DesktopIcons {hamburgerOpen} on:launchapp={handleLaunchApp} />
-
-  <!-- Window container area -->
-  <!-- Hidden until desktop state loads to prevent flash of empty desktop (VAL-SHELL-022) -->
+  <!-- Desktop surface (floating icons + windows, full viewport width) -->
   <div class="desktop-area {stateLoaded ? 'state-loaded' : 'state-loading'}" data-desktop-windows>
+    <!-- Floating desktop icons (z-index below windows) -->
+    <FloatingDesktopIcons on:launchapp={handleLaunchApp} on:iconpositionschanged={handleIconPositionsChanged} />
+
+    <!-- Floating windows (rendered on top of icons) -->
     {#if stateLoaded}
       {#each $windows as win (win.windowId)}
         {#if win.mode !== 'closed' && win.mode !== 'hidden'}
@@ -472,7 +481,6 @@
     liveStatus={$liveStatus}
     on:logout={handleLogout}
     on:promptsubmit={handlePromptSubmit}
-    on:togglehamburger={handleToggleHamburger}
   />
 </div>
 
@@ -485,24 +493,11 @@
     overflow: hidden;
   }
 
-  /* Backdrop for mobile slide-out overlay */
-  .rail-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 190; /* Below the rail overlay (200) so rail items remain clickable */
-    cursor: pointer;
-  }
-
-  /* Desktop area (window container) — offset for left rail */
+  /* Desktop area (window container) — full viewport width, no left rail */
   .desktop-area {
     flex: 1;
     position: relative;
     overflow: hidden;
-    margin-left: 180px; /* desktop: width of left rail */
     height: calc(100vh - 56px); /* subtract bottom bar height */
   }
 
@@ -538,19 +533,5 @@
     font-size: 0.95rem;
     font-weight: 600;
     color: #c0c0d0;
-  }
-
-  /* Responsive: Tablet (768-1024px) — narrower rail */
-  @media (max-width: 1024px) {
-    .desktop-area {
-      margin-left: 56px;
-    }
-  }
-
-  /* Responsive: Mobile (<768px) — no rail offset, full width */
-  @media (max-width: 768px) {
-    .desktop-area {
-      margin-left: 0;
-    }
   }
 </style>

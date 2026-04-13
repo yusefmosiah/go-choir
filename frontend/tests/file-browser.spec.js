@@ -31,10 +31,10 @@ async function registerAndLoadDesktop(page, authenticator, email) {
   await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 }
 
-// Helper: open the Files app from the left rail
+// Helper: open the Files app from the floating desktop icon
 async function openFilesApp(page) {
-  const filesIcon = page.locator('[data-app-id="files"]');
-  await filesIcon.click();
+  const filesIcon = page.locator('[data-desktop-icon-id="files"]');
+  await filesIcon.dblclick();
   // Wait for file browser window to appear
   await page.locator('[data-file-list]').waitFor({ state: 'visible', timeout: 10000 });
 }
@@ -81,8 +81,9 @@ test('file browser launches from left rail', async ({ page, authenticator }) => 
   await registerAndLoadDesktop(page, authenticator, email);
 
   // Click the Files icon in the left rail
-  const filesIcon = page.locator('[data-app-id="files"]');
-  await filesIcon.click();
+  // Double-click the Files floating icon
+  const filesIcon = page.locator('[data-desktop-icon-id="files"]');
+  await filesIcon.dblclick();
 
   // A window should appear with title "Files"
   const window = page.locator('[data-window]');
@@ -412,12 +413,9 @@ test.describe('file browser responsive on mobile', () => {
     await page.reload();
     await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 
-    // Open hamburger menu and click Files
-    const hamburgerBtn = page.locator('[data-hamburger-btn]');
-    await hamburgerBtn.click();
-
-    const filesIcon = page.locator('[data-app-id="files"]');
-    await filesIcon.click();
+    // Double-click the Files floating icon
+    const filesIcon = page.locator('[data-desktop-icon-id="files"]');
+    await filesIcon.dblclick();
 
     // File browser window should be visible
     const fileList = page.locator('[data-file-list]');
