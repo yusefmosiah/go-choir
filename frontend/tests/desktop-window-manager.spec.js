@@ -278,7 +278,7 @@ test('window close and reopen updates desktop state cleanly', async ({
 // Test: desktop restore preserves server-backed window state
 // (VAL-DESKTOP-007)
 // ---------------------------------------------------------------
-test.skip('desktop restore preserves server-backed window state across fresh context', async ({
+test('desktop restore preserves server-backed window state across fresh context', async ({
   page,
   authenticator,
   context,

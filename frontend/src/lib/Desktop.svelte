@@ -92,7 +92,9 @@
           height: w.geometry?.height ?? 400,
           mode: w.mode ?? 'normal',
           zIndex: w.z_index ?? 1,
-          restoredGeometry: w.restored_geometry ?? null,
+          restoredGeometry: w.restored_geometry
+            ? { x: w.restored_geometry.x, y: w.restored_geometry.y, width: w.restored_geometry.width, height: w.restored_geometry.height }
+            : null,
           appContext: w.app_context ?? {},
         }));
         setWindows(restoredWindows, state.active_window_id || '');
@@ -349,43 +351,46 @@
   <DesktopIcons on:launchapp={handleLaunchApp} />
 
   <!-- Window container area (shifted right by rail width) -->
-  <div class="desktop-area" data-desktop-windows>
-    {#each $windows as win (win.windowId)}
-      {#if win.mode !== 'closed'}
-        <FloatingWindow
-          windowId={win.windowId}
-          appId={win.appId}
-          title={win.title}
-          x={win.x}
-          y={win.y}
-          width={win.width}
-          height={win.height}
-          mode={win.mode}
-          zIndex={win.zIndex}
-          active={win.windowId === $activeWindowId}
-          restoredGeometry={win.restoredGeometry}
-          on:close={handleWindowClose}
-          on:focus={handleWindowFocus}
-          on:minimize={handleWindowMinimize}
-          on:maximize={handleWindowMaximize}
-          on:restore={handleWindowRestore}
-          on:move={handleWindowMove}
-          on:resize={handleWindowResize}
-        >
-          {#if win.appId === 'etext'}
-            <div class="app-content etext-content" data-etext-app>
-              <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
-            </div>
-          {:else}
-            <div class="app-content">
-              <div class="app-header">
-                <span class="app-label">{win.title}</span>
+  <!-- Hidden until desktop state loads to prevent flash of empty desktop (VAL-SHELL-022) -->
+  <div class="desktop-area {stateLoaded ? 'state-loaded' : 'state-loading'}" data-desktop-windows>
+    {#if stateLoaded}
+      {#each $windows as win (win.windowId)}
+        {#if win.mode !== 'closed'}
+          <FloatingWindow
+            windowId={win.windowId}
+            appId={win.appId}
+            title={win.title}
+            x={win.x}
+            y={win.y}
+            width={win.width}
+            height={win.height}
+            mode={win.mode}
+            zIndex={win.zIndex}
+            active={win.windowId === $activeWindowId}
+            restoredGeometry={win.restoredGeometry}
+            on:close={handleWindowClose}
+            on:focus={handleWindowFocus}
+            on:minimize={handleWindowMinimize}
+            on:maximize={handleWindowMaximize}
+            on:restore={handleWindowRestore}
+            on:move={handleWindowMove}
+            on:resize={handleWindowResize}
+          >
+            {#if win.appId === 'etext'}
+              <div class="app-content etext-content" data-etext-app>
+                <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
               </div>
-            </div>
-          {/if}
-        </FloatingWindow>
-      {/if}
-    {/each}
+            {:else}
+              <div class="app-content">
+                <div class="app-header">
+                  <span class="app-label">{win.title}</span>
+                </div>
+              </div>
+            {/if}
+          </FloatingWindow>
+        {/if}
+      {/each}
+    {/if}
   </div>
 
   <!-- Bottom bar -->
@@ -414,6 +419,15 @@
     overflow: hidden;
     margin-left: 80px; /* width of left rail */
     height: calc(100vh - 56px); /* subtract bottom bar height */
+  }
+
+  /* Prevent flash of empty desktop while state loads (VAL-SHELL-022) */
+  .desktop-area.state-loading {
+    visibility: hidden;
+  }
+
+  .desktop-area.state-loaded {
+    visibility: visible;
   }
 
   /* App content inside windows */
