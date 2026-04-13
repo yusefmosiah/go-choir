@@ -226,22 +226,23 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 ### Mission 6: Desktop UX Rewrite (COMPLETE)
 **Delivered:** 10/13 features (see Mission History above)
 
-### Mission 7: E-Text + Choir-in-Choir + Settings UI (NEXT)
-**Goal:** Realize full vision - single editor UX + background app building + settings UI
+### Mission 7: Cogent Integration + MicroVM Architecture (NEXT)
+**Goal:** Properly integrate ChoirOS microVM patterns from `~/choiros-rs` with Cogent work graph from `~/cogent`, replacing stub implementations.
 
-**E-Text Vision:**
-- Single responsive text editor, no sidebars
-- User prompt = Version 0
-- Agent creates Version 1, spawns workers
-- Workers message back, agent creates subsequent versions
-- Users "reprompt" by editing text inline anywhere
+**Doc:** `docs/mission-7-cogent-integration.md`
 
-**Choir-in-Choir:**
-- Fork microVM to build new apps in background
-- Stream progress/artifacts to etext
-- Switch to new app when ready
+**Key Deliverables:**
+1. **MicroVM Filesystem** — Per-user isolated filesystem (port from `~/choiros-rs`)
+2. **Browser Proxy** — Server-side proxy with HTML rewriting (fix iframe limitations)
+3. **Cogent Integration** — Work graph, agent spawning, long-running work
+4. **Settings UI** — Per-user preferences in microVM, consumed by conductor
 
-**Reference:** `~/choiros-rs/docs/archive/DESKTOP_ARCHITECTURE_DESIGN.md`
+**Architectural Sources:**
+- `~/choiros-rs/sandbox/src/` — VM lifecycle patterns
+- `~/cogent/internal/adapters/native/` — Tool calling loop
+- `~/cogent/internal/service/` — Work graph orchestration
+
+**Implementation:** Use Cogent, not Factory Droid (context loss issues).
 
 ### Mission 5 (revisit): Production Hardening (if needed)
 
