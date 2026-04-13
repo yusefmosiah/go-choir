@@ -10,18 +10,20 @@ go-choir is a distributed multi-agent operating system with a web desktop UI (Sv
 ┌──────────────────────────────────────────────────────────┐
 │ Browser (Svelte SPA)                                     │
 │                                                          │
-│ ┌────────┐ ┌────────────────────────┐ ┌───────────────┐ │
-│ │ Left   │ │ Floating Windows       │ │ (none - top   │ │
-│ │ Rail   │ │  ┌──────┐  ┌──────┐   │ │  bar removed) │ │
-│ │        │ │  │Files │  │Term  │   │ │               │ │
-│ │ 📁Files│ │  └──────┘  └──────┘   │ │               │ │
-│ │ 🌐Web  │ │  ┌──────┐  ┌──────┐   │ │               │ │
-│ │ 💻Term │ │  │Browse│  │Settg │   │ │               │ │
-│ │ ⚙️Set  │ │  └──────┘  └──────┘   │ │               │ │
-│ └────────┘ └────────────────────────┘ └───────────────┘ │
+│ ┌──────────────────────────────────────────────────────┐ │
+│ │ Desktop Surface (floating icons + windows)           │ │
+│ │                                                      │ │
+│ │  📁        🌐        💻        ⚙️                    │ │
+│ │ Files     Browser   Terminal  Settings               │ │
+│ │                                                      │ │
+│ │  ┌──────┐  ┌──────┐                                 │ │
+│ │  │Files │  │Term  │  (floating windows)              │ │
+│ │  └──────┘  └──────┘                                 │ │
+│ └──────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────┐ │
 │ │ Bottom Bar (56px fixed)                              │ │
-│ │ [minimized] [user@email] [prompt: Ask anything...]   │ │
+│ │ [Show Desktop] [minimized] [prompt: Ask anything...] │ │
+│ │                        [user@email] [Sign Out]       │ │
 │ └──────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────┘
         │ fetchWithRenewal (cookie auth)
@@ -52,20 +54,20 @@ go-choir is a distributed multi-agent operating system with a web desktop UI (Sv
 
 ## Responsive Breakpoints
 
-| Breakpoint | Left Rail | Windows | Bottom Bar |
-|------------|-----------|---------|------------|
-| Desktop >1024px | ~180px with labels | Floating, draggable, resizable | Full 56px |
-| Tablet 768-1024px | ~56px icon-only, labels on hover | Floating, max-width constrained | Full 56px |
-| Mobile <768px | Hidden, hamburger in bottom bar | Single focus, full-width, no drag | Compact |
+| Breakpoint | Desktop Icons | Windows | Bottom Bar |
+|------------|---------------|---------|------------|
+| Desktop >1024px | Floating, draggable, full-size | Floating, draggable, resizable | Full 56px |
+| Tablet 768-1024px | Same as desktop | Floating, max-width constrained | Full 56px |
+| Mobile <768px | Same as desktop | Single focus, full-width, no drag | Compact |
 
 ## Component Structure (Frontend)
 
 ```
 frontend/src/lib/
 ├── App.svelte              — Root: auth check → Desktop or AuthEntry
-├── Desktop.svelte           — Shell: left rail + windows + bottom bar
-├── DesktopIcons.svelte      — Left rail with app icons
-├── BottomBar.svelte         — Minimized indicators + prompt + user info
+├── Desktop.svelte           — Shell: desktop surface + windows + bottom bar
+├── DesktopIcons.svelte      — Floating desktop icons (draggable, grid layout)
+├── BottomBar.svelte         — Show Desktop + minimized indicators + prompt + user info
 ├── PromptBar.svelte         — "Ask anything..." input
 ├── FloatingWindow.svelte    — Window chrome (drag, resize, minimize/maximize/close)
 ├── FileBrowser.svelte       — File browser app
@@ -96,7 +98,9 @@ frontend/src/lib/
 
 1. Auth is cookie-based (access + refresh JWT). All API calls use `fetchWithRenewal`.
 2. Desktop state survives page reload and new tabs (server-side SQLite).
-3. Single-instance apps: clicking a rail icon for an already-open app focuses/restores it.
-4. No top bar, no bootstrap accordion, no runtime panel visible to users.
-5. Terminal PTY processes are cleaned up on window close (no zombies).
-6. Settings API keys are AES-GCM encrypted at rest, never exposed in GET responses.
+3. Single-instance apps: double-clicking a desktop icon for an already-open app focuses/restores it.
+4. No top bar, no left rail, no bootstrap accordion, no runtime panel visible to users.
+5. Desktop icons are freely-draggable on the desktop surface with positions persisted.
+6. "Show Desktop" button minimizes all windows; clicking again restores them.
+7. Terminal PTY processes are cleaned up on window close (no zombies).
+8. Settings API keys are AES-GCM encrypted at rest, never exposed in GET responses.

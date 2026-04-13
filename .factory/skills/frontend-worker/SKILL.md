@@ -46,8 +46,8 @@ Features that involve creating or modifying Svelte components, CSS layouts, resp
 
 ```json
 {
-  "salientSummary": "Implemented DesktopIcons left rail component with 4 app icons (Files, Browser, Terminal, Settings), active indicator highlighting, and scrollable overflow. Created FloatingWindow rewrite with simplified bottom-right-only resize handle. Desktop.svelte rewritten with new layout (no top bar, left rail + bottom bar). All 8 new Playwright tests passing.",
-  "whatWasImplemented": "DesktopIcons.svelte (left rail with icon+label, active indicator, scroll), BottomBar.svelte (minimized indicators + prompt input + user info + connection status), FloatingWindow.svelte (rewrite of Window.svelte with single resize handle), Desktop.svelte rewrite (removed top bar, bootstrap accordion, runtime panel; integrated left rail + bottom bar layout). New stores in desktop-stores.js.",
+  "salientSummary": "Implemented DesktopIcons floating desktop icons with 4 app icons (Files, Browser, Terminal, Settings), draggable positions, active indicator highlighting, and Show Desktop button. Created FloatingWindow rewrite with simplified bottom-right-only resize handle. Desktop.svelte rewritten with new layout (no top bar, no left rail, floating icons on desktop surface + bottom bar). All 8 new Playwright tests passing.",
+  "whatWasImplemented": "DesktopIcons.svelte (floating desktop icons with emoji+label, draggable, grid layout, position persistence), BottomBar.svelte (Show Desktop button + minimized indicators + prompt input + user info + connection status), FloatingWindow.svelte (rewrite of Window.svelte with single resize handle), Desktop.svelte rewrite (removed top bar, left rail, bootstrap accordion, runtime panel; desktop surface spans full width with floating icons + bottom bar layout). New stores in desktop.js.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
@@ -55,10 +55,11 @@ Features that involve creating or modifying Svelte components, CSS layouts, resp
       {"command": "cd frontend && pnpm e2e --grep 'desktop shell'", "exitCode": 0, "observation": "8 tests passing"}
     ],
     "interactiveChecks": [
-      {"action": "Navigate to http://localhost:4173, register passkey, verify desktop layout", "observed": "Left rail visible with 4 icons, bottom bar with prompt input, no top bar"},
-      {"action": "Click File Browser icon in left rail", "observed": "Floating window opened with Files title, active indicator on rail icon"},
-      {"action": "Click same icon again", "observed": "Existing window focused, no duplicate opened"},
-      {"action": "Minimize window, click indicator in bottom bar", "observed": "Window restored to previous geometry"}
+      {"action": "Navigate to http://localhost:4173, register passkey, verify desktop layout", "observed": "Floating icons visible on desktop surface with 4 icons, bottom bar with prompt input, no top bar, no left rail"},
+      {"action": "Double-click File Browser icon on desktop", "observed": "Floating window opened with Files title, active indicator on desktop icon"},
+      {"action": "Double-click same icon again", "observed": "Existing window focused, no duplicate opened"},
+      {"action": "Click Show Desktop button", "observed": "All windows minimized, desktop icons revealed"},
+      {"action": "Click Show Desktop again", "observed": "All windows restored"}
     ],
     "tests": {
       "added": [
