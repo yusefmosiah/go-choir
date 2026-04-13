@@ -65,7 +65,7 @@
               base == "svelte.config.js" ||
               base == "vite.config.js";
         };
-        npmDepsHash = "sha256-UXHDem8sfIX42Aylef0AxtVWVjOI5gjIh5q0T41Qe5E=";
+        npmDepsHash = "sha256-ZZNGgjuxa7b6sVuREh9v8znFYLu0AChAaf95dfxtNHg=";
         npmBuildScript = "build";
         # Playwright downloads browsers during postinstall, which fails in the
         # Nix sandbox.  We only need it for e2e tests (not the build), so skip.
