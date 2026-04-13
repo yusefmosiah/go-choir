@@ -33,7 +33,7 @@
             (baseNameOf path == "go.mod") ||
             (baseNameOf path == "go.sum");
         };
-        vendorHash = "";
+        vendorHash = "sha256-79wrZIQzBrmYaXeo2GgLm9BMZcrbS4OlEUWGHoUM0dY=";
         doCheck = false; # Tests run separately in CI
       };
 
