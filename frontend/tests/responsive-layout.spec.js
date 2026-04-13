@@ -209,11 +209,20 @@ test.describe('Mobile breakpoint (<768px)', () => {
     await page.waitForTimeout(300);
     await expect(page.locator('[data-window]')).toHaveCount(1);
 
-    // Open Browser via double-click
+    // On mobile, the full-width window covers the desktop icons, preventing
+    // direct double-click on another icon. Minimize (close on mobile) the
+    // first window, then open the second to verify single-focus mode.
+    // On mobile, minimizing a window actually closes it (see Desktop.svelte
+    // handleWindowMinimize which calls closeWindow on mobile).
+    await page.locator('[data-window-minimize]').first().click();
+    await page.waitForTimeout(200);
+    await expect(page.locator('[data-window]')).toHaveCount(0);
+
+    // Now open Browser
     await openAppViaIcon(page, 'browser');
     await page.waitForTimeout(300);
 
-    // Should still have only 1 visible window (single focus mode hides the first)
+    // Should have exactly 1 visible window (the browser)
     const visibleWindows = page.locator('[data-window]:visible');
     await expect(visibleWindows).toHaveCount(1);
   });
