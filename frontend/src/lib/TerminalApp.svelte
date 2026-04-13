@@ -23,17 +23,19 @@
 -->
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { createEventDispatcher } from 'svelte';
   import {
     createTerminalSession,
     updateTerminalSession,
     getTerminalSession,
     destroyTerminalSession,
+    terminalSessions,
   } from './stores/terminal.js';
 
   export let windowId = '';
 
-  const dispatch = createEventDispatcher();
+  // Reactive access to this session's error state
+  $: session = $terminalSessions[windowId] || {};
+  $: errorMessage = session.error;
 
   // ---- DOM refs ----
   let terminalContainer;
@@ -138,7 +140,8 @@
       const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws`;
       const ws = new WebSocket(wsUrl);
 
-      ws.binaryType = 'arraybuffer';
+      // Protocol uses text-based JSON messages (not binary).
+      // Do NOT set ws.binaryType = 'arraybuffer'.
 
       ws.onopen = () => {
         // Send initial resize so backend PTY knows our size
@@ -150,11 +153,19 @@
       };
 
       // PTY output -> terminal write
+      // Backend sends JSON: {type: "output", data: "..."} or {type: "error", data: "..."}
       ws.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          const decoder = new TextDecoder();
-          term.write(decoder.decode(event.data));
-        } else {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'output' && typeof msg.data === 'string') {
+            term.write(msg.data);
+          } else if (msg.type === 'error') {
+            updateTerminalSession(windowId, {
+              error: msg.data || 'Unknown server error',
+            });
+          }
+        } catch (_e) {
+          // Fallback: if message is not JSON, write raw text
           term.write(event.data);
         }
       };
@@ -173,10 +184,13 @@
         }
       };
 
-      // Terminal input -> WebSocket send
+      // Terminal input -> WebSocket send (JSON protocol)
       term.onData((data) => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+          ws.send(JSON.stringify({
+            type: 'input',
+            data: data,
+          }));
         }
       });
 
@@ -239,6 +253,16 @@
   data-terminal
 >
   <!-- ghostty-web renders its canvas here via term.open() -->
+
+  <!-- Error display overlay -->
+  {#if errorMessage}
+    <div class="terminal-error" data-terminal-error>
+      <div class="terminal-error-content">
+        <span class="terminal-error-icon">⚠</span>
+        <span class="terminal-error-text">{errorMessage}</span>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -255,7 +279,7 @@
     display: block;
   }
 
-  /* Error state styling */
+  /* Error state overlay */
   .terminal-error {
     position: absolute;
     top: 0;
@@ -265,11 +289,28 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #1a1b26;
+    background: rgba(26, 27, 38, 0.92);
     color: #f7768e;
     font-family: monospace;
     font-size: 0.85rem;
     padding: 1rem;
     text-align: center;
+    z-index: 10;
+  }
+
+  .terminal-error-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 320px;
+  }
+
+  .terminal-error-icon {
+    font-size: 1.5rem;
+  }
+
+  .terminal-error-text {
+    word-break: break-word;
   }
 </style>
