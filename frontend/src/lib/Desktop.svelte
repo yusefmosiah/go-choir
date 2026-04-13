@@ -24,6 +24,7 @@
   import FloatingWindow from './FloatingWindow.svelte';
   import ETextEditor from './ETextEditor.svelte';
   import FileBrowser from './FileBrowser.svelte';
+  import BrowserApp from './BrowserApp.svelte';
   import {
     windows,
     activeWindowId,
@@ -443,6 +444,10 @@
             {#if win.appId === 'files'}
               <div class="app-content files-content" data-files-app>
                 <FileBrowser on:authexpired={() => dispatch('authexpired')} />
+              </div>
+            {:else if win.appId === 'browser'}
+              <div class="app-content browser-content" data-browser-app-container>
+                <BrowserApp />
               </div>
             {:else if win.appId === 'etext'}
               <div class="app-content etext-content" data-etext-app>
