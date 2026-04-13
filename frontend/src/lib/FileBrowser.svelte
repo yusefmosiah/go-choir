@@ -75,6 +75,11 @@
         : '/api/files';
       const res = await fetchWithRenewal(path);
       if (!res.ok) {
+        if (res.status === 401) {
+          // Session expired and renewal failed — trigger auth fallback.
+          dispatch('authexpired');
+          return;
+        }
         const body = await res.json().catch(() => ({}));
         if (res.status === 403) {
           error = 'Access denied: you do not have permission to view this directory.';
@@ -123,6 +128,10 @@
     try {
       const res = await fetchWithRenewal(path, { method: 'POST' });
       if (!res.ok) {
+        if (res.status === 401) {
+          dispatch('authexpired');
+          return;
+        }
         const body = await res.json().catch(() => ({}));
         if (res.status === 409) {
           newFolderError = 'A folder with this name already exists.';
@@ -155,6 +164,10 @@
     try {
       const res = await fetchWithRenewal(path, { method: 'DELETE' });
       if (!res.ok) {
+        if (res.status === 401) {
+          dispatch('authexpired');
+          return;
+        }
         const body = await res.json().catch(() => ({}));
         deleteError = body.error || 'Failed to delete.';
         return;

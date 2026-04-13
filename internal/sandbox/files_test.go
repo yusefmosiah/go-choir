@@ -18,6 +18,14 @@ func setupFileTest(t *testing.T) (*FilesHandler, string) {
 	return fh, rootDir
 }
 
+// authRequest creates an httptest.Request with the X-Authenticated-User header
+// set, simulating a request that has passed through the proxy's JWT validation.
+func authRequest(method, path string) *http.Request {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("X-Authenticated-User", "test-user@example.com")
+	return req
+}
+
 // --- GET /api/files (root listing) ---
 
 func TestListRootDirectory(t *testing.T) {
@@ -27,7 +35,7 @@ func TestListRootDirectory(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "documents"), 0o755)
 	os.WriteFile(filepath.Join(root, "readme.txt"), []byte("hello"), 0o644)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := authRequest(http.MethodGet, "/api/files")
 	w := httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 
@@ -72,7 +80,7 @@ func TestListRootDirectory(t *testing.T) {
 func TestListEmptyRootDirectory(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := authRequest(http.MethodGet, "/api/files")
 	w := httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 
@@ -113,7 +121,7 @@ func TestListRootRejectsNonGet(t *testing.T) {
 func TestListRootReturnsJSONContentType(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := authRequest(http.MethodGet, "/api/files")
 	w := httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 
@@ -132,7 +140,7 @@ func TestGetSubdirectoryListing(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "documents"), 0o755)
 	os.WriteFile(filepath.Join(root, "documents", "notes.txt"), []byte("my notes"), 0o644)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files/documents", nil)
+	req := authRequest(http.MethodGet, "/api/files/documents")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -156,7 +164,7 @@ func TestGetSubdirectoryListing(t *testing.T) {
 func TestGetNonexistentPathReturns404(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files/nonexistent", nil)
+	req := authRequest(http.MethodGet, "/api/files/nonexistent")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -179,7 +187,7 @@ func TestGetFileDownload(t *testing.T) {
 	content := []byte("file content for download")
 	os.WriteFile(filepath.Join(root, "download.txt"), content, 0o644)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files/download.txt", nil)
+	req := authRequest(http.MethodGet, "/api/files/download.txt")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -205,7 +213,7 @@ func TestGetNestedSubdirectory(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0o755)
 	os.WriteFile(filepath.Join(root, "a", "b", "c", "deep.txt"), []byte("deep file"), 0o644)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files/a/b/c", nil)
+	req := authRequest(http.MethodGet, "/api/files/a/b/c")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -231,7 +239,7 @@ func TestGetNestedSubdirectory(t *testing.T) {
 func TestCreateDirectory(t *testing.T) {
 	fh, root := setupFileTest(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/files/new-folder", nil)
+	req := authRequest(http.MethodPost, "/api/files/new-folder")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -255,7 +263,7 @@ func TestCreateDirectoryReturnsConflictIfExists(t *testing.T) {
 	// Pre-create the directory.
 	os.MkdirAll(filepath.Join(root, "existing"), 0o755)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/files/existing", nil)
+	req := authRequest(http.MethodPost, "/api/files/existing")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -278,7 +286,7 @@ func TestCreateDirectoryConflictWithFile(t *testing.T) {
 	// Pre-create a file with the same name.
 	os.WriteFile(filepath.Join(root, "conflict"), []byte("data"), 0o644)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/files/conflict", nil)
+	req := authRequest(http.MethodPost, "/api/files/conflict")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -293,7 +301,7 @@ func TestCreateDirectoryInSubdirectory(t *testing.T) {
 	// Pre-create parent directory.
 	os.MkdirAll(filepath.Join(root, "docs"), 0o755)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/files/docs/subfolder", nil)
+	req := authRequest(http.MethodPost, "/api/files/docs/subfolder")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -315,7 +323,7 @@ func TestCreateDirectoryParentNotFound(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
 	// Try to create a directory in a nonexistent parent.
-	req := httptest.NewRequest(http.MethodPost, "/api/files/nonexistent/new-folder", nil)
+	req := authRequest(http.MethodPost, "/api/files/nonexistent/new-folder")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -332,7 +340,7 @@ func TestDeleteFile(t *testing.T) {
 	// Create a file to delete.
 	os.WriteFile(filepath.Join(root, "temp.txt"), []byte("temp"), 0o644)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/files/temp.txt", nil)
+	req := authRequest(http.MethodDelete, "/api/files/temp.txt")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -352,7 +360,7 @@ func TestDeleteEmptyDirectory(t *testing.T) {
 	// Create an empty directory to delete.
 	os.MkdirAll(filepath.Join(root, "empty-dir"), 0o755)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/files/empty-dir", nil)
+	req := authRequest(http.MethodDelete, "/api/files/empty-dir")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -369,7 +377,7 @@ func TestDeleteEmptyDirectory(t *testing.T) {
 func TestDeleteNonexistentReturns404(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/files/nonexistent", nil)
+	req := authRequest(http.MethodDelete, "/api/files/nonexistent")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -385,7 +393,7 @@ func TestDeleteNonEmptyDirectoryReturns409(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "notempty"), 0o755)
 	os.WriteFile(filepath.Join(root, "notempty", "file.txt"), []byte("data"), 0o644)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/files/notempty", nil)
+	req := authRequest(http.MethodDelete, "/api/files/notempty")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -422,7 +430,7 @@ func TestPathTraversalHTTPBlocked(t *testing.T) {
 	// Simulate a URL with path traversal (as the HTTP mux would see it after
 	// stripping the prefix). Note: in real routing, Go's http.ServeMux
 	// will clean path components, so this is defense-in-depth.
-	req := httptest.NewRequest(http.MethodGet, "/api/files/..%2F..%2Fetc%2Fpasswd", nil)
+	req := authRequest(http.MethodGet, "/api/files/..%2F..%2Fetc%2Fpasswd")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -452,7 +460,7 @@ func TestSpecialCharactersInFilenames(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := authRequest(http.MethodGet, "/api/files")
 	w := httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 
@@ -486,7 +494,7 @@ func TestCreateAndGetDirectoryWithSpaces(t *testing.T) {
 
 	dirName := "my folder"
 	// URL-encode the space for the HTTP request path.
-	req := httptest.NewRequest(http.MethodPost, "/api/files/my%20folder", nil)
+	req := authRequest(http.MethodPost, "/api/files/my%20folder")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -507,7 +515,7 @@ func TestDeleteFileWithSpaces(t *testing.T) {
 	os.WriteFile(filepath.Join(root, fileName), []byte("content"), 0o644)
 
 	// URL-encode the space for the HTTP request path.
-	req := httptest.NewRequest(http.MethodDelete, "/api/files/file%20with%20spaces.txt", nil)
+	req := authRequest(http.MethodDelete, "/api/files/file%20with%20spaces.txt")
 	w := httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 
@@ -527,7 +535,7 @@ func TestFileByPathRejectsUnsupportedMethods(t *testing.T) {
 
 	for _, method := range []string{http.MethodPut, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/api/files/something", nil)
+			req := authRequest(method, "/api/files/something")
 			w := httptest.NewRecorder()
 			fh.HandleFileByPath(w, req)
 
@@ -544,7 +552,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
 	// 1. List root (should be empty).
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := authRequest(http.MethodGet, "/api/files")
 	w := httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 	if w.Code != http.StatusOK {
@@ -557,7 +565,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 2. Create a directory.
-	req = httptest.NewRequest(http.MethodPost, "/api/files/projects", nil)
+	req = authRequest(http.MethodPost, "/api/files/projects")
 	w = httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 	if w.Code != http.StatusCreated {
@@ -565,7 +573,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 3. List root (should show projects directory).
-	req = httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req = authRequest(http.MethodGet, "/api/files")
 	w = httptest.NewRecorder()
 	fh.HandleListRoot(w, req)
 	json.NewDecoder(w.Body).Decode(&entries)
@@ -574,7 +582,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 4. Create a subdirectory inside projects.
-	req = httptest.NewRequest(http.MethodPost, "/api/files/projects/my-app", nil)
+	req = authRequest(http.MethodPost, "/api/files/projects/my-app")
 	w = httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 	if w.Code != http.StatusCreated {
@@ -582,7 +590,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 5. List projects (should show my-app).
-	req = httptest.NewRequest(http.MethodGet, "/api/files/projects", nil)
+	req = authRequest(http.MethodGet, "/api/files/projects")
 	w = httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 	json.NewDecoder(w.Body).Decode(&entries)
@@ -591,7 +599,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 6. Delete the subdirectory.
-	req = httptest.NewRequest(http.MethodDelete, "/api/files/projects/my-app", nil)
+	req = authRequest(http.MethodDelete, "/api/files/projects/my-app")
 	w = httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 	if w.Code != http.StatusNoContent {
@@ -599,7 +607,7 @@ func TestFileBrowserWorkflow(t *testing.T) {
 	}
 
 	// 7. Verify it's gone from the listing.
-	req = httptest.NewRequest(http.MethodGet, "/api/files/projects", nil)
+	req = authRequest(http.MethodGet, "/api/files/projects")
 	w = httptest.NewRecorder()
 	fh.HandleFileByPath(w, req)
 	json.NewDecoder(w.Body).Decode(&entries)
@@ -634,7 +642,7 @@ func TestErrorResponsesAreJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req := authRequest(tt.method, tt.path)
 			w := httptest.NewRecorder()
 			fh.HandleFileByPath(w, req)
 
@@ -663,5 +671,72 @@ func TestNewFilesHandlerDefaultRoot(t *testing.T) {
 	fh := NewFilesHandler("")
 	if fh.RootDir() == "" {
 		t.Error("expected non-empty root directory")
+	}
+}
+
+// --- Defense-in-depth auth gating ---
+
+func TestListRootRejectsUnauthenticated(t *testing.T) {
+	fh, _ := setupFileTest(t)
+
+	// Request without X-Authenticated-User header.
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	w := httptest.NewRecorder()
+	fh.HandleListRoot(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	var errResp FileErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Error != "authentication required" {
+		t.Errorf("expected error 'authentication required', got %q", errResp.Error)
+	}
+}
+
+func TestFileByPathRejectsUnauthenticated(t *testing.T) {
+	fh, root := setupFileTest(t)
+
+	// Create test data so the endpoint would succeed with auth.
+	os.WriteFile(filepath.Join(root, "test.txt"), []byte("data"), 0o644)
+
+	// Test all HTTP methods without auth header.
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodDelete}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/api/files/test.txt", nil)
+			w := httptest.NewRecorder()
+			fh.HandleFileByPath(w, req)
+
+			if w.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401 for %s without auth, got %d", method, w.Code)
+			}
+
+			var errResp FileErrorResponse
+			if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+				t.Fatalf("failed to decode error response: %v", err)
+			}
+			if errResp.Error != "authentication required" {
+				t.Errorf("expected error 'authentication required', got %q", errResp.Error)
+			}
+		})
+	}
+}
+
+func TestFileByPathRejectsEmptyAuthHeader(t *testing.T) {
+	fh, root := setupFileTest(t)
+	os.WriteFile(filepath.Join(root, "test.txt"), []byte("data"), 0o644)
+
+	// Request with empty X-Authenticated-User header.
+	req := httptest.NewRequest(http.MethodGet, "/api/files/test.txt", nil)
+	req.Header.Set("X-Authenticated-User", "")
+	w := httptest.NewRecorder()
+	fh.HandleFileByPath(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for empty auth header, got %d", w.Code)
 	}
 }

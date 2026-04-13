@@ -14,6 +14,18 @@ import (
 
 const defaultFilesRoot = "/tmp/go-choir-files"
 
+// requireAuth checks that the X-Authenticated-User header exists, providing
+// defense-in-depth auth gating at the sandbox level. The proxy validates the
+// JWT and injects this header; this check ensures direct access to the sandbox
+// without proxy authentication is denied.
+func requireAuth(r *http.Request) error {
+	user := r.Header.Get("X-Authenticated-User")
+	if user == "" {
+		return fmt.Errorf("missing authenticated user identity")
+	}
+	return nil
+}
+
 // FileEntry represents a single file or directory in a listing response.
 type FileEntry struct {
 	Name     string `json:"name"`
@@ -78,9 +90,15 @@ func (fh *FilesHandler) resolvePath(relativePath string) (string, error) {
 }
 
 // HandleListRoot handles GET /api/files — lists the root directory contents.
+// It verifies the X-Authenticated-User header as defense-in-depth auth gating
+// (the proxy validates the JWT and injects this header).
 func (fh *FilesHandler) HandleListRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeFileError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := requireAuth(r); err != nil {
+		writeFileError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	fh.listDirectory(w, fh.rootDir)
@@ -88,7 +106,14 @@ func (fh *FilesHandler) HandleListRoot(w http.ResponseWriter, r *http.Request) {
 
 // HandleFileByPath handles GET/POST/DELETE /api/files/{path} — operates on
 // a specific file or directory identified by the URL path suffix.
+// It verifies the X-Authenticated-User header as defense-in-depth auth gating.
 func (fh *FilesHandler) HandleFileByPath(w http.ResponseWriter, r *http.Request) {
+	// Verify authentication before any file operations.
+	if err := requireAuth(r); err != nil {
+		writeFileError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	// Extract the path after "/api/files/".
 	suffix := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if suffix == "" {
