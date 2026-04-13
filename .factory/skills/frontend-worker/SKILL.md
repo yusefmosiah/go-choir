@@ -1,6 +1,6 @@
 ---
 name: frontend-worker
-description: Builds the Svelte SPA, desktop UI, e-text app, and browser-facing flows
+description: Builds Svelte SPA components, responsive layouts, and browser-facing flows for go-choir desktop UX rewrite
 ---
 
 # Frontend Worker
@@ -9,87 +9,67 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use this skill for:
-- Auth UI changes (email input, error messages)
-- E-text editor integration with backend APIs
-- Desktop window management updates
-- Task runner and agent spawning UI
-- Playwright test updates for browser flows
-- Any Svelte component or JavaScript module work
+Features that involve creating or modifying Svelte components, CSS layouts, responsive design, client-side state management, or browser-facing UI flows in the go-choir frontend.
 
 ## Required Skills
 
-- **agent-browser**: REQUIRED for all frontend features. Use to verify UI flows, auth ceremonies, and end-to-end interactions. Invoke this skill during verification.
+- `agent-browser` — for manual verification of UI components and interactions. Invoke after implementing each component to verify rendering, interactions, and responsive behavior.
 
 ## Work Procedure
 
-### 1. Understand the Feature
-Read the feature description. Identify:
-- Which Svelte components need changes
-- Which API endpoints will be called
-- What Playwright tests need updates
+1. **Read context:** Read `mission.md` and `AGENTS.md` for mission boundaries and coding conventions. Read `.factory/library/architecture.md` for system design.
 
-### 2. Update Tests First (TDD)
-Update or add Playwright tests before implementation:
-- Modify existing test files in `frontend/tests/`
-- Add new test cases for the feature
-- Tests should expect the NEW behavior (will fail initially)
+2. **Write tests first (red):** Create Playwright test file(s) covering the feature's validation assertions. Tests must fail before implementation begins. Place new test files in `frontend/tests/` following the naming convention.
 
-### 3. Implement UI Changes
-Update Svelte components:
-- Modify inputs, labels, and validation
-- Update API calls in `lib/*.js` modules
-- Handle loading states and errors
-- Ensure accessibility (labels, ARIA attributes)
+3. **Implement (green):** Build the Svelte component(s) to make tests pass. Follow existing patterns:
+   - Scoped `<style>` blocks with dark theme colors
+   - `data-*` attributes for test targeting
+   - Svelte stores for state management
+   - `fetchWithRenewal` from `./lib/auth.js` for API calls
 
-### 4. Manual Verification with Dev Server
-- Start frontend: `cd frontend && pnpm dev`
-- Start backend services if needed
-- Test the flow manually in browser
-- Check browser console for errors
+4. **Responsive verification:** If the feature involves layout, use `agent-browser` with viewport emulation at three breakpoints:
+   - Desktop: 1280x800
+   - Tablet: 900x800
+   - Mobile: 375x812
 
-### 5. Run Frontend Validators
-- `cd frontend && pnpm run lint`
-- `cd frontend && pnpm run typecheck` (if available)
-- Fix any issues
+5. **Accessibility check:** Verify keyboard navigation (Tab, Enter, Escape) and ARIA labels on all interactive elements.
 
-### 6. Invoke agent-browser for End-to-End Verification
-Invoke the `agent-browser` skill:
-- Test the full user flow
-- Verify auth works (register → login → use feature)
-- Capture screenshots or evidence
-- Document any UI quirks or issues
+6. **Run validators:**
+   ```bash
+   cd frontend && pnpm build
+   cd frontend && pnpm e2e
+   ```
+
+7. **Manual verification with agent-browser:** For each user-facing interaction, take a screenshot showing the expected state. Each flow tested = one `interactiveChecks` entry.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Updated AuthEntry.svelte to use email input instead of username. Modified auth.js to send email field to backend. Updated Playwright tests to use uniqueEmail() helper. All auth flows verified working in browser.",
-  "whatWasImplemented": "Changed username input to type=email with autocomplete=email in AuthEntry.svelte. Updated handleRegister and handleLogin to use email variable. Modified auth.js registerPasskey and loginPasskey functions to send {email} instead of {username}. Updated 5 Playwright test files to use email format.",
+  "salientSummary": "Implemented DesktopIcons left rail component with 4 app icons (Files, Browser, Terminal, Settings), active indicator highlighting, and scrollable overflow. Created FloatingWindow rewrite with simplified bottom-right-only resize handle. Desktop.svelte rewritten with new layout (no top bar, left rail + bottom bar). All 8 new Playwright tests passing.",
+  "whatWasImplemented": "DesktopIcons.svelte (left rail with icon+label, active indicator, scroll), BottomBar.svelte (minimized indicators + prompt input + user info + connection status), FloatingWindow.svelte (rewrite of Window.svelte with single resize handle), Desktop.svelte rewrite (removed top bar, bootstrap accordion, runtime panel; integrated left rail + bottom bar layout). New stores in desktop-stores.js.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {"command": "cd frontend && pnpm run lint", "exitCode": 0, "observation": "No lint errors"},
-      {"command": "cd frontend && pnpm test --grep 'auth'", "exitCode": 0, "observation": "12 auth tests passed"}
+      {"command": "cd frontend && pnpm build", "exitCode": 0, "observation": "Build succeeded with no errors"},
+      {"command": "cd frontend && pnpm e2e --grep 'desktop shell'", "exitCode": 0, "observation": "8 tests passing"}
     ],
     "interactiveChecks": [
-      {
-        "action": "agent-browser: Navigate to /auth, register with email user@example.com, complete WebAuthn, verify redirect to desktop",
-        "observed": "Registration successful, email displayed in UI, session active"
-      },
-      {
-        "action": "agent-browser: Logout, re-login with same email and passkey",
-        "observed": "Login successful, user returned to desktop with previous state"
-      }
-    ]
-  },
-  "tests": {
-    "added": [
-      {"file": "frontend/tests/auth-passkey.spec.js", "cases": [
-        {"name": "email input validation", "verifies": "Email input rejects invalid formats"},
-        {"name": "registration with email", "verifies": "Full registration flow with email field"}
-      ]}
-    ]
+      {"action": "Navigate to http://localhost:4173, register passkey, verify desktop layout", "observed": "Left rail visible with 4 icons, bottom bar with prompt input, no top bar"},
+      {"action": "Click File Browser icon in left rail", "observed": "Floating window opened with Files title, active indicator on rail icon"},
+      {"action": "Click same icon again", "observed": "Existing window focused, no duplicate opened"},
+      {"action": "Minimize window, click indicator in bottom bar", "observed": "Window restored to previous geometry"}
+    ],
+    "tests": {
+      "added": [
+        {"file": "frontend/tests/desktop-shell-core.spec.js", "cases": [
+          {"name": "left rail renders with all app icons", "verifies": "VAL-SHELL-002"},
+          {"name": "clicking rail icon opens single-instance window", "verifies": "VAL-SHELL-003"},
+          {"name": "bottom bar always visible with prompt input", "verifies": "VAL-SHELL-006"},
+          {"name": "floating window drag via title bar", "verifies": "VAL-SHELL-017"}
+        ]}
+      ]
+    }
   },
   "discoveredIssues": []
 }
@@ -97,8 +77,6 @@ Invoke the `agent-browser` skill:
 
 ## When to Return to Orchestrator
 
-Return if:
-- Backend API contract is unclear or not implemented yet
-- Playwright tests fail due to infrastructure issues (not code)
-- UI design decision needed (layout, UX pattern)
-- Browser compatibility issue discovered
+- Feature requires a backend API endpoint that doesn't exist yet
+- Existing component structure prevents the required implementation
+- Data attributes from prior mission tests conflict with new component structure

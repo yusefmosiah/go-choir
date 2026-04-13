@@ -1,6 +1,6 @@
 ---
 name: go-worker
-description: Implements Go backend services, runtime, store, and APIs for go-choir
+description: Implements Go backend services, APIs, store layer, and infrastructure for go-choir
 ---
 
 # Go Worker
@@ -9,102 +9,73 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 
 ## When to Use This Skill
 
-Use this skill for:
-- Auth service fixes and email migration
-- Provider gateway integration (Fireworks, Z.AI)
-- Scheduler and work registry implementation
-- Task spawning and parent-child relationships
-- Store/DB schema changes
-- Runtime tool loop and channel updates
-- Any Go backend API or service work
+Features that involve Go backend code: new API endpoints, database schema changes, store layer extensions, WebSocket handlers, PTY management, or service configuration changes.
 
 ## Required Skills
 
-- **agent-browser** (if feature involves browser-facing flows): Use to verify auth flows, etext interactions, and task spawning UI. Invoke after implementation to test end-to-end.
+- `agent-browser` — for verifying API endpoints via curl through the proxy. Not always needed for pure backend features.
 
 ## Work Procedure
 
-### 1. Understand the Feature
-Read the feature description in features.json. Identify:
-- What files need to change (auth handlers, store, runtime, gateway, etc.)
-- What tests already exist vs what needs to be added
-- What the verification steps require
+1. **Read context:** Read `mission.md` and `AGENTS.md` for mission boundaries and coding conventions. Read `.factory/library/architecture.md` for system design. Read relevant `.factory/library/*.md` files for the specific area.
 
-### 2. Write Tests First (TDD)
-Write failing tests before implementation:
-- Add table-driven tests in `*_test.go` files
-- Test both success and error cases
-- Test edge cases (empty inputs, boundary conditions, concurrent access)
-- Tests must FAIL before implementation (red phase)
+2. **Write tests first (red):** Create Go test functions covering the feature's expected behavior. Tests must fail before implementation begins. Follow existing test patterns in `internal/`.
 
-### 3. Implement the Feature
-Implement to make tests pass:
-- Follow existing code patterns in the codebase
-- Use strong typing, proper error handling
-- Add structured logging for debugging
-- Update schemas with migrations if needed
+3. **Implement (green):** Build the Go code to make tests pass. Follow existing patterns:
+   - Store methods in `internal/store/store.go` (extend existing schema)
+   - API handlers in `cmd/sandbox/` (following existing handler patterns)
+   - Auth gating via proxy (all `/api/*` endpoints are proxied)
+   - Use `crypto/aes` and `crypto/cipher` for AES-GCM encryption (stdlib only)
 
-### 4. Manual Verification
-Run verification steps from the feature:
-- Start services: `source start-services.sh` or manual start
-- Test with curl: `curl -X POST http://localhost:8081/auth/...`
-- Check logs: `tail -f auth.log`, `tail -f sandbox.log`
-- Verify on Node B if deployment-related
+4. **Run validators:**
+   ```bash
+   go test ./... -count=1 -p 4
+   go vet ./...
+   ```
 
-### 5. Run Validators
-- `go test ./internal/auth/...` (or relevant package)
-- `go vet ./...`
-- `gofmt -l .`
+5. **API verification:** If the feature adds HTTP endpoints, verify them via curl through the proxy:
+   ```bash
+   # Example: verify new endpoint through proxy
+   curl -sf http://localhost:4173/api/files
+   ```
 
-### 6. Browser Verification (if applicable)
-If the feature has browser-facing aspects:
-- Invoke `agent-browser` skill
-- Test the full flow: registration → login → feature usage
-- Document observations in handoff
+6. **Schema migration:** If adding new database tables, ensure the schema is created in the store initialization (existing pattern: `InitDB` in `internal/store/store.go`). Do NOT use a migration framework — the existing pattern creates tables on startup.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Fixed auth re-login bug by correcting sign counter persistence in credentials table. Migrated username to email with unique constraint enforcement. Added 12 new test cases covering re-login scenarios.",
-  "whatWasImplemented": "Updated internal/auth/handlers.go to properly update sign counter after each login. Modified internal/auth/store.go to add email column with UNIQUE constraint. Updated internal/auth/webauthn_user.go to use email for display name. Changed beginRequest struct to use Email field. All registration/login flows now email-based.",
+  "salientSummary": "Implemented file browser backend with 4 CRUD endpoints (GET/POST/DELETE /api/files, GET /api/files/{path}). Added file browsing with sandbox root directory, breadcrumb navigation support, and proper auth gating. All 12 Go tests passing.",
+  "whatWasImplemented": "File handler in cmd/sandbox/files.go: HandleListFiles (GET /api/files), HandleGetFile (GET /api/files/{path}), HandleCreateDirectory (POST /api/files/{path}), HandleDeleteFile (DELETE /api/files/{path}). Store methods in internal/store/store.go for file operations. Routes registered in cmd/sandbox/main.go.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {"command": "go test ./internal/auth/... -v", "exitCode": 0, "observation": "14 tests passed including 3 new re-login tests"},
-      {"command": "curl -s http://localhost:8081/auth/register/begin -d '{\"email\":\"test@example.com\"}'", "exitCode": 0, "observation": "Returned valid WebAuthn creation options"},
-      {"command": "curl -s http://localhost:8081/auth/login/begin -d '{\"email\":\"test@example.com\"}'", "exitCode": 0, "observation": "Returned valid WebAuthn assertion options"}
+      {"command": "go test ./internal/store/... -count=1 -v -run TestFile", "exitCode": 0, "observation": "8 file store tests passing"},
+      {"command": "go test ./... -count=1 -p 4", "exitCode": 0, "observation": "All tests passing including new file tests"},
+      {"command": "go vet ./...", "exitCode": 0, "observation": "No vet warnings"}
     ],
     "interactiveChecks": [
-      {
-        "action": "Register with email test@example.com, complete WebAuthn, logout, wait 5 minutes, re-login",
-        "observed": "Re-login successful with same passkey, sign counter incremented correctly"
-      }
-    ]
-  },
-  "tests": {
-    "added": [
-      {"file": "internal/auth/handlers_test.go", "cases": [
-        {"name": "TestReLoginWithSamePasskey", "verifies": "User can re-login after logout with same credential"},
-        {"name": "TestSignCounterIncrement", "verifies": "Sign counter increments on each successful login"},
-        {"name": "TestDuplicateEmailRejected", "verifies": "Registration with duplicate email returns 409"}
-      ]}
-    ]
-  },
-  "discoveredIssues": [
-    {
-      "severity": "low",
-      "description": "Sign counter was not being updated in the credentials table after login",
-      "suggestedFix": "Added tx.Exec to update sign_count in HandleLoginFinish"
+      {"action": "curl -sf http://localhost:4173/api/files (with auth cookies)", "observed": "200 response with JSON array of files"},
+      {"action": "curl -X POST http://localhost:4173/api/files/test-folder", "observed": "201 response, folder created"},
+      {"action": "curl -sf http://localhost:4173/api/files again", "observed": "200 response includes test-folder"}
+    ],
+    "tests": {
+      "added": [
+        {"file": "internal/store/files_test.go", "cases": [
+          {"name": "TestListRootDirectory", "verifies": "File listing returns entries"},
+          {"name": "TestCreateDirectory", "verifies": "Directory creation persists"},
+          {"name": "TestDeleteFile", "verifies": "File deletion works"},
+          {"name": "TestNonexistentPathReturns404", "verifies": "Error handling for missing paths"}
+        ]}
+      ]
     }
-  ]
+  },
+  "discoveredIssues": []
 }
 ```
 
 ## When to Return to Orchestrator
 
-Return if:
-- The bug root cause is deeper than expected (e.g., WebAuthn library issue, not handler logic)
-- Feature requires schema changes that conflict with existing data requiring migration strategy
-- Provider API behaves unexpectedly (rate limits, auth failures)
-- Need user decision on design tradeoff (e.g., how to handle existing username-based users)
+- Feature requires frontend components that don't exist yet
+- Database schema change would break existing functionality
+- External dependency needed that isn't in go.mod
