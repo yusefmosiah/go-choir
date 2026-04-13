@@ -1,27 +1,16 @@
 <!--
   Desktop — ChoirOS desktop shell with left rail, floating windows, and bottom bar.
 
-  Replaces the previous top-bar + launcher paradigm. Layout:
-    - Left rail (DesktopIcons): vertical stack of app icons
-    - Center: floating window container
-    - Bottom bar (BottomBar): prompt input, minimized indicators, user info
-
-  Preserves from previous Desktop:
-    - Bootstrap data fetch (for session renewal compatibility)
-    - Live channel WebSocket connection
-    - Logout control
-    - authexpired fallback
-    - Desktop state persistence (GET/PUT /api/desktop/state)
-
-  Removes:
-    - Top bar (data-desktop-bar)
-    - Launcher dropdown
-    - Bootstrap accordion display
-    - Runtime panel / TaskRunner display
+  Responsive layout across three breakpoints:
+    - Desktop (>1024px): full left rail (~180px) with labels, floating draggable windows
+    - Tablet (768-1024px): icon-only left rail (~56px), floating windows with max-width
+    - Mobile (<768px): left rail hidden, hamburger opens slide-out overlay,
+      single focus window mode (one window at a time, full width, non-draggable)
 
   Data attributes for test targeting:
     data-desktop             — root desktop container
     data-desktop-windows     — window container area
+    data-rail-backdrop       — mobile overlay backdrop
     data-shell               — backward compat with existing tests
 -->
 <script>
@@ -47,6 +36,9 @@
     moveWindow,
     resizeWindow,
     setWindows,
+    hideWindow,
+    showWindow,
+    visibleWindows,
   } from './stores/desktop.js';
 
   export let currentUser = null;
@@ -72,8 +64,15 @@
   let saveTimer = null;
   const SAVE_DEBOUNCE_MS = 500;
 
-  // ---- Mobile hamburger state ----
+  // ---- Responsive state ----
+  let isMobile = false;
   let hamburgerOpen = false;
+
+  function updateViewport() {
+    isMobile = window.innerWidth < 768;
+    // Close hamburger if resizing to desktop/tablet
+    if (!isMobile) hamburgerOpen = false;
+  }
 
   // ---- Desktop state persistence ----
 
@@ -132,16 +131,18 @@
       activeWindowId.subscribe((id) => { currentActiveId = id; })();
 
       const state = {
-        windows: currentWindows.map((w) => ({
-          window_id: w.windowId,
-          app_id: w.appId,
-          title: w.title,
-          geometry: { x: w.x, y: w.y, width: w.width, height: w.height },
-          restored_geometry: w.restoredGeometry,
-          mode: w.mode,
-          z_index: w.zIndex,
-          app_context: w.appContext,
-        })),
+        windows: currentWindows
+          .filter((w) => w.mode !== 'hidden')
+          .map((w) => ({
+            window_id: w.windowId,
+            app_id: w.appId,
+            title: w.title,
+            geometry: { x: w.x, y: w.y, width: w.width, height: w.height },
+            restored_geometry: w.restoredGeometry,
+            mode: w.mode,
+            z_index: w.zIndex,
+            app_context: w.appContext,
+          })),
         active_window_id: currentActiveId || '',
       };
       await saveDesktopState(state);
@@ -256,12 +257,51 @@
   // ---- Event handlers ----
 
   function handleLaunchApp(event) {
-    openApp(event.detail.appId, event.detail.appName, event.detail.icon);
+    if (isMobile) {
+      // Mobile single-focus mode: hide all other visible windows first
+      let currentWins;
+      windows.subscribe((w) => { currentWins = w; })();
+      const existing = currentWins.find(
+        (w) => w.appId === event.detail.appId && w.mode !== 'closed' && w.mode !== 'hidden'
+      );
+      if (existing) {
+        if (existing.mode === 'hidden') {
+          // Show the hidden window, hide any other visible ones
+          currentWins.forEach((w) => {
+            if (w.windowId !== existing.windowId && w.mode !== 'closed' && w.mode !== 'hidden') {
+              hideWindow(w.windowId);
+            }
+          });
+          showWindow(existing.windowId);
+        } else {
+          // Already visible, just focus it
+          focusWindow(existing.windowId);
+        }
+      } else {
+        // Hide all visible windows, then open the new one
+        currentWins.forEach((w) => {
+          if (w.mode !== 'closed' && w.mode !== 'hidden') hideWindow(w.windowId);
+        });
+        openApp(event.detail.appId, event.detail.appName, event.detail.icon);
+      }
+    } else {
+      openApp(event.detail.appId, event.detail.appName, event.detail.icon);
+    }
     hamburgerOpen = false;
   }
 
   function handleWindowClose(event) {
-    closeWindow(event.detail.windowId);
+    if (isMobile) {
+      // On mobile, closing the last visible window returns to empty desktop
+      // Also close any hidden windows to clean up state
+      let currentWins;
+      windows.subscribe((w) => { currentWins = w; })();
+      currentWins.forEach((w) => {
+        if (w.mode !== 'closed') closeWindow(w.windowId);
+      });
+    } else {
+      closeWindow(event.detail.windowId);
+    }
     scheduleSave();
   }
 
@@ -271,7 +311,12 @@
   }
 
   function handleWindowMinimize(event) {
-    minimizeWindow(event.detail.windowId);
+    if (isMobile) {
+      // On mobile, minimizing closes the window (returns to empty desktop)
+      closeWindow(event.detail.windowId);
+    } else {
+      minimizeWindow(event.detail.windowId);
+    }
     scheduleSave();
   }
 
@@ -286,11 +331,13 @@
   }
 
   function handleWindowMove(event) {
+    if (isMobile) return; // No moving on mobile
     moveWindow(event.detail.windowId, event.detail.x, event.detail.y);
     scheduleSave();
   }
 
   function handleWindowResize(event) {
+    if (isMobile) return; // No resizing on mobile
     resizeWindow(
       event.detail.windowId,
       event.detail.x,
@@ -318,9 +365,16 @@
     hamburgerOpen = !hamburgerOpen;
   }
 
+  function handleBackdropClick() {
+    hamburgerOpen = false;
+  }
+
   // ---- Lifecycle ----
 
   onMount(() => {
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+
     fetchBootstrap();
     connectLiveChannel();
     loadDesktopState();
@@ -335,6 +389,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('resize', updateViewport);
     wsClosedByLogout = true;
     if (ws) {
       ws.close();
@@ -347,15 +402,22 @@
 </script>
 
 <div class="desktop" data-desktop data-shell>
-  <!-- Left rail -->
-  <DesktopIcons on:launchapp={handleLaunchApp} />
+  <!-- Backdrop for mobile slide-out overlay -->
+  {#if hamburgerOpen && isMobile}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div class="rail-backdrop" data-rail-backdrop role="presentation" on:click={handleBackdropClick}></div>
+  {/if}
 
-  <!-- Window container area (shifted right by rail width) -->
+  <!-- Left rail -->
+  <DesktopIcons {hamburgerOpen} on:launchapp={handleLaunchApp} />
+
+  <!-- Window container area -->
   <!-- Hidden until desktop state loads to prevent flash of empty desktop (VAL-SHELL-022) -->
   <div class="desktop-area {stateLoaded ? 'state-loaded' : 'state-loading'}" data-desktop-windows>
     {#if stateLoaded}
       {#each $windows as win (win.windowId)}
-        {#if win.mode !== 'closed'}
+        {#if win.mode !== 'closed' && win.mode !== 'hidden'}
           <FloatingWindow
             windowId={win.windowId}
             appId={win.appId}
@@ -368,6 +430,7 @@
             zIndex={win.zIndex}
             active={win.windowId === $activeWindowId}
             restoredGeometry={win.restoredGeometry}
+            isMobile={isMobile}
             on:close={handleWindowClose}
             on:focus={handleWindowFocus}
             on:minimize={handleWindowMinimize}
@@ -412,12 +475,24 @@
     overflow: hidden;
   }
 
+  /* Backdrop for mobile slide-out overlay */
+  .rail-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 190; /* Below the rail overlay (200) so rail items remain clickable */
+    cursor: pointer;
+  }
+
   /* Desktop area (window container) — offset for left rail */
   .desktop-area {
     flex: 1;
     position: relative;
     overflow: hidden;
-    margin-left: 80px; /* width of left rail */
+    margin-left: 180px; /* desktop: width of left rail */
     height: calc(100vh - 56px); /* subtract bottom bar height */
   }
 
@@ -455,14 +530,14 @@
     color: #c0c0d0;
   }
 
-  /* Responsive: Tablet — narrower rail */
+  /* Responsive: Tablet (768-1024px) — narrower rail */
   @media (max-width: 1024px) {
     .desktop-area {
       margin-left: 56px;
     }
   }
 
-  /* Responsive: Mobile — no rail, full width */
+  /* Responsive: Mobile (<768px) — no rail offset, full width */
   @media (max-width: 768px) {
     .desktop-area {
       margin-left: 0;

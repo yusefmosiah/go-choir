@@ -66,16 +66,15 @@
 <div class="bottom-bar" data-bottom-bar>
   <!-- Left section: minimized windows + user info -->
   <div class="bar-left">
-    <!-- Hamburger button (mobile only) -->
-    {#if typeof window !== 'undefined' && window.innerWidth < 768}
-      <button
-        class="hamburger-btn"
-        on:click={() => dispatch('togglehamburger')}
-        aria-label="Open navigation menu"
-      >
-        <span class="hamburger-icon">☰</span>
-      </button>
-    {/if}
+    <!-- Hamburger button (mobile only — always in DOM for CSS to control) -->
+    <button
+      class="hamburger-btn"
+      data-hamburger-btn
+      on:click={() => dispatch('togglehamburger')}
+      aria-label="Open navigation menu"
+    >
+      <span class="hamburger-icon">☰</span>
+    </button>
 
     <!-- Minimized window indicators -->
     <div class="minimized-indicators">
@@ -171,7 +170,7 @@
   }
 
   .hamburger-btn {
-    display: none;
+    display: none; /* hidden by default, shown on mobile via media query */
     width: 36px;
     height: 36px;
     align-items: center;
@@ -182,6 +181,12 @@
     cursor: pointer;
     color: #c0c0d0;
     font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .hamburger-btn:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
   }
 
   .minimized-indicators {

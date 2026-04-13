@@ -55,9 +55,9 @@ export const minimizedWindows = derived(windows, ($windows) =>
   $windows.filter((w) => w.mode === 'minimized')
 );
 
-/** Visible (non-closed, non-minimized) windows */
+/** Visible (non-closed, non-minimized, non-hidden) windows */
 export const visibleWindows = derived(windows, ($windows) =>
-  $windows.filter((w) => w.mode !== 'closed' && w.mode !== 'minimized')
+  $windows.filter((w) => w.mode !== 'closed' && w.mode !== 'minimized' && w.mode !== 'hidden')
 );
 
 // ---- Store actions ----
@@ -229,6 +229,41 @@ export function resizeWindow(windowId, x, y, width, height) {
   windows.update(($windows) =>
     $windows.map((w) => (w.windowId === windowId ? { ...w, x, y, width, height } : w))
   );
+}
+
+/** Hide a window (used for mobile single-focus mode — keeps window in state but hides it visually) */
+export function hideWindow(windowId) {
+  windows.update(($windows) => {
+    const updated = $windows.map((w) =>
+      w.windowId === windowId
+        ? { ...w, mode: 'hidden', _prevMode: w.mode === 'hidden' ? (w._prevMode || 'normal') : w.mode }
+        : w
+    );
+    // Transfer active to next visible window
+    const visible = updated.filter((w) => w.mode !== 'closed' && w.mode !== 'hidden');
+    activeWindowId.update(($activeId) => {
+      if ($activeId === windowId) {
+        if (visible.length > 0) {
+          return visible.reduce((a, b) => (a.zIndex > b.zIndex ? a : b)).windowId;
+        }
+        return '';
+      }
+      return $activeId;
+    });
+    return updated;
+  });
+}
+
+/** Show a previously hidden window (mobile single-focus mode) */
+export function showWindow(windowId) {
+  windows.update(($windows) =>
+    $windows.map((w) =>
+      w.windowId === windowId
+        ? { ...w, mode: w._prevMode || 'normal', _prevMode: null }
+        : w
+    )
+  );
+  activeWindowId.set(windowId);
 }
 
 /** Set windows state (used for loading from server) */

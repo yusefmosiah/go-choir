@@ -40,6 +40,7 @@
   export let zIndex = 1;
   export let active = false;
   export let restoredGeometry = null;
+  export let isMobile = false;
 
   // Suppress unused-export warnings — props used by parent for persistence
   $: _appId = appId;
@@ -95,6 +96,7 @@
     if (event.button !== 0) return;
     if (event.target.closest('button')) return;
     if (mode === 'maximized') return;
+    if (isMobile) return;
 
     dragging = true;
     dragOffsetX = event.clientX - x;
@@ -170,16 +172,21 @@
     ? 'left:0; top:0; width:100%; height:calc(100%);'
     : mode === 'minimized'
     ? 'display:none;'
+    : isMobile
+    ? 'left:0; top:0; width:100%; height:calc(100%);'
     : `left:${x}px; top:${y}px; width:${width}px; height:${height}px;`;
 
   $: maxRestoreIcon = mode === 'maximized' ? '❐' : '☐';
   $: maxRestoreTitle = mode === 'maximized' ? 'Restore' : 'Maximize';
+
+  // Only show resize handle in normal mode AND not on mobile
+  $: showResizeHandle = mode === 'normal' && !isMobile;
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
-  class="window {active ? 'window-active' : ''}"
+  class="window {active ? 'window-active' : ''} {isMobile ? 'window-mobile' : ''}"
   style="{windowStyle} z-index: {zIndex};"
   data-window
   data-window-id={windowId}
@@ -222,8 +229,8 @@
     <slot />
   </div>
 
-  <!-- Resize handle: bottom-right corner only (normal mode) -->
-  {#if mode === 'normal'}
+  <!-- Resize handle: bottom-right corner only (normal mode, not mobile) -->
+  {#if showResizeHandle}
     <div
       class="resize-handle resize-se"
       data-resize-handle
@@ -338,5 +345,48 @@
     height: 8px;
     border-right: 2px solid rgba(255, 255, 255, 0.2);
     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* Mobile: window is full-width, no drag, no resize, no border-radius */
+  :global(.window-mobile) {
+    border-radius: 0 !important;
+    width: 100% !important;
+    left: 0 !important;
+    top: 0 !important;
+  }
+
+  :global(.window-mobile .titlebar) {
+    cursor: default;
+  }
+
+  /* Tablet: max-width constraint so windows don't exceed viewport */
+  @media (max-width: 1024px) and (min-width: 769px) {
+    .window {
+      max-width: calc(100vw - 56px - 20px);
+    }
+  }
+
+  /* Mobile: full-width window styling via CSS media query (backup for JS class) */
+  @media (max-width: 768px) {
+    .window {
+      max-width: 100vw;
+      width: 100% !important;
+      left: 0 !important;
+      top: 0 !important;
+      border-radius: 0;
+      box-shadow: none;
+      border: none;
+      border-top: 1px solid #2a2a3a;
+    }
+
+    .window-active {
+      border-color: transparent;
+      box-shadow: none;
+      border-top: 1px solid #3b82f6;
+    }
+
+    .window .titlebar {
+      cursor: default;
+    }
   }
 </style>
