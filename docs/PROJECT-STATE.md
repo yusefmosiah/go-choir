@@ -1,7 +1,7 @@
 # go-choir Project State
 
-**Last Updated:** 2026-04-12  
-**Current Mission:** 4 Complete → Starting Mission 5
+**Last Updated:** 2026-04-13  
+**Current Mission:** 6 Partially Complete → Cogent for remaining work
 
 ---
 
@@ -85,6 +85,30 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 6. ✅ **All tests passing** - 127+ tests across 13 packages
 
 **Deployed to Node B:** Code is live but needs verification (see Mission 5)
+
+### Mission 6: Desktop UX Rewrite ⚠️ PARTIALLY COMPLETE
+**Status:** 8/13 features completed, 233 Playwright tests passing, all Go tests passing
+
+**Design pivot mid-mission:** Left rail → floating desktop icons (traditional OS UX)
+
+**Delivered (8 features):**
+1. ✅ **Floating desktop icons** - Draggable app icons with position persistence, Show Desktop button
+2. ✅ **Bottom bar** - Prompt input, minimized window indicators, user info, connection status
+3. ✅ **Floating windows** - Bottom-right resize, cascade positioning, z-index management, minimize/maximize
+4. ✅ **Responsive layout** - 3 breakpoints (desktop/tablet/mobile), single-focus mobile mode
+5. ✅ **File browser** - Backend CRUD API (`/api/files`), path traversal protection, frontend component
+6. ✅ **Browser app** - iframe-based with URL bar, back/forward/reload, error handling
+7. ✅ **Terminal backend** - PTY WebSocket (`/api/terminal/ws`), auth gating, session management
+8. ✅ **Terminal frontend** - ghostty-web WASM with dark theme, FitAddon, 10000-line scrollback
+
+**Not completed (3 features):**
+1. ❌ **Settings backend** - Worker spawn crashes prevented implementation (runtime LLM provider CRUD)
+2. ❌ **Settings frontend** - Depends on settings backend
+3. ❌ **Cross-area integration** - Deploy-readiness tests, cross-area flows
+
+**Blocker:** settings-backend worker crashed repeatedly (10+ spawn attempts, exit code 0). User decided to switch to cogent for remaining work.
+
+**Committed:** 9c66be3, e9594c3, 50b84e8
 
 ---
 
@@ -176,27 +200,55 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 ## Current Issues & Blockers
 
 ### Production (Node B)
-1. **Auth database schema** - Old `username` column may still exist; migration should fix but needs verification
-2. **Provider credentials** - Fireworks/Z.AI keys not deployed; LLM calls fail
+1. ✅ **Auth database schema** - Resolved in Mission 4
+2. ✅ **Provider credentials** - Configured in Mission 5
+3. **Terminal integration** - ghostty-web loaded but full PTY lifecycle needs verification on Node B
 
-### Codebase
-1. **UX is wrong** - Current implementation has:
-   - Top bar with apps (should be desktop icons)
-   - E-text has research button + sidebar (should be simple editor)
-   - Missing prompt bar at bottom (conductor)
-   - Not responsive for mobile
+### Codebase (Mission 6 addressed most issues)
+1. ✅ **Top bar → floating icons** - Resolved (floating desktop icons, draggable, position persistence)
+2. ✅ **Missing bottom bar** - Resolved (prompt input, window indicators, user info)
+3. ✅ **Not responsive** - Resolved (3 breakpoints, mobile single-focus mode)
+4. ❌ **Settings app** - Not implemented (blocked by worker spawn issues)
+5. ❌ **E-text UX** - Not addressed (Mission 7 scope)
 
 ### Testing
-- ✅ Unit tests pass
-- ✅ Playwright tests pass (virtual authenticator for WebAuthn)
+- ✅ Unit tests pass (all Go packages)
+- ✅ Playwright tests pass (233 tests)
+- ⚠️ Settings app validation deferred to cogent
 - ⚠️ Production WebAuthn requires manual testing (can't automate biometric auth)
 
 ---
 
 ## Next Missions
 
-### Mission 5: Production Hardening (IN PROGRESS)
-**Goal:** Fix Node B deployment, add provider credentials, verify end-to-end flow
+### Mission 5: Production Hardening (COMPLETED)
+**Status:** Verified auth, gateway, proxy operational. Provider credentials configured.
+
+### Mission 6: Desktop UX Rewrite (PARTIALLY COMPLETE)
+**Delivered:** 8/13 features (see Mission History above)
+**Remaining for Cogent:**
+- Settings backend (runtime LLM provider CRUD, encrypted API keys)
+- Settings frontend (provider management UI)
+- Cross-area integration (deploy-readiness tests)
+
+### Mission 7: E-Text + Choir-in-Choir (NEXT)
+**Goal:** Realize full vision - single editor UX + background app building
+
+**E-Text Vision:**
+- Single responsive text editor, no sidebars
+- User prompt = Version 0
+- Agent creates Version 1, spawns workers
+- Workers message back, agent creates subsequent versions
+- Users "reprompt" by editing text inline anywhere
+
+**Choir-in-Choir:**
+- Fork microVM to build new apps in background
+- Stream progress/artifacts to etext
+- Switch to new app when ready
+
+**Reference:** `~/choiros-rs/docs/archive/DESKTOP_ARCHITECTURE_DESIGN.md`
+
+### Mission 5 (revisit): Production Hardening (if needed)
 
 **Doc:** `docs/mission-5-production-hardening-and-polish.md`
 
