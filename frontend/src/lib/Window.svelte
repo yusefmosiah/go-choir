@@ -222,18 +222,21 @@
         data-window-minimize
         on:click|stopPropagation={handleMinimize}
         title="Minimize"
+        aria-label="Minimize"
       >—</button>
       <button
         class="ctrl-btn maximize-btn"
         data-window-maximize
         on:click|stopPropagation={handleMaximizeRestore}
         title={maxRestoreTitle}
+        aria-label={maxRestoreTitle}
       >{maxRestoreIcon}</button>
       <button
         class="ctrl-btn close-btn"
         data-window-close
         on:click|stopPropagation={handleClose}
         title="Close"
+        aria-label="Close"
       >✕</button>
     </div>
   </div>

@@ -116,18 +116,18 @@ test('authenticated shell calls GET /api/shell/bootstrap on mount', async ({
 });
 
 // ---------------------------------------------------------------
-// Test: shell shows bootstrap data section
+// Test: shell no longer shows bootstrap data section (VAL-SHELL-024)
 // ---------------------------------------------------------------
-test('authenticated shell shows bootstrap data section', async ({
+test('authenticated shell does not show bootstrap data section', async ({
   page,
   authenticator,
 }) => {
   const email = uniqueEmail();
   await registerAndReloadShell(page, authenticator, email);
 
-  // The bootstrap section should be visible.
+  // The bootstrap section should NOT be visible (removed in M6 rewrite).
   const bootstrapSection = page.locator('[data-shell-bootstrap]');
-  await expect(bootstrapSection).toBeVisible();
+  await expect(bootstrapSection).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------
