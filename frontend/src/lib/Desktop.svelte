@@ -23,6 +23,7 @@
   import BottomBar from './BottomBar.svelte';
   import FloatingWindow from './FloatingWindow.svelte';
   import ETextEditor from './ETextEditor.svelte';
+  import FileBrowser from './FileBrowser.svelte';
   import {
     windows,
     activeWindowId,
@@ -439,7 +440,11 @@
             on:move={handleWindowMove}
             on:resize={handleWindowResize}
           >
-            {#if win.appId === 'etext'}
+            {#if win.appId === 'files'}
+              <div class="app-content files-content" data-files-app>
+                <FileBrowser on:authexpired={() => dispatch('authexpired')} />
+              </div>
+            {:else if win.appId === 'etext'}
               <div class="app-content etext-content" data-etext-app>
                 <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
               </div>

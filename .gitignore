@@ -1,6 +1,8 @@
 # Binaries
 /bin/
 *.exe
+/proxy
+/sandbox
 
 # Build
 /dist/
