@@ -24,6 +24,11 @@ func main() {
 	h := sandbox.NewHandler(cfg.SandboxID)
 	sandbox.RegisterRoutes(s, h)
 
+	// Initialize the file browser handler with sandbox files root.
+	filesRoot := os.Getenv("SANDBOX_FILES_ROOT")
+	fileHandler := sandbox.NewFilesHandler(filesRoot)
+	sandbox.RegisterFileRoutes(s, fileHandler)
+
 	// Initialize the runtime engine with persisted state.
 	rtCfg := runtime.Config{
 		SandboxID:           cfg.SandboxID,
