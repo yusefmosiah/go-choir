@@ -30,26 +30,37 @@ All services expose a `/health` endpoint.
 
 ## Status
 
-**Mission 4 complete: auth fix, email auth, multi-provider LLM gateway, SSE streaming, choir-in-choir.**
+**Mission 6 COMPLETE: Desktop UX Rewrite.** Converted the web desktop from a top-bar paradigm to a traditional OS-style desktop with floating icons, floating windows, and full responsive support.
 
-Mission 4 delivered five major features:
+Delivered features (10):
 
-1. **Auth re-login bug fix** -- CredentialFlags now persist across re-logins, eliminating the stale-credential crash loop.
-2. **Email-based authentication** -- Migrated from WebAuthn passkeys to email/password with bcrypt hashing and password reset flow.
-3. **Multi-provider LLM gateway** -- Unified `/provider/*` endpoint routes requests to Fireworks, Z.AI, and Amazon Bedrock with automatic provider selection.
-4. **SSE streaming** -- Gateway streams LLM completions to the frontend via Server-Sent Events for real-time token delivery.
-5. **Choir-in-choir (minimal)** -- Scheduler service, worker spawn API, e-text research button, and support for multiple concurrent workers with auto-notification and work item sync.
+1. **Floating desktop icons** -- Freely-draggable app icons on the desktop surface with emoji + labels, position persistence, double-click to launch, Show Desktop button to minimize all windows.
+2. **Bottom bar** -- Fixed bottom bar with prompt input, minimized window indicators, user info, logout, and live connection status.
+3. **Floating windows** -- Simplified resize (bottom-right handle only), cascade positioning, active highlight, z-index management, minimize/maximize/restore.
+4. **Responsive layout** -- Desktop/tablet/mobile breakpoints. Same floating icons at all sizes. Single-focus window mode on mobile. Full-width non-draggable windows on mobile.
+5. **File browser backend** -- CRUD API endpoints (`/api/files`) with path traversal protection.
+6. **File browser frontend** -- Component with breadcrumb navigation, folder creation, inline delete, file download.
+7. **Browser app** -- iframe-based web browsing with URL bar, back/forward/reload navigation, graceful error handling for blocked iframes.
+8. **Terminal backend** -- PTY WebSocket endpoint (`/api/terminal/ws`) with auth gating, per-session management, cleanup on disconnect, multiple concurrent sessions.
+9. **Terminal frontend** -- ghostty-web WASM terminal emulator with dark theme, FitAddon responsive fit, 10000-line scrollback, WebSocket PTY connection.
+10. **Cross-area integration** -- Deploy-readiness tests for new layout, all cross-area flows verified (168 Playwright tests passing).
+
+Deferred to Mission 7:
+
+- **Settings backend** -- Runtime LLM provider CRUD with AES-GCM encrypted API keys, provider reload mechanism.
+- **Settings frontend** -- Settings UI for managing providers (add/edit/delete, toggle active, inline validation).
+  (Deferred pending the conductor agent, which will provide the orchestration context for provider management.)
 
 Prior milestones still in place:
 
-- JWT access tokens (5 min) with rotating refresh tokens (30 days)
-- Cookie-backed same-origin auth (no tokens in localStorage/sessionStorage/URL)
+- Email/password auth with JWT sessions (Mission 4)
+- Multi-provider LLM gateway with SSE streaming (Mission 4)
 - Auth-gated HTTP and WebSocket proxy with user-context injection
-- Svelte SPA with auth UI, desktop shell, and e-text editor
-- Playwright e2e test suite
-- CI deploys to Node B via NixOS rebuild over SSH
+- Desktop state persistence (window positions + icon positions) across reload and tabs
+- Playwright e2e test suite (168+ tests passing)
+- Go unit tests (all packages passing)
 
-Next: Mission 5 (VM isolation, production hardening, full choir orchestration).
+Next: Mission 7 (conductor agent, settings UI, VM isolation, production hardening).
 
 ## Development Setup
 

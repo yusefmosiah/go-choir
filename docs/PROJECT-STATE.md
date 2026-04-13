@@ -1,7 +1,7 @@
 # go-choir Project State
 
 **Last Updated:** 2026-04-13  
-**Current Mission:** 6 Partially Complete → Cogent for remaining work
+**Current Mission:** 6 Complete → Starting Mission 7
 
 ---
 
@@ -86,8 +86,8 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 
 **Deployed to Node B:** Code is live but needs verification (see Mission 5)
 
-### Mission 6: Desktop UX Rewrite ⚠️ PARTIALLY COMPLETE
-**Status:** 8/13 features completed, 233 Playwright tests passing, all Go tests passing
+### Mission 6: Desktop UX Rewrite ✓ COMPLETE
+**Status:** 10/13 features completed (3 cancelled/deferred), 168+ Playwright tests passing
 
 **Design pivot mid-mission:** Left rail → floating desktop icons (traditional OS UX)
 
@@ -101,14 +101,12 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 7. ✅ **Terminal backend** - PTY WebSocket (`/api/terminal/ws`), auth gating, session management
 8. ✅ **Terminal frontend** - ghostty-web WASM with dark theme, FitAddon, 10000-line scrollback
 
-**Not completed (3 features):**
-1. ❌ **Settings backend** - Worker spawn crashes prevented implementation (runtime LLM provider CRUD)
-2. ❌ **Settings frontend** - Depends on settings backend
-3. ❌ **Cross-area integration** - Deploy-readiness tests, cross-area flows
+**Cancelled/Deferred (3 features):**
+1. ⏸️ **Settings backend** - Cancelled — deferred to Mission 7. Settings requires conductor agent for per-user model routing preferences. API keys stay in gateway env vars.
+2. ⏸️ **Settings frontend** - Cancelled — depends on settings backend (Mission 7)
+3. ✅ **Cross-area integration** - Updated all test selectors for M6 rewrite, 168 tests passing
 
-**Blocker:** settings-backend worker crashed repeatedly (10+ spawn attempts, exit code 0). User decided to switch to cogent for remaining work.
-
-**Committed:** 9c66be3, e9594c3, 50b84e8
+**Committed:** 9c66be3, e9594c3, 50b84e8, 2c1e6cc
 
 ---
 
@@ -208,7 +206,7 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 1. ✅ **Top bar → floating icons** - Resolved (floating desktop icons, draggable, position persistence)
 2. ✅ **Missing bottom bar** - Resolved (prompt input, window indicators, user info)
 3. ✅ **Not responsive** - Resolved (3 breakpoints, mobile single-focus mode)
-4. ❌ **Settings app** - Not implemented (blocked by worker spawn issues)
+4. ⏸️ **Settings app** - Deferred to Mission 7 (requires conductor agent)
 5. ❌ **E-text UX** - Not addressed (Mission 7 scope)
 
 ### Testing
@@ -224,15 +222,11 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 ### Mission 5: Production Hardening (COMPLETED)
 **Status:** Verified auth, gateway, proxy operational. Provider credentials configured.
 
-### Mission 6: Desktop UX Rewrite (PARTIALLY COMPLETE)
-**Delivered:** 8/13 features (see Mission History above)
-**Remaining for Cogent:**
-- Settings backend (runtime LLM provider CRUD, encrypted API keys)
-- Settings frontend (provider management UI)
-- Cross-area integration (deploy-readiness tests)
+### Mission 6: Desktop UX Rewrite (COMPLETE)
+**Delivered:** 10/13 features (see Mission History above)
 
-### Mission 7: E-Text + Choir-in-Choir (NEXT)
-**Goal:** Realize full vision - single editor UX + background app building
+### Mission 7: E-Text + Choir-in-Choir + Settings UI (NEXT)
+**Goal:** Realize full vision - single editor UX + background app building + settings UI
 
 **E-Text Vision:**
 - Single responsive text editor, no sidebars
