@@ -315,6 +315,9 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/ws":
 		h.HandleWS(w, r)
 		return
+	case path == "/api/terminal/ws":
+		h.HandleTerminalWS(w, r)
+		return
 	case path == "/api/agent/task" || path == "/api/agent/status" || path == "/api/events":
 		// Runtime API routes: auth-gated at the proxy level and forwarded
 		// to the sandbox with the authenticated user context injected.
@@ -445,6 +448,88 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 // nolint:unused
 func (h *Handler) sandboxWSURL() string {
 	return sandboxWSURLForBase(h.sandboxURL.String())
+}
+
+// HandleTerminalWS handles GET /api/terminal/ws. It validates the access JWT
+// cookie, denies requests with missing or invalid auth without upgrading, and
+// relays WebSocket frames bidirectionally between the client and the sandbox
+// terminal PTY endpoint. This allows the browser to connect to the sandbox's
+// PTY shell sessions through the auth-gated proxy (VAL-TERM-004, VAL-TERM-014).
+func (h *Handler) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
+	// Step 1: Validate auth BEFORE upgrading.
+	authResult, err := h.validateAccessJWT(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	// Step 2: Resolve the sandbox URL for this user.
+	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID)
+	if err != nil {
+		log.Printf("proxy terminal WS: failed to resolve sandbox for user %s: %v", authResult.UserID, err)
+		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to resolve user sandbox"})
+		return
+	}
+
+	// Step 3: Upgrade the client connection to WebSocket.
+	clientConn, err := h.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer func() { _ = clientConn.Close() }()
+
+	// Step 4: Dial the sandbox terminal WebSocket endpoint.
+	terminalWSURL := h.terminalWSURLForTarget(sandboxURL)
+	sandboxHeader := http.Header{}
+	sandboxHeader.Set("X-Authenticated-User", authResult.UserID)
+
+	sandboxConn, _, err := h.dialer.Dial(terminalWSURL, sandboxHeader)
+	if err != nil {
+		log.Printf("proxy terminal WS: dial sandbox %s: %v", terminalWSURL, err)
+		_ = clientConn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "upstream unavailable"))
+		return
+	}
+	defer func() { _ = sandboxConn.Close() }()
+
+	// Step 5: Relay frames bidirectionally until either side closes or errors.
+	relayDone := make(chan struct{}, 2)
+
+	go func() {
+		defer func() { relayDone <- struct{}{} }()
+		h.relayFrames(clientConn, sandboxConn, "client->terminal")
+	}()
+
+	go func() {
+		defer func() { relayDone <- struct{}{} }()
+		h.relayFrames(sandboxConn, clientConn, "terminal->client")
+	}()
+
+	<-relayDone
+
+	_ = clientConn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	_ = sandboxConn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+
+	<-relayDone
+}
+
+// terminalWSURLForTarget derives the terminal WebSocket URL for a specific
+// sandbox target URL.
+func (h *Handler) terminalWSURLForTarget(targetURL string) string {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return "ws://127.0.0.1:8085/api/terminal/ws"
+	}
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+	u.Path = "/api/terminal/ws"
+	return u.String()
 }
 
 // sandboxWSURLForTarget derives the WebSocket URL for a specific sandbox URL.

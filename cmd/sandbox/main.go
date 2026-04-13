@@ -29,6 +29,10 @@ func main() {
 	fileHandler := sandbox.NewFilesHandler(filesRoot)
 	sandbox.RegisterFileRoutes(s, fileHandler)
 
+	// Initialize the terminal PTY WebSocket handler.
+	terminalHandler := sandbox.NewTerminalHandler()
+	sandbox.RegisterTerminalRoutes(s, terminalHandler)
+
 	// Initialize the runtime engine with persisted state.
 	rtCfg := runtime.Config{
 		SandboxID:           cfg.SandboxID,
