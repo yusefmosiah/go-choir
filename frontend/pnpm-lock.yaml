@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      ghostty-web:
+        specifier: ^0.4.0
+        version: 0.4.0
     devDependencies:
       '@playwright/test':
         specifier: ^1.59.1
@@ -377,6 +381,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  ghostty-web@0.4.0:
+    resolution: {integrity: sha512-0puDBik2qapbD/QQBW9o5ZHfXnZBqZWx/ctBiVtKZ6ZLds4NYb+wZuw1cRLXZk9zYovIQ908z3rvFhexAvc5Hg==}
+
   is-reference@3.0.3:
     resolution: {integrity: sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw==}
 
@@ -733,6 +740,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  ghostty-web@0.4.0: {}
 
   is-reference@3.0.3:
     dependencies:

@@ -29,6 +29,7 @@
   import ETextEditor from './ETextEditor.svelte';
   import FileBrowser from './FileBrowser.svelte';
   import BrowserApp from './BrowserApp.svelte';
+  import TerminalApp from './TerminalApp.svelte';
   import {
     windows,
     activeWindowId,
@@ -458,6 +459,10 @@
               <div class="app-content browser-content" data-browser-app-container>
                 <BrowserApp />
               </div>
+            {:else if win.appId === 'terminal'}
+              <div class="app-content terminal-content" data-terminal-app>
+                <TerminalApp windowId={win.windowId} />
+              </div>
             {:else if win.appId === 'etext'}
               <div class="app-content etext-content" data-etext-app>
                 <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
@@ -520,6 +525,11 @@
 
   .etext-content {
     background: #1a1a2a;
+  }
+
+  .terminal-content {
+    padding: 0;
+    background: #1a1b26;
   }
 
   .app-header {

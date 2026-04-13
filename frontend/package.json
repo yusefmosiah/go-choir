@@ -21,5 +21,8 @@
       "esbuild",
       "playwright"
     ]
+  },
+  "dependencies": {
+    "ghostty-web": "^0.4.0"
   }
 }
