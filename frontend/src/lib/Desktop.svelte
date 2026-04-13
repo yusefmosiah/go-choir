@@ -32,7 +32,7 @@
   import { fetchDesktopState, saveDesktopState } from './desktop.js';
   import DesktopIcons from './DesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
-  import Window from './Window.svelte';
+  import FloatingWindow from './FloatingWindow.svelte';
   import ETextEditor from './ETextEditor.svelte';
   import {
     windows,
@@ -352,7 +352,7 @@
   <div class="desktop-area" data-desktop-windows>
     {#each $windows as win (win.windowId)}
       {#if win.mode !== 'closed'}
-        <Window
+        <FloatingWindow
           windowId={win.windowId}
           appId={win.appId}
           title={win.title}
@@ -383,7 +383,7 @@
               </div>
             </div>
           {/if}
-        </Window>
+        </FloatingWindow>
       {/if}
     {/each}
   </div>

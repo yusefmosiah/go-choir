@@ -172,10 +172,10 @@ test('windows support drag and resize', async ({
   // The window should still be visible after dragging.
   await expect(windowEl).toBeVisible();
 
-  // Test resize: the resize handles should be present.
-  const resizeHandles = windowEl.locator('.resize-handle');
-  const count = await resizeHandles.count();
-  expect(count).toBeGreaterThanOrEqual(4); // at least N, S, E, W
+  // Test resize: the resize handle should be present (bottom-right only).
+  const resizeHandle = windowEl.locator('[data-resize-handle]');
+  const count = await resizeHandle.count();
+  expect(count).toBeGreaterThanOrEqual(1); // at least the se handle
 });
 
 // ---------------------------------------------------------------
