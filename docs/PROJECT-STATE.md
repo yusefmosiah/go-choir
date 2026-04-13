@@ -207,7 +207,8 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 2. ✅ **Missing bottom bar** - Resolved (prompt input, window indicators, user info)
 3. ✅ **Not responsive** - Resolved (3 breakpoints, mobile single-focus mode)
 4. ⏸️ **Settings app** - Deferred to Mission 7 (requires conductor agent)
-5. ❌ **E-text UX** - Not addressed (Mission 7 scope)
+5. ⚠️ **Browser app** - Limited by iframe security (X-Frame-Options). Only sites allowing embedding (like Wikipedia) work. Full proxy solution deferred to Mission 7+ (requires server-side proxy with HTML rewriting).
+6. ❌ **E-text UX** - Not addressed (Mission 7 scope)
 
 ### Testing
 - ✅ Unit tests pass (all Go packages)
