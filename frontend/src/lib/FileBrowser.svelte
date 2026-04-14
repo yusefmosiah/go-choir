@@ -5,7 +5,7 @@
     - File/directory listing with folder/file icons
     - Breadcrumb navigation with clickable segments
     - Click directory to navigate into it
-    - Click file to trigger download
+    - Click text files to open them in VText; other files still download
     - New Folder button with inline input (no alert/prompt)
     - Delete with inline confirmation (no confirm())
     - Empty state message
@@ -242,12 +242,19 @@
     if (entry.type === 'directory') {
       navigateIntoDirectory(entry.name);
     } else {
-      // Trigger download
+      if (isTextFileName(entry.name)) {
+        dispatch('opentextfile', {
+          pathSegments: [...currentPath, entry.name],
+          fileName: entry.name,
+        });
+        return;
+      }
+
+      // Trigger download for non-text files.
       const path = currentPath.length > 0
         ? '/api/files/' + [...currentPath, entry.name].map(encodeURIComponent).join('/')
         : '/api/files/' + encodeURIComponent(entry.name);
 
-      // Create a temporary link to trigger download
       const a = document.createElement('a');
       a.href = path;
       a.download = entry.name;
@@ -256,6 +263,23 @@
       a.click();
       document.body.removeChild(a);
     }
+  }
+
+  function isTextFileName(name) {
+    const lower = name.toLowerCase();
+    if (lower === 'makefile' || lower === 'dockerfile') return true;
+    const parts = lower.split('.');
+    const ext = parts.length > 1 ? parts.pop() : '';
+    if (!ext) return true;
+    return [
+      'txt', 'md', 'markdown', 'rst', 'org',
+      'json', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
+      'csv', 'tsv', 'log',
+      'js', 'jsx', 'ts', 'tsx', 'svelte',
+      'go', 'rs', 'py', 'sh', 'bash', 'zsh',
+      'css', 'scss', 'html', 'htm', 'xml', 'svg',
+      'c', 'h', 'cpp', 'hpp', 'java', 'kt', 'swift', 'rb', 'php', 'pl', 'lua', 'sql',
+    ].includes(ext);
   }
 
   function handleNewFolderClick() {

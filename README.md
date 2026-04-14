@@ -24,7 +24,7 @@ sandbox (8085) -- host-process runtime fallback for local development; target ru
 | gateway   | 8084 | Multi-provider LLM gateway (Fireworks, Z.AI, Bedrock) with SSE streaming |
 | sandbox   | 8085 | Placeholder shell bootstrap and WebSocket echo surface for Milestone 1 |
 
-**Frontend:** Svelte SPA with email auth UI, desktop shell, e-text editor, and choir-in-choir controls.
+**Frontend:** Svelte SPA with email auth UI, desktop shell, and the versioned document app (`vtext`, currently still named `etext` in code/routes) plus choir-in-choir controls.
 
 All services expose a `/health` endpoint.
 
@@ -133,7 +133,7 @@ internal/
   store/        Persistence layer (stub)
   types/        Core domain types (stub)
   vmmanager/    Firecracker VM management
-frontend/       Svelte SPA: email auth UI, desktop shell, e-text editor, choir-in-choir controls
+frontend/       Svelte SPA: email auth UI, desktop shell, versioned document UI (`vtext` / current `etext`), choir-in-choir controls
   tests/        Playwright e2e tests (auth flows, shell, rehydration, logout, re-login)
 nix/
   node-b.nix    NixOS module: systemd services, Caddy config

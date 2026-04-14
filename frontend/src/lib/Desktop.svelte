@@ -22,11 +22,12 @@
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
+  import { submitConductorPrompt } from './conductor.js';
   import { fetchDesktopState, saveDesktopState } from './desktop.js';
   import FloatingDesktopIcons from './FloatingDesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
   import FloatingWindow from './FloatingWindow.svelte';
-  import ETextEditor from './ETextEditor.svelte';
+  import VTextEditor from './VTextEditor.svelte';
   import FileBrowser from './FileBrowser.svelte';
   import BrowserApp from './BrowserApp.svelte';
   import TerminalApp from './TerminalApp.svelte';
@@ -66,6 +67,8 @@
   let wsReconnecting = false;
   const MAX_WS_RECONNECT_ATTEMPTS = 5;
   const WS_RECONNECT_BASE_DELAY = 1000;
+  let toasts = [];
+  let toastCounter = 0;
 
   // ---- Desktop state persistence ----
   let stateLoaded = false;
@@ -86,7 +89,7 @@
         if (state.windows && state.windows.length > 0) {
           const restoredWindows = state.windows.map((w) => ({
             windowId: w.window_id,
-            appId: w.app_id,
+            appId: w.app_id === 'etext' ? 'vtext' : w.app_id,
             title: w.title,
             icon: getIconForApp(w.app_id),
             x: w.geometry?.x ?? 100,
@@ -113,14 +116,15 @@
   }
 
   function getIconForApp(appId) {
+    const normalizedAppId = appId === 'etext' ? 'vtext' : appId;
     const icons = {
       files: '📁',
       browser: '🌐',
       terminal: '💻',
       settings: '⚙️',
-      etext: '📝',
+      vtext: '📝',
     };
-    return icons[appId] || '📱';
+    return icons[normalizedAppId] || '📱';
   }
 
   function scheduleSave() {
@@ -266,7 +270,9 @@
   // ---- Event handlers ----
 
   function handleLaunchApp(event) {
-    openApp(event.detail.appId, event.detail.appName, event.detail.icon);
+    openApp(event.detail.appId, event.detail.appName, event.detail.icon, {
+      ...(event.detail.appContext || {}),
+    });
   }
 
   function handleWindowClose(event) {
@@ -319,12 +325,90 @@
     dispatch('logout');
   }
 
-  function handlePromptSubmit(event) {
-    // For now, just log it. Future: opens a Chat app or sends to runtime.
+  async function handlePromptSubmit(event) {
+    const text = (event.detail?.text || '').trim();
+    if (!text) return;
+
+    if (isTrivialPrompt(text)) {
+      showToast(text === 'hi' ? 'Hello.' : `Prompt noted: ${text}`);
+      return;
+    }
+
+    const windowTitle = text.length > 28 ? `${text.slice(0, 28)}…` : text;
+    let conductorTaskId = '';
+
+    try {
+      const task = await submitConductorPrompt(text, {
+        inputSource: 'prompt_bar',
+        requestedApp: 'vtext',
+        initialDocumentTitle: windowTitle,
+      });
+      conductorTaskId = task.task_id || '';
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        dispatch('authexpired');
+        return;
+      }
+      showToast('Conductor unavailable; opening VText directly');
+    }
+
+    openApp('vtext', 'VText', '📝', {
+      windowTitle,
+      seedPrompt: text,
+      initialContent: text,
+      createInitialVersion: true,
+      conductorTaskId,
+    });
+    showToast(`Opened VText for: ${text}`);
+  }
+
+  async function handleOpenTextFile(event) {
+    const pathSegments = event.detail?.pathSegments || [];
+    const fileName = event.detail?.fileName || pathSegments[pathSegments.length - 1] || 'Document';
+    const path = '/api/files/' + pathSegments.map(encodeURIComponent).join('/');
+
+    try {
+      const res = await fetchWithRenewal(path, { method: 'GET' });
+      if (!res.ok) {
+        if (res.status === 401) {
+          dispatch('authexpired');
+          return;
+        }
+        showToast(`Could not open ${fileName}`);
+        return;
+      }
+      const content = await res.text();
+      openApp('vtext', 'VText', '📝', {
+        windowTitle: fileName,
+        fileName,
+        sourcePath: pathSegments.join('/'),
+        initialContent: content,
+      });
+      showToast(`Opened ${fileName} in VText`);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) {
+        dispatch('authexpired');
+        return;
+      }
+      showToast(`Could not open ${fileName}`);
+    }
   }
 
   function handleIconPositionsChanged() {
     scheduleSave();
+  }
+
+  function showToast(message) {
+    const id = ++toastCounter;
+    toasts = [...toasts, { id, message }];
+    setTimeout(() => {
+      toasts = toasts.filter((toast) => toast.id !== id);
+    }, 2400);
+  }
+
+  function isTrivialPrompt(text) {
+    const normalized = text.toLowerCase();
+    return /^(hi|hey|hello|yo|sup|ok|okay|thanks|thank you)$/.test(normalized);
   }
 
   // ---- Lifecycle ----
@@ -391,7 +475,7 @@
           >
             {#if win.appId === 'files'}
               <div class="app-content files-content" data-files-app>
-                <FileBrowser on:authexpired={() => dispatch('authexpired')} />
+                <FileBrowser on:authexpired={() => dispatch('authexpired')} on:opentextfile={handleOpenTextFile} />
               </div>
             {:else if win.appId === 'browser'}
               <div class="app-content browser-content" data-browser-app-container>
@@ -401,9 +485,9 @@
               <div class="app-content terminal-content" data-terminal-app>
                 <TerminalApp windowId={win.windowId} />
               </div>
-            {:else if win.appId === 'etext'}
-              <div class="app-content etext-content" data-etext-app>
-                <ETextEditor {currentUser} on:authexpired={() => dispatch('authexpired')} />
+            {:else if win.appId === 'vtext'}
+              <div class="app-content vtext-content" data-vtext-app data-etext-app>
+                <VTextEditor {currentUser} appContext={win.appContext} on:authexpired={() => dispatch('authexpired')} />
               </div>
             {:else}
               <div class="app-content">
@@ -417,6 +501,14 @@
       {/each}
     {/if}
   </div>
+
+  {#if toasts.length > 0}
+    <div class="toast-stack" aria-live="polite" aria-atomic="true">
+      {#each toasts as toast (toast.id)}
+        <div class="toast">{toast.message}</div>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Bottom bar -->
   <BottomBar
@@ -461,13 +553,35 @@
     flex-direction: column;
   }
 
-  .etext-content {
-    background: #1a1a2a;
+  .vtext-content {
+    background: #12131c;
   }
 
   .terminal-content {
     padding: 0;
     background: #1a1b26;
+  }
+
+  .toast-stack {
+    position: fixed;
+    left: 50%;
+    bottom: 72px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 1200;
+    pointer-events: none;
+  }
+
+  .toast {
+    background: rgba(17, 24, 39, 0.95);
+    color: #edf2ff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    padding: 0.6rem 0.95rem;
+    font-size: 0.82rem;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
   }
 
   .app-header {

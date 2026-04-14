@@ -77,15 +77,16 @@ test('floating desktop icons render with emoji and labels', async ({ page, authe
   const surface = page.locator('[data-desktop-surface]');
   await expect(surface).toBeVisible();
 
-  // Should have exactly 4 desktop icons (Files, Browser, Terminal, Settings)
+  // Should have exactly 5 desktop icons (Files, Browser, Terminal, Settings, VText)
   const icons = surface.locator('[data-desktop-icon]');
-  await expect(icons).toHaveCount(4);
+  await expect(icons).toHaveCount(5);
 
   // Verify each app icon is present
   await expect(surface.locator('[data-desktop-icon-id="files"]')).toBeVisible();
   await expect(surface.locator('[data-desktop-icon-id="browser"]')).toBeVisible();
   await expect(surface.locator('[data-desktop-icon-id="terminal"]')).toBeVisible();
   await expect(surface.locator('[data-desktop-icon-id="settings"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="vtext"]')).toBeVisible();
 
   // Each icon should have an emoji and a label
   const filesEmoji = surface.locator('[data-desktop-icon-id="files"] [data-desktop-icon-emoji]');
@@ -93,6 +94,26 @@ test('floating desktop icons render with emoji and labels', async ({ page, authe
 
   const filesLabel = surface.locator('[data-desktop-icon-id="files"] [data-desktop-icon-label]');
   await expect(filesLabel).toContainText('Files');
+});
+
+// ---------------------------------------------------------------
+// Test: VText appears as a first-class desktop app
+// ---------------------------------------------------------------
+test('VText appears as a first-class desktop app', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const vtextIcon = page.locator('[data-desktop-icon-id="vtext"]');
+  await expect(vtextIcon).toBeVisible();
+  await expect(vtextIcon).toContainText('VText');
+
+  await vtextIcon.dblclick();
+
+  const vtextWindow = page.locator('[data-vtext-app]');
+  await expect(vtextWindow).toBeVisible({ timeout: 5000 });
+
+  const titleText = page.locator('[data-window-titlebar] .title-text');
+  await expect(titleText.first()).toContainText('VText');
 });
 
 // ---------------------------------------------------------------
@@ -185,6 +206,48 @@ test('bottom bar prompt input with placeholder', async ({ page, authenticator })
 
   // Input should be cleared after submit
   await expect(promptInput).toHaveValue('');
+});
+
+test('prompt bar routes normal input through conductor and opens vtext', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const promptInput = page.locator('[data-prompt-input]');
+  const initialVTextCount = await page.locator('[data-vtext-app]').count();
+  const responsePromise = page.waitForResponse((response) =>
+    response.url().includes('/api/agent/task') && response.request().method() === 'POST'
+  );
+
+  await promptInput.fill('Draft a project outline');
+  await promptInput.press('Enter');
+
+  const response = await responsePromise;
+  expect(response.status()).toBe(202);
+
+  const payload = response.request().postDataJSON();
+  expect(payload.prompt).toBe('Draft a project outline');
+  expect(payload.metadata.agent_profile).toBe('conductor');
+  expect(payload.metadata.agent_role).toBe('conductor');
+  expect(payload.metadata.input_source).toBe('prompt_bar');
+  expect(payload.metadata.requested_app).toBe('vtext');
+
+  const vtextWindow = page.locator('[data-vtext-app]').last();
+  await expect(vtextWindow).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('[data-vtext-app]')).toHaveCount(initialVTextCount + 1);
+  await expect(vtextWindow.locator('[data-vtext-editor-area]')).toHaveValue('Draft a project outline');
+});
+
+test('prompt bar keeps trivial greetings out of document flow', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const promptInput = page.locator('[data-prompt-input]');
+  const initialVTextCount = await page.locator('[data-vtext-app]').count();
+  await promptInput.fill('hi');
+  await promptInput.press('Enter');
+
+  await expect(page.locator('.toast')).toContainText('Hello.');
+  await expect(page.locator('[data-vtext-app]')).toHaveCount(initialVTextCount);
 });
 
 // ---------------------------------------------------------------

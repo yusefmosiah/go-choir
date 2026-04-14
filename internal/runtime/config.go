@@ -15,6 +15,7 @@ package runtime
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -27,6 +28,10 @@ const (
 
 	// DefaultSupervisionInterval is how often the supervisor checks health.
 	DefaultSupervisionInterval = 5 * time.Second
+
+	// DefaultResearcherCount is the default number of researcher workers
+	// the microVM topology should assume when none is configured.
+	DefaultResearcherCount = 3
 )
 
 // Config holds runtime configuration resolved from environment variables.
@@ -42,6 +47,9 @@ type Config struct {
 
 	// SupervisionInterval is how often the supervisor checks runtime health.
 	SupervisionInterval time.Duration
+
+	// ResearcherCount is the configured researcher worker count for this VM.
+	ResearcherCount int
 }
 
 // LoadConfig resolves runtime configuration from environment variables.
@@ -51,6 +59,7 @@ func LoadConfig() Config {
 		StorePath:           envOr("RUNTIME_STORE_PATH", DefaultStorePath),
 		ProviderTimeout:     durationOr("RUNTIME_PROVIDER_TIMEOUT", DefaultProviderTimeout),
 		SupervisionInterval: durationOr("RUNTIME_SUPERVISION_INTERVAL", DefaultSupervisionInterval),
+		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
 	}
 }
 
@@ -71,4 +80,16 @@ func durationOr(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func intOr(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
 }

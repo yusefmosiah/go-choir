@@ -89,12 +89,27 @@ type taskStatusResponse struct {
 // (VAL-RUNTIME-001). The active provider name is included so operators
 // can distinguish real-provider paths from stub/canned paths.
 type runtimeHealthResponse struct {
-	Status         string                   `json:"status"`
-	Service        string                   `json:"service"`
-	SandboxID      string                   `json:"sandbox_id"`
-	RuntimeHealth  types.RuntimeHealthState `json:"runtime_health"`
-	RunningTasks   int                      `json:"running_tasks"`
-	ActiveProvider string                   `json:"active_provider"`
+	Status          string                   `json:"status"`
+	Service         string                   `json:"service"`
+	SandboxID       string                   `json:"sandbox_id"`
+	RuntimeHealth   types.RuntimeHealthState `json:"runtime_health"`
+	RunningTasks    int                      `json:"running_tasks"`
+	ResearcherCount int                      `json:"researcher_count"`
+	ActiveProvider  string                   `json:"active_provider"`
+}
+
+// runtimeTopologyResponse is the JSON structure returned by GET /api/agent/topology.
+// It surfaces the configured orchestration shape so operators and UI surfaces
+// can see how many researchers the microVM expects and what the current runtime
+// fan-out looks like.
+type runtimeTopologyResponse struct {
+	SandboxID           string `json:"sandbox_id"`
+	ResearcherCount     int    `json:"researcher_count"`
+	RunningTasks        int    `json:"running_tasks"`
+	ChannelCount        int    `json:"channel_count"`
+	SupervisionInterval string `json:"supervision_interval"`
+	RuntimeHealth       string `json:"runtime_health"`
+	ActiveProvider      string `json:"active_provider"`
 }
 
 // APIHandler provides HTTP handlers for the runtime API endpoints.
@@ -155,7 +170,7 @@ func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rec, err := h.rt.SubmitTask(r.Context(), req.Prompt, ownerID)
+	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), req.Prompt, ownerID, req.Metadata)
 	if err != nil {
 		log.Printf("runtime api: submit task: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit task"})
@@ -388,6 +403,29 @@ func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// HandleTopology handles GET /api/agent/topology.
+// It exposes the runtime's orchestration shape for operator/UI inspection:
+// researcher count, supervision interval, current running task count, and
+// the number of active coordination channels.
+func (h *APIHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(runtimeTopologyResponse{
+		SandboxID:           h.rt.cfg.SandboxID,
+		ResearcherCount:     h.rt.cfg.ResearcherCount,
+		RunningTasks:        h.rt.RunningCount(),
+		ChannelCount:        len(h.rt.ChannelManager().ListChannels()),
+		SupervisionInterval: h.rt.cfg.SupervisionInterval.String(),
+		RuntimeHealth:       string(h.rt.HealthState()),
+		ActiveProvider:      h.rt.provider.ProviderName(),
+	})
+}
+
 // HandleEvents handles GET /api/events.
 // It provides a long-lived incremental event stream through the authenticated
 // same-origin proxy path, emitting ordered lifecycle updates correlated to
@@ -507,12 +545,13 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
 	_ = json.NewEncoder(w).Encode(runtimeHealthResponse{
-		Status:         string(health),
-		Service:        "sandbox",
-		SandboxID:      h.rt.cfg.SandboxID,
-		RuntimeHealth:  health,
-		RunningTasks:   h.rt.RunningCount(),
-		ActiveProvider: h.rt.provider.ProviderName(),
+		Status:          string(health),
+		Service:         "sandbox",
+		SandboxID:       h.rt.cfg.SandboxID,
+		RuntimeHealth:   health,
+		RunningTasks:    h.rt.RunningCount(),
+		ResearcherCount: h.rt.cfg.ResearcherCount,
+		ActiveProvider:  h.rt.provider.ProviderName(),
 	})
 }
 
@@ -522,6 +561,7 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
+	s.HandleFunc("/api/agent/topology", h.HandleTopology)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/cancel", h.HandleCancel)
 	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
@@ -534,6 +574,7 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	// that inspects the URL path and method to route to the correct
 	// handler. This avoids ambiguity with Go's ServeMux prefix matching.
 	RegisterEtextRoutes(s, h)
+	RegisterVTextRoutes(s, h)
 }
 
 // RegisterEtextRoutes registers e-text API routes on the given server.
@@ -546,6 +587,35 @@ func RegisterEtextRoutes(s *server.Server, h *APIHandler) {
 	// Prefix match for all other e-text routes: individual documents,
 	// revisions, history, diff, blame.
 	s.HandleFunc("/api/etext/", h.HandleEtextRouter)
+}
+
+// RegisterVTextRoutes registers vtext API aliases on the given server.
+// These routes rewrite /api/vtext/... requests to the historical /api/etext/...
+// handlers so the product-facing naming can move ahead of the internal rename.
+func RegisterVTextRoutes(s *server.Server, h *APIHandler) {
+	// Exact match for document collection (create/list).
+	s.HandleFunc("/api/vtext/documents", h.HandleVTextDocumentsRoot)
+
+	// Prefix match for all other vtext routes.
+	s.HandleFunc("/api/vtext/", h.HandleVTextRouter)
+}
+
+func rewriteEtextToVText(r *http.Request) *http.Request {
+	req := r.Clone(r.Context())
+	req.URL.Path = strings.Replace(req.URL.Path, "/api/vtext/", "/api/etext/", 1)
+	return req
+}
+
+// HandleVTextRouter dispatches vtext API requests by rewriting them to the
+// historical e-text route handlers.
+func (h *APIHandler) HandleVTextRouter(w http.ResponseWriter, r *http.Request) {
+	h.HandleEtextRouter(w, rewriteEtextToVText(r))
+}
+
+// HandleVTextDocumentsRoot routes POST to create and GET to list at
+// /api/vtext/documents (exact match, no trailing slash).
+func (h *APIHandler) HandleVTextDocumentsRoot(w http.ResponseWriter, r *http.Request) {
+	h.HandleEtextDocumentsRoot(w, rewriteEtextToVText(r))
 }
 
 // HandleEtextRouter dispatches e-text API requests based on URL path and

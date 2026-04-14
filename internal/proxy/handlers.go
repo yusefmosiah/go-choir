@@ -333,13 +333,12 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// restore (VAL-DESKTOP-007).
 		h.HandleProtectedAPI(w, r)
 		return
-	case strings.HasPrefix(path, "/api/etext/"):
-		// E-text document/revision/history/diff/blame API: auth-gated
-		// at the proxy level and forwarded to the sandbox with the
-		// authenticated user context injected. E-text state is
-		// persisted server-side per user for document authoring,
-		// history, and attribution (VAL-ETEXT-001 through
-		// VAL-ETEXT-010).
+	case strings.HasPrefix(path, "/api/etext/"), strings.HasPrefix(path, "/api/vtext/"):
+		// Versioned document API: auth-gated at the proxy level and
+		// forwarded to the sandbox with the authenticated user context
+		// injected. Both /api/etext/* and /api/vtext/* are supported
+		// while the rename settles, but product-facing clients should
+		// prefer /api/vtext/*.
 		h.HandleProtectedAPI(w, r)
 		return
 	case strings.HasPrefix(path, "/api/files"):

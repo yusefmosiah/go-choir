@@ -2,11 +2,13 @@ package sandbox
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,12 @@ func setupFileTest(t *testing.T) (*FilesHandler, string) {
 // set, simulating a request that has passed through the proxy's JWT validation.
 func authRequest(method, path string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("X-Authenticated-User", "test-user@example.com")
+	return req
+}
+
+func authBodyRequest(method, path string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, path, body)
 	req.Header.Set("X-Authenticated-User", "test-user@example.com")
 	return req
 }
@@ -115,6 +123,31 @@ func TestListRootRejectsNonGet(t *testing.T) {
 				t.Errorf("expected 405 for %s, got %d", method, w.Code)
 			}
 		})
+	}
+}
+
+func TestUpdateFileWritesTextContent(t *testing.T) {
+	fh, root := setupFileTest(t)
+
+	parent := filepath.Join(root, "documents")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatalf("mkdir parent: %v", err)
+	}
+
+	req := authBodyRequest(http.MethodPut, "/api/files/documents/note.txt", strings.NewReader("hello vtext"))
+	w := httptest.NewRecorder()
+	fh.HandleFileByPath(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "documents", "note.txt"))
+	if err != nil {
+		t.Fatalf("read saved file: %v", err)
+	}
+	if string(got) != "hello vtext" {
+		t.Fatalf("saved content = %q, want %q", string(got), "hello vtext")
 	}
 }
 
@@ -533,7 +566,7 @@ func TestDeleteFileWithSpaces(t *testing.T) {
 func TestFileByPathRejectsUnsupportedMethods(t *testing.T) {
 	fh, _ := setupFileTest(t)
 
-	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+	for _, method := range []string{http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
 			req := authRequest(method, "/api/files/something")
 			w := httptest.NewRecorder()

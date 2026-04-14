@@ -44,21 +44,21 @@ Continue after Mission 2 completes the original Milestone 1 foundation. Mission 
 **Verification:**
 - prompt from the Svelte UI reaches proxy → sandbox → LLM client and the response returns to the UI on `draft.choir-ip.com`
 
-### Milestone 2: E-Text App + Real Desktop (original Mission 2 Milestone 3)
+### Milestone 2: VText App + Real Desktop (original Mission 2 Milestone 3)
 
 **Dolt embedded setup:**
 - initialize per-user Dolt database
-- create e-text schema for `documents`, `content`, `citations`, `metadata`
+- create version-native document schema for `documents`, `content`, `citations`, `metadata`, and transclusions
 - implement store API for create/read/update/history/diff/blame
 
 **App/runtime work:**
-- build the e-text appagent
+- build the `vtext` appagent
 - add scheduler tables and work dispatch
 - add conductor routing for web UI input
 
 **Desktop work:**
 - real window manager
-- e-text editor using Pretext
+- `vtext` document surface using Pretext
 - version history viewer
 - app launcher
 
@@ -115,7 +115,7 @@ Continue after Mission 2 completes the original Milestone 1 foundation. Mission 
 Mission 3 is still too large for one implementation push. The likely next planning split is:
 
 1. sandbox runtime
-2. e-text + real desktop
+2. `vtext` + real desktop
 3. gateway + VM isolation
 4. polish/promotion
 

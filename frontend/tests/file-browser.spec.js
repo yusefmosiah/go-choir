@@ -9,7 +9,7 @@
  * - VAL-FILES-006: Clicking breadcrumb segment navigates back
  * - VAL-FILES-009: Create folder via UI (inline input, no alert/prompt)
  * - VAL-FILES-011: Delete via UI (inline confirmation, no confirm())
- * - VAL-FILES-012: Clicking file triggers download
+ * - VAL-FILES-012: Clicking text file opens in VText
  * - VAL-FILES-013: Empty directory shows empty state
  * - VAL-FILES-016: Back/forward navigation
  * - VAL-FILES-018: Responsive on mobile
@@ -275,35 +275,41 @@ test('delete with inline confirmation', async ({ page, authenticator }) => {
 });
 
 // ---------------------------------------------------------------
-// Test: clicking file triggers download (VAL-FILES-012)
+// Test: clicking text file opens in VText (VAL-FILES-012)
 // ---------------------------------------------------------------
-test('clicking file triggers download', async ({ page, authenticator }) => {
+test('clicking text file opens in VText', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
-  // Create a test file in the sandbox root directly via page.evaluate
+  const fileName = 'notes.txt';
+  const fileContent = 'hello from file browser';
+
+  // Create a text file in the sandbox root directly via the file API.
   await page.evaluate(async () => {
-    // No file upload API exists, so we'll check if there are files already
-    // or just verify the mechanism works with whatever's in the root
-    const res = await fetch('/api/files', { credentials: 'include' });
-    const entries = await res.json();
-    return entries.filter(e => e.type === 'file').length;
+    const res = await fetch('/api/files/notes.txt', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: 'hello from file browser',
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`failed to seed text file: ${res.status} ${body}`);
+    }
   });
 
   await openFilesApp(page);
 
-  // Check if there are any file entries
-  const fileItems = page.locator('[data-file-item][data-entry-type="file"]');
-  const fileCount = await fileItems.count();
+  const fileItem = page.locator('[data-file-item]').filter({ hasText: fileName }).first();
+  await expect(fileItem).toBeVisible({ timeout: 5000 });
 
-  if (fileCount > 0) {
-    // Click on a file - it should trigger a download
-    const downloadPromise = page.waitForEvent('download', { timeout: 5000 }).catch(() => null);
-    await fileItems.first().click();
-    const download = await downloadPromise;
-    // Download should have been initiated (or at least no error)
-  }
-  // If no files exist, the test still passes — we can't create files without an upload API
+  await fileItem.click();
+
+  const vtextWindow = page.locator('[data-vtext-app]');
+  await expect(vtextWindow).toBeVisible({ timeout: 5000 });
+
+  const editorArea = page.locator('[data-vtext-app] [data-vtext-editor-area]');
+  await expect(editorArea).toHaveValue(fileContent);
 });
 
 // ---------------------------------------------------------------

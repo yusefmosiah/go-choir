@@ -105,6 +105,43 @@ func TestHandleTaskSubmissionReturnsStableHandle(t *testing.T) {
 	}
 }
 
+func TestHandleTaskSubmissionPreservesMetadata(t *testing.T) {
+	rt, handler := testAPISetup(t)
+
+	body := `{"prompt":"route this into conductor","metadata":{"agent_profile":"conductor","agent_role":"conductor","input_source":"prompt_bar","requested_app":"vtext"}}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleTaskSubmission(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	var resp taskSubmitResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	rec, err := rt.GetTask(context.Background(), resp.TaskID, "user-alice")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+
+	if got, _ := rec.Metadata["agent_profile"].(string); got != AgentProfileConductor {
+		t.Fatalf("agent_profile: got %q, want %q", got, AgentProfileConductor)
+	}
+	if got, _ := rec.Metadata["agent_role"].(string); got != AgentProfileConductor {
+		t.Fatalf("agent_role: got %q, want %q", got, AgentProfileConductor)
+	}
+	if got, _ := rec.Metadata["input_source"].(string); got != "prompt_bar" {
+		t.Fatalf("input_source: got %q, want prompt_bar", got)
+	}
+	if got, _ := rec.Metadata["requested_app"].(string); got != AgentProfileVText {
+		t.Fatalf("requested_app: got %q, want %q", got, AgentProfileVText)
+	}
+}
+
 func TestHandleTaskSubmissionAuthGated(t *testing.T) {
 	// VAL-RUNTIME-002: task submission is auth-gated.
 	_, handler := testAPISetup(t)
@@ -940,6 +977,82 @@ func TestHandleHealthReflectsRunningTasks(t *testing.T) {
 	}
 	if resp2.RunningTasks < 1 {
 		t.Errorf("running_tasks: got %d, want >= 1", resp2.RunningTasks)
+	}
+}
+
+func TestHandleTopologyReportsOrchestrationShape(t *testing.T) {
+	rt, handler := testAPISetup(t)
+	rt.cfg.ResearcherCount = 5
+
+	if _, err := rt.ChannelManager().Channel("parent-1"); err != nil {
+		t.Fatalf("create parent channel: %v", err)
+	}
+	if _, err := rt.ChannelManager().Channel("child-1"); err != nil {
+		t.Fatalf("create child channel: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/topology", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleTopology(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp runtimeTopologyResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.ResearcherCount != 5 {
+		t.Errorf("researcher_count: got %d, want 5", resp.ResearcherCount)
+	}
+	if resp.ChannelCount != 2 {
+		t.Errorf("channel_count: got %d, want 2", resp.ChannelCount)
+	}
+	if resp.SupervisionInterval != "1h0m0s" {
+		t.Errorf("supervision_interval: got %q, want 1h0m0s", resp.SupervisionInterval)
+	}
+}
+
+func TestHandleVTextDocumentsRootAliasesEtext(t *testing.T) {
+	_, handler := testAPISetup(t)
+
+	createReqBody := `{"title":"vtext alias doc","content":"hello"}`
+	createReq := authenticatedRequest(http.MethodPost, "/api/vtext/documents", createReqBody, "user-alice")
+	createW := httptest.NewRecorder()
+	handler.HandleVTextDocumentsRoot(createW, createReq)
+
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create status: got %d, want %d", createW.Code, http.StatusCreated)
+	}
+
+	var createResp etextCreateDocResponse
+	if err := json.NewDecoder(createW.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.DocID == "" {
+		t.Fatal("doc_id should not be empty")
+	}
+
+	listReq := authenticatedRequest(http.MethodGet, "/api/vtext/documents", "", "user-alice")
+	listW := httptest.NewRecorder()
+	handler.HandleVTextDocumentsRoot(listW, listReq)
+
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list status: got %d, want %d", listW.Code, http.StatusOK)
+	}
+
+	var listResp etextListDocsResponse
+	if err := json.NewDecoder(listW.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listResp.Documents) != 1 {
+		t.Fatalf("documents: got %d, want 1", len(listResp.Documents))
+	}
+	if listResp.Documents[0].Title != "vtext alias doc" {
+		t.Errorf("title: got %q, want %q", listResp.Documents[0].Title, "vtext alias doc")
 	}
 }
 

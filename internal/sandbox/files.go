@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -133,6 +134,8 @@ func (fh *FilesHandler) HandleFileByPath(w http.ResponseWriter, r *http.Request)
 		fh.handleGet(w, r, absPath)
 	case http.MethodPost:
 		fh.handleCreateDirectory(w, r, absPath)
+	case http.MethodPut:
+		fh.handleUpdateFile(w, r, absPath)
 	case http.MethodDelete:
 		fh.handleDelete(w, r, absPath)
 	default:
@@ -269,6 +272,60 @@ func (fh *FilesHandler) handleCreateDirectory(w http.ResponseWriter, r *http.Req
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "created",
 		"message": "directory created",
+	})
+}
+
+// handleUpdateFile writes the request body to a regular file. If the file
+// does not exist, it is created. Parent directories must already exist.
+func (fh *FilesHandler) handleUpdateFile(w http.ResponseWriter, r *http.Request, absPath string) {
+	info, err := os.Stat(absPath)
+	if err == nil && info.IsDir() {
+		writeFileError(w, http.StatusConflict, "path is a directory")
+		return
+	}
+	if err != nil && !os.IsNotExist(err) {
+		if os.IsPermission(err) {
+			writeFileError(w, http.StatusForbidden, "access denied")
+			return
+		}
+		writeFileError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	parentDir := filepath.Dir(absPath)
+	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
+		writeFileError(w, http.StatusNotFound, "parent directory not found")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeFileError(w, http.StatusInternalServerError, "failed to read body")
+		return
+	}
+
+	mode := os.FileMode(0o644)
+	if info != nil {
+		mode = info.Mode()
+		if mode == 0 {
+			mode = 0o644
+		}
+	}
+
+	if err := os.WriteFile(absPath, body, mode); err != nil {
+		if os.IsPermission(err) {
+			writeFileError(w, http.StatusForbidden, "access denied")
+			return
+		}
+		writeFileError(w, http.StatusInternalServerError, "failed to write file")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "updated",
+		"message": "file saved",
 	})
 }
 

@@ -43,20 +43,20 @@ type etextCreateDocRequest struct {
 
 // etextCreateDocResponse is the JSON response for POST /api/etext/documents.
 type etextCreateDocResponse struct {
-	DocID    string `json:"doc_id"`
-	OwnerID  string `json:"owner_id"`
-	Title    string `json:"title"`
+	DocID     string `json:"doc_id"`
+	OwnerID   string `json:"owner_id"`
+	Title     string `json:"title"`
 	CreatedAt string `json:"created_at"`
 }
 
 // etextDocumentResponse is the JSON response for GET /api/etext/documents/{id}.
 type etextDocumentResponse struct {
-	DocID              string `json:"doc_id"`
-	OwnerID            string `json:"owner_id"`
-	Title              string `json:"title"`
-	CurrentRevisionID  string `json:"current_revision_id,omitempty"`
-	CreatedAt          string `json:"created_at"`
-	UpdatedAt          string `json:"updated_at"`
+	DocID             string `json:"doc_id"`
+	OwnerID           string `json:"owner_id"`
+	Title             string `json:"title"`
+	CurrentRevisionID string `json:"current_revision_id,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 // etextUpdateDocRequest is the JSON payload for PUT /api/etext/documents/{id}.
@@ -82,16 +82,16 @@ type etextCreateRevisionRequest struct {
 
 // etextRevisionResponse is the JSON response for revision-related endpoints.
 type etextRevisionResponse struct {
-	RevisionID       string              `json:"revision_id"`
-	DocID            string              `json:"doc_id"`
-	OwnerID          string              `json:"owner_id"`
-	AuthorKind       types.AuthorKind    `json:"author_kind"`
-	AuthorLabel      string              `json:"author_label"`
-	Content          string              `json:"content"`
-	Citations        json.RawMessage     `json:"citations,omitempty"`
-	Metadata         json.RawMessage     `json:"metadata,omitempty"`
-	ParentRevisionID string              `json:"parent_revision_id,omitempty"`
-	CreatedAt        string              `json:"created_at"`
+	RevisionID       string           `json:"revision_id"`
+	DocID            string           `json:"doc_id"`
+	OwnerID          string           `json:"owner_id"`
+	AuthorKind       types.AuthorKind `json:"author_kind"`
+	AuthorLabel      string           `json:"author_label"`
+	Content          string           `json:"content"`
+	Citations        json.RawMessage  `json:"citations,omitempty"`
+	Metadata         json.RawMessage  `json:"metadata,omitempty"`
+	ParentRevisionID string           `json:"parent_revision_id,omitempty"`
+	CreatedAt        string           `json:"created_at"`
 }
 
 // etextListRevisionsResponse is the JSON response for
@@ -103,8 +103,8 @@ type etextListRevisionsResponse struct {
 // etextHistoryResponse is the JSON response for
 // GET /api/etext/documents/{id}/history.
 type etextHistoryResponse struct {
-	DocID   string                 `json:"doc_id"`
-	Entries []types.HistoryEntry   `json:"entries"`
+	DocID   string               `json:"doc_id"`
+	Entries []types.HistoryEntry `json:"entries"`
 }
 
 // etextDiffResponse is the JSON response for GET /api/etext/diff.
@@ -609,10 +609,10 @@ type etextAgentRevisionRequest struct {
 // submission. It returns the stable task handle so the client can track
 // progress through the event stream (VAL-ETEXT-004).
 type etextAgentRevisionResponse struct {
-	TaskID    string         `json:"task_id"`
-	DocID     string         `json:"doc_id"`
+	TaskID    string          `json:"task_id"`
+	DocID     string          `json:"doc_id"`
 	State     types.TaskState `json:"state"`
-	CreatedAt string         `json:"created_at"`
+	CreatedAt string          `json:"created_at"`
 }
 
 // HandleEtextAgentRevision handles POST
@@ -695,10 +695,12 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 
 	// Create the runtime task with etext agent revision metadata.
 	metadata := map[string]any{
-		"type":                   "etext_agent_revision",
-		"doc_id":                 docID,
-		"current_revision_id":    doc.CurrentRevisionID,
-		"original_prompt":        req.Prompt,
+		"type":                "etext_agent_revision",
+		"agent_profile":       AgentProfileVText,
+		"agent_role":          AgentProfileVText,
+		"doc_id":              docID,
+		"current_revision_id": doc.CurrentRevisionID,
+		"original_prompt":     req.Prompt,
 	}
 
 	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, metadata)
@@ -731,7 +733,7 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 		TaskID:    rec.TaskID,
 		DocID:     docID,
 		State:     rec.State,
-		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
 	})
 }
 

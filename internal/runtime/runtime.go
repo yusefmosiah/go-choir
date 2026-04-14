@@ -29,9 +29,10 @@ type Runtime struct {
 	health  types.RuntimeHealthState
 	running map[string]context.CancelFunc // task_id → cancel function
 
-	supervisor   *Supervisor
+	super        *Super
 	wg           sync.WaitGroup
 	toolRegistry *ToolRegistry
+	toolProfiles map[string]*ToolRegistry
 	channelMgr   *ChannelManager
 }
 
@@ -52,7 +53,7 @@ func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, op
 	for _, opt := range opts {
 		opt(rt)
 	}
-	rt.supervisor = NewSupervisor(rt, cfg.SupervisionInterval)
+	rt.super = NewSuper(rt, cfg.SupervisionInterval)
 	return rt
 }
 
@@ -80,14 +81,14 @@ func WithChannelManager(mgr *ChannelManager) RuntimeOption {
 // by a previous sandbox process exit.
 func (rt *Runtime) Start(ctx context.Context) {
 	rt.recoverInterruptedTasks(ctx)
-	rt.supervisor.Start(ctx)
+	rt.super.Start(ctx)
 	log.Printf("runtime: started (sandbox=%s)", rt.cfg.SandboxID)
 }
 
 // Stop gracefully shuts down the runtime, cancelling all in-flight tasks
 // and stopping the supervisor. It is safe to call Stop multiple times.
 func (rt *Runtime) Stop() {
-	rt.supervisor.Stop()
+	rt.super.Stop()
 
 	rt.mu.Lock()
 	for taskID, cancel := range rt.running {
@@ -112,6 +113,9 @@ func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*typ
 // is used to carry feature-specific context (e.g., etext agent revision info).
 func (rt *Runtime) SubmitTaskWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.TaskRecord, error) {
 	now := time.Now().UTC()
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
 	rec := &types.TaskRecord{
 		TaskID:    uuid.New().String(),
 		OwnerID:   ownerID,
@@ -121,6 +125,15 @@ func (rt *Runtime) SubmitTaskWithMetadata(ctx context.Context, prompt, ownerID s
 		CreatedAt: now,
 		UpdatedAt: now,
 		Metadata:  metadata,
+	}
+	if _, ok := rec.Metadata[taskMetadataAgentID]; !ok {
+		rec.Metadata[taskMetadataAgentID] = rec.TaskID
+	}
+	if _, ok := rec.Metadata[taskMetadataWorkID]; !ok {
+		rec.Metadata[taskMetadataWorkID] = rec.TaskID
+	}
+	if _, ok := rec.Metadata[taskMetadataAgentRole]; !ok {
+		rec.Metadata[taskMetadataAgentRole] = agentProfileForTask(rec)
 	}
 
 	if err := rt.store.CreateTask(ctx, *rec); err != nil {
@@ -200,6 +213,15 @@ func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID s
 		CreatedAt: now,
 		UpdatedAt: now,
 		Metadata:  metadata,
+	}
+	if _, ok := rec.Metadata[taskMetadataAgentID]; !ok {
+		rec.Metadata[taskMetadataAgentID] = rec.TaskID
+	}
+	if _, ok := rec.Metadata[taskMetadataWorkID]; !ok {
+		rec.Metadata[taskMetadataWorkID] = rec.TaskID
+	}
+	if _, ok := rec.Metadata[taskMetadataAgentRole]; !ok {
+		rec.Metadata[taskMetadataAgentRole] = agentProfileForTask(rec)
 	}
 
 	if err := rt.store.CreateTask(ctx, *rec); err != nil {
@@ -476,11 +498,13 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		rt.emitEvent(ctx, rec, kind, cause, payload)
 	}
 
+	registry := rt.toolRegistryForTask(rec)
+
 	// Use the tool-calling loop if a tool registry is configured and the
 	// provider supports the ToolLoopProvider interface. Otherwise, fall back
 	// to the simple Provider.Execute path.
-	if rt.toolRegistry != nil && rt.toolRegistry.Size() > 0 {
-		rt.executeWithToolLoop(ctx, rec, emit)
+	if registry != nil && registry.Size() > 0 {
+		rt.executeWithToolLoop(ctx, rec, registry, emit)
 	} else {
 		rt.executeWithProvider(ctx, rec, emit)
 	}
@@ -489,7 +513,7 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 // executeWithToolLoop runs the task through the real tool-calling loop.
 // This is the primary execution path when a tool registry is configured,
 // enabling the LLM to invoke registered Go function-call tools.
-func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecord, emit EventEmitFunc) {
+func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecord, registry *ToolRegistry, emit EventEmitFunc) {
 	tlp := asToolLoopProvider(rt.provider)
 
 	// Build the initial conversation from the task prompt.
@@ -502,9 +526,10 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	})
 	initialMessages = append(initialMessages, userMsg)
 
-	systemPrompt := "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully. Use tools when they would help accomplish the task."
+	systemPrompt := systemPromptForTask(rec)
+	ctx = WithToolExecutionContext(ctx, rec)
 
-	text, usage, err := RunToolLoop(ctx, tlp, rt.toolRegistry, initialMessages, systemPrompt, 4096, emit)
+	text, usage, err := RunToolLoop(ctx, tlp, registry, initialMessages, systemPrompt, 4096, emit)
 	if err != nil {
 		if ctx.Err() != nil {
 			rt.handleExecutionError(ctx, rec, ctx.Err())

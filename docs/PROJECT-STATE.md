@@ -7,14 +7,14 @@
 
 ## Project Vision
 
-**go-choir** is a distributed multi-agent operating system - unifying **ChoirOS** (web desktop, microVMs) + **Cogent** (hierarchical MAS, overnight runs).
+**go-choir** is a distributed multi-agent operating system - unifying **ChoirOS** (web desktop, microVMs) + the strongest runtime patterns we learned while building **Cogent** (hierarchical MAS, long-horizon work, resumability).
 
 ### Why Cogent Matters
 
-Cogent provides the **hierarchical multi-agent system** that enables "choir in choir":
+Cogent remains important as a source of runtime patterns and temporary bootstrap leverage while we finish choir-in-choir locally:
 
 **Cogent's 3-Tier Hierarchy:**
-1. **Host** - The agent that calls cogent (e.g., E-Text AppAgent)
+1. **Host** - The user-facing appagent that owns canonical document state (for now, the future `vtext` appagent)
 2. **Supervisor** - LLM-driven orchestrator that claims work and delegates
 3. **Workers** - Including verifiers that check work before attestation
 
@@ -33,29 +33,29 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 - VM lifecycle management (vmctl)
 
 **Runtime Plane (Per-User MicroVM):**
-- One microVM per user with **full cogent system inside**
-- **Cogent Supervisor** - Claims work, delegates to workers
-- **Cogent Workers** - Terminal (bash), Researcher (web search via gateway), Verifiers
-- **AppAgents** - E-Text (orchestrates via cogent supervisor)
-- Database: **Dolt** (version-controlled work graph)
+- One microVM per user with choir runtime services and appagents
+- One `super` agent per microVM coordinates execution work and may fan out via coagent tools
+- Worker roles include researcher and verification-style helpers, with configurable researcher count from day one
+- **AppAgents** - `vtext` is the primary document appagent
+- Database direction: **DoltDB** for version-native document and work state
 
 **Client Plane (Browser):**
 - Web desktop UI (Svelte)
-- Shows cogent work progress inline in etext
-- Communicates via HTTP/WebSocket → Proxy → Sandbox → Cogent
+- Shows work progress inline in `vtext`
+- Communicates via HTTP/WebSocket → Proxy → Sandbox runtime
 
-### Agent Hierarchy (Cogent-Powered)
+### Agent Hierarchy (Current Direction)
 
-**Host (E-Text AppAgent)** - User-facing, owns document state, calls cogent  
-**Cogent Supervisor** - LLM-driven, claims ready work from work graph, delegates  
-**Cogent Workers** - Execute tasks, report results, may spawn coagents  
-**Verifiers** - Check work quality before attestation
+**`vtext` AppAgent** - User-facing, owns canonical document state and rewrites versions  
+**`super` Agent** - LLM-driven execution coordinator, delegates and may spawn coagents  
+**Workers** - Execute tasks, report results, may spawn coagents where allowed  
+**Verifiers** - Check work quality before attestation where verification matters
 
-**Key principle:** Cogent enables long-horizon work. User can say "build me an app" and come back tomorrow to find it done with full history.
+**Key principle:** the document is the living state of the work. Users and the `vtext` appagent are canonical editors; workers read and report but do not directly edit canonical text.
 
 ### MicroVM + Cogent Lifecycle
 
-- **Per-user microVM:** Contains full cogent system (supervisor, workers, Dolt DB)
+- **Per-user microVM:** Contains choir runtime, `super`, workers, and DoltDB-backed state
 - **Snapshot-based:** VMs load from snapshots (fast resume)
 - **Background forking:** For choir-in-choir, fork VM to build new app in background
 - **Dolt database:** Version-controlled work graph survives hibernation
@@ -70,7 +70,7 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 - Deploy pipeline to Node B (OVH)
 - Auth service with WebAuthn
 - Proxy/gateway/vmctl infrastructure
-- E-text app with versioned storage
+- Versioned document app (`vtext`, currently still named `etext` in code)
 - Firecracker microVM support
 
 ### Mission 4: Core Functionality ✓ COMPLETE
@@ -81,7 +81,7 @@ Cogent provides the **hierarchical multi-agent system** that enables "choir in c
 2. ✅ **Email-based auth migration** - Username dropped, email primary identifier
 3. ✅ **Multi-provider LLM gateway** - Fireworks, Z.AI, Bedrock routing with SSE streaming
 4. ✅ **Tool calling validation** - file_read tool working end-to-end
-5. ✅ **Choir-in-choir (minimal)** - Scheduler, spawn API, parent-child tasks, etext research button
+5. ✅ **Choir-in-choir (minimal)** - Scheduler, spawn API, parent-child tasks, early `etext`-based experimentation
 6. ✅ **All tests passing** - 127+ tests across 13 packages
 
 **Deployed to Node B:** Code is live but needs verification (see Mission 5)
@@ -255,21 +255,23 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 
 **Blockers:** None (just needs execution)
 
-### Mission 6: E-Text UX + Choir-in-Choir (PLANNED)
+### Mission 6: VText UX + Choir-in-Choir (PLANNED)
 **Goal:** Realize the full vision - single editor UX + background app building
 
-**E-Text Vision:**
+**VText Vision:**
 - Single responsive text editor, no sidebars
 - User prompt = Version 0
 - Agent creates Version 1, spawns workers
 - Workers message back, agent creates subsequent versions
 - Users "reprompt" by editing text inline anywhere
 - Citations, metadata integrated into text (not sidebar)
-- Show artifacts (images, videos) inline
+- Show artifacts (images, videos, audio, interactive elements) inline
+
+Note: current code still uses the historical `etext` name. Architecturally this app is now understood as `vtext`: a version-native, transclusion-capable living document rather than a generic text editor.
 
 **Choir-in-Choir:**
 - Fork microVM to build new apps in background
-- Stream progress/artifacts to etext
+- Stream progress/artifacts to vtext
 - Switch to new app when ready
 
 **Reference:** `~/choiros-rs/docs/archive/DESKTOP_ARCHITECTURE_DESIGN.md`
@@ -323,7 +325,7 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 | Decision | Date | Rationale |
 |----------|------|-----------|
 | Hard cutover for auth schema | 2026-04-12 | No real users yet, cleaner than migration |
-| Defer Dolt migration | Mission 4 | SQLite sufficient for now, Dolt in future |
+| Pull Dolt earlier for `vtext` | 2026-04-13 | Version-native document behavior is core to the product, not a late-stage migration |
 | Minimal choir-in-choir | Mission 4 | Full Conductor/Scheduler deferred to Mission 6+ |
 | UX rewrite as Mission 6 | 2026-04-12 | Current UX fundamentally wrong, needs full rewrite |
 | Passkeys with email | Mission 4 | WebAuthn preserved, just changed identifier |

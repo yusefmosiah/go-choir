@@ -34,11 +34,13 @@ func main() {
 	sandbox.RegisterTerminalRoutes(s, terminalHandler)
 
 	// Initialize the runtime engine with persisted state.
+	rtRuntimeCfg := runtime.LoadConfig()
 	rtCfg := runtime.Config{
 		SandboxID:           cfg.SandboxID,
 		StorePath:           cfg.StorePath,
-		ProviderTimeout:     runtime.LoadConfig().ProviderTimeout,
-		SupervisionInterval: runtime.LoadConfig().SupervisionInterval,
+		ProviderTimeout:     rtRuntimeCfg.ProviderTimeout,
+		SupervisionInterval: rtRuntimeCfg.SupervisionInterval,
+		ResearcherCount:     rtRuntimeCfg.ResearcherCount,
 	}
 	if rtCfg.StorePath == "" {
 		rtCfg.StorePath = runtime.DefaultStorePath
@@ -98,20 +100,23 @@ func main() {
 	// Build runtime options based on configuration.
 	var rtOpts []runtime.RuntimeOption
 
-	// If the environment requests tool support, configure the tool registry
-	// with built-in tools. The registry starts empty but is ready for tool
-	// registration by future features (e-text appagent, terminal, files, etc.).
-	if os.Getenv("RUNTIME_ENABLE_TOOLS") != "" {
-		registry := runtime.NewToolRegistry()
-		if registry.Size() > 0 {
-			rtOpts = append(rtOpts, runtime.WithToolRegistry(registry))
-			log.Printf("sandbox: tool registry enabled with %d tools", registry.Size())
-		} else {
-			log.Printf("sandbox: RUNTIME_ENABLE_TOOLS set but no tools registered yet")
-		}
-	}
-
 	rt := runtime.New(rtCfg, db, bus, rtProvider, rtOpts...)
+	if os.Getenv("RUNTIME_ENABLE_TOOLS") != "" {
+		toolCWD := os.Getenv("RUNTIME_TOOL_CWD")
+		if err := rt.InstallDefaultAgentTools(toolCWD); err != nil {
+			log.Fatalf("sandbox: install default agent tools: %v", err)
+		}
+		superTools := 0
+		if registry := rt.ToolRegistryForProfile(runtime.AgentProfileSuper); registry != nil {
+			superTools = registry.Size()
+		}
+		log.Printf("sandbox: tool profiles enabled (conductor=%d super=%d researcher=%d vtext=%d)",
+			sizeOfRegistry(rt.ToolRegistryForProfile(runtime.AgentProfileConductor)),
+			superTools,
+			sizeOfRegistry(rt.ToolRegistryForProfile(runtime.AgentProfileResearcher)),
+			sizeOfRegistry(rt.ToolRegistryForProfile(runtime.AgentProfileVText)),
+		)
+	}
 
 	// Register runtime API routes (overrides default /health).
 	apiHandler := runtime.NewAPIHandler(rt)
@@ -120,6 +125,7 @@ func main() {
 	// Start the runtime engine and supervisor.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	log.Printf("sandbox: orchestration topology (super=1, researchers=%d)", rtCfg.ResearcherCount)
 	rt.Start(ctx)
 
 	s.Start()
@@ -165,4 +171,11 @@ func loadProviderConfig() provider.ProviderConfig {
 	}
 
 	return cfg
+}
+
+func sizeOfRegistry(registry *runtime.ToolRegistry) int {
+	if registry == nil {
+		return 0
+	}
+	return registry.Size()
 }

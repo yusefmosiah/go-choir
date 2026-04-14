@@ -34,7 +34,7 @@
 
 **Note:** The current UX has fundamental issues that require a full rewrite:
 - Wrong desktop paradigm (top bar instead of desktop icons)
-- E-text has wrong UX (research button, sidebar)
+- The document app has the wrong UX (research button, sidebar-first flow)
 - Missing prompt bar (conductor)
 - Not responsive for mobile
 
@@ -42,7 +42,7 @@
 - Desktop icons on left rail
 - Floating windows
 - Prompt bar at bottom (conductor)
-- Simple e-text editor
+- Focused `vtext` document surface (current code still uses `etext`)
 - Responsive for mobile
 
 See: `docs/mission-6-desktop-ux-rewrite.md`
@@ -80,15 +80,15 @@ See: `docs/mission-6-desktop-ux-rewrite.md`
 
 **Validation:**
 - `curl https://draft.choir-ip.com/provider/v1/health` returns 200 with provider count
-- Submit etext prompt, receive streaming LLM response
+- Submit a document/conductor prompt, receive streaming LLM response
 
 ### Milestone 3: End-to-End Verification
 **Full flow test on production:**
 1. Register/login on draft.choir-ip.com
-2. Open etext, create document
+2. Open the document app (`etext` in current code, `vtext` architecturally), create document
 3. Type in prompt bar (conductor) - request research
 4. See worker spawn and complete
-5. Results appear in etext
+5. Results appear in the document app
 
 **Note:** UX will be clunky (research button, wrong desktop pattern) but functionality should work. Mission 6 will fix the UX.
 
@@ -134,7 +134,7 @@ Environment = [
 ## Success Criteria
 
 1. **Auth:** New user can register with email + passkey on draft.choir-ip.com
-2. **LLM:** Etext prompt produces streaming LLM response
+2. **LLM:** Document prompt produces streaming LLM response
 3. **Choir:** Research button spawns worker and returns results
 4. **UX:** Polish issues resolved through user testing
 5. **Docs:** Clear setup/runbook for operators

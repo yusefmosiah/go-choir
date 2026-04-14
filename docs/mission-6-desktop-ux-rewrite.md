@@ -11,7 +11,7 @@
 1. **Top bar with apps** - Wrong paradigm. Should be desktop icons.
 2. **"Bootstrap" accordion** - Confusing, should be automatic or eliminated.
 3. **No prompt bar** - The conductor input should be always visible at bottom.
-4. **E-text has research button + sidebar** - E-text should be a simple text editor.
+4. **`vtext` drifted into the wrong UX** - The document app should be a single primary editing surface, not a research-button-plus-sidebar UI.
 5. **Not responsive** - Doesn't adapt to mobile/tablet/desktop.
 
 ---
@@ -25,14 +25,14 @@
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ Floating Windows (draggable, resizable, overlapping)   │ │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │ │
-│  │  │ E-Text   │  │ Terminal│  │ Chat     │               │ │
+│  │  │ VText    │  │ Terminal│  │ Chat     │               │ │
 │  │  │ (drag)   │  │ (drag)  │  │ (drag)   │               │ │
 │  │  └──────────┘  └──────────┘  └──────────┘               │ │
 │  └────────────────────────────────────────────────────────┘ │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ Left Rail (Desktop Icons)                               │ │
-│  │  📄 E-Text                                               │ │
+│  │  📄 VText                                                │ │
 │  │  💻 Terminal                                             │ │
 │  │  💬 Chat                                                 │ │
 │  │  🌐 Browser                                              │ │
@@ -62,7 +62,7 @@
 - Collapsible on mobile (hamburger menu)
 
 **Apps (hardcoded for now):**
-- 📄 E-Text (text editor)
+- 📄 VText (versioned document)
 - 💻 Terminal (bash shell)
 - 💬 Chat (conductor chat interface)
 - 🌐 Browser (simple web view)
@@ -100,17 +100,18 @@
 - Minimized/maximized flags
 - App ID and instance ID
 
-### 4. E-Text - Simple Text Editor
+### 4. VText - Version-Native Document Surface
 **Files:** `frontend/src/lib/ETextSimple.svelte` (rewrite)
 
 **Features:**
-- Plain text editing (no rich text)
-- Line numbers (optional)
-- Save/load to backend
+- One large primary editing surface
+- Prompt bar input or blank document creates `v0`
+- User may make multiple local edits before explicitly creating the next version
+- Inline superscript citations and inline transclusions
 - No research button
 - No citations sidebar
-- No metadata panel
-- Just: text area + save button + filename input
+- No metadata panel as the primary UI
+- Current code/routes may still use `etext`; the architectural name is `vtext`
 
 **Simple API:**
 - `GET /app/etext/api/documents` - list
@@ -128,9 +129,12 @@
 4. Appagent opens appropriate window or updates existing
 5. User sees result in relevant app window
 
-**For now (simplified):**
-- Prompt bar opens Chat window with the message
-- Chat appagent handles routing/dispatch
+**Target behavior:**
+- Focus is not a routing hint for now. By default, prompt bar input opens a new `vtext` rather than assuming the focused window is the target
+- A blank `vtext` or prompt submission creates `v0`
+- Very simple prompts may resolve to lightweight UI responses such as a toast instead of opening a heavy workflow
+- `vtext` appagent responds promptly, may spawn workers, and rewrites the document into later versions
+- Conductor should eventually dispatch intelligently across subsystems, but browser/terminal launching is not the first target
 
 ---
 
@@ -148,7 +152,7 @@
 
 ### Mobile (<768px)
 - Left rail: hidden, hamburger menu button opens slide-out
-- Windows: single "focus" window, others minimized to bottom bar
+- Windows: same floating-window model as desktop, with tighter sizing constraints for smaller screens
 - Bottom bar: compact mode, prompt bar full width
 
 ---
@@ -162,11 +166,13 @@ export const windows = writable([]); // Array of window states
 export const activeWindow = writable(null); // ID of focused window
 export const minimizedWindows = writable([]); // IDs of minimized
 export const apps = writable([ // Available apps
-  { id: 'etext', name: 'E-Text', icon: '📄' },
+  { id: 'etext', name: 'VText', icon: '📄' },
   { id: 'terminal', name: 'Terminal', icon: '💻' },
   { id: 'chat', name: 'Chat', icon: '💬' },
 ]);
 ```
+
+Note: current runtime IDs still use `etext`. Product-facing naming should move toward `vtext`.
 
 ### Backend Sync
 - Window positions saved to backend periodically
@@ -181,7 +187,7 @@ export const apps = writable([ // Available apps
 - `frontend/src/lib/DesktopIcons.svelte` - Left rail
 - `frontend/src/lib/BottomBar.svelte` - Dock + prompt bar
 - `frontend/src/lib/FloatingWindow.svelte` - Window rewrite
-- `frontend/src/lib/ETextSimple.svelte` - Simple editor
+- `frontend/src/lib/ETextSimple.svelte` - Transitional document editor to evolve into `vtext`
 - `frontend/src/lib/PromptBar.svelte` - Conductor input
 - `frontend/src/lib/AppLauncher.svelte` - App launching logic
 
@@ -189,13 +195,14 @@ export const apps = writable([ // Available apps
 - `frontend/src/lib/Desktop.svelte` - Remove top bar, add new layout
 - `frontend/src/App.svelte` - Integrate prompt bar, remove bootstrap
 - `frontend/src/lib/Window.svelte` - Deprecate, use FloatingWindow
-- `frontend/src/lib/ETextEditor.svelte` - Deprecate, use ETextSimple
+- `frontend/src/lib/ETextEditor.svelte` - Deprecate, use ETextSimple / future `vtext`
 
 ### Delete/Deprecate:
 - Remove "bootstrap" accordion
 - Remove top app bar
-- Remove research button from etext
+- Remove research button from etext/vtext
 - Remove citations sidebar
+- Make ordinary textual files open in `vtext` for a unified desktop/file-browser workflow
 
 ---
 
@@ -208,7 +215,7 @@ POST   /api/desktop/state          - Save desktop state
 POST   /api/conductor/route        - Route prompt to appropriate appagent
 ```
 
-### Simplified E-Text API:
+### Transitional VText API:
 ```
 GET    /app/etext/api/documents              - List documents
 POST   /app/etext/api/documents              - Create new document
@@ -235,7 +242,7 @@ DELETE /app/etext/api/documents/:id          - Delete document
 1. ✅ No top bar - apps are desktop icons on left rail
 2. ✅ Bottom bar always visible with prompt bar
 3. ✅ Floating windows - draggable, resizable, minimizable
-4. ✅ E-text is simple text editor (no research, no sidebar)
+4. ✅ `vtext` is a focused versioned document surface (no research button, no sidebar-first UX)
 5. ✅ Responsive - works on mobile, tablet, desktop
 6. ✅ No "bootstrap" accordion - automatic or eliminated
 7. ✅ Minimized apps appear in bottom bar
@@ -244,8 +251,8 @@ DELETE /app/etext/api/documents/:id          - Delete document
 
 ## Notes
 
-- **E-text as control plane:** The user mentioned etext as a control plane for spawning agents. This can be a future feature - for now, keep etext simple. The conductor (prompt bar) is the primary control plane.
+- **`vtext` as canonical document surface:** The document app is where canonical versions live. The conductor is still the cross-app entry point, but prompt-bar requests should commonly route into `vtext`, where the `vtext` appagent can spawn workers and rewrite the document.
 
-- **MicroVM workers:** The terminal agent spawning researchers and coding agents in microVMs is backend architecture. The frontend just shows terminal windows. Keep frontend focused on window management.
+- **Worker authority:** workers may read the document and report findings/results/artifacts back, but they should not directly edit canonical `vtext` content.
 
 - **Reference screenshots:** Look at `/Users/wiz/choiros-rs/dioxus-desktop/` for UI patterns, but adapt to Svelte (not Dioxus).

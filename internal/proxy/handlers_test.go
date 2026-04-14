@@ -1713,6 +1713,55 @@ func TestUnknownAPIRouteReturns404ForAuthenticatedCaller(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedVTextRouteIsForwarded(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+
+	gotUser := ""
+	gotPath := ""
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/vtext/documents", func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-Authenticated-User")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"documents": []any{},
+		})
+	})
+	sandbox := httptest.NewServer(sandboxMux)
+	t.Cleanup(func() { sandbox.Close() })
+
+	cfg := &Config{
+		Port:              "0",
+		SandboxURL:        sandbox.URL,
+		AuthPublicKeyPath: "/unused/in/test",
+	}
+	h, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	accessToken := issueTestAccessJWT(priv, "user-authenticated")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/vtext/documents", nil)
+	req.AddCookie(&http.Cookie{Name: "choir_access", Value: accessToken})
+	w := httptest.NewRecorder()
+	h.HandleAPI(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	if gotUser != "user-authenticated" {
+		t.Fatalf("forwarded X-Authenticated-User: got %q, want %q", gotUser, "user-authenticated")
+	}
+	if gotPath != "/api/vtext/documents" {
+		t.Fatalf("forwarded path: got %q, want %q", gotPath, "/api/vtext/documents")
+	}
+}
+
 // TestSignedOutCallersNeverSeeSandboxData is a comprehensive test verifying
 // that no proxy response to a signed-out caller ever contains sandbox-origin
 // data (sandbox_id, bootstrap payloads, user context from the upstream).

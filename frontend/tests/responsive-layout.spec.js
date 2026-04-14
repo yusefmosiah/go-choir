@@ -54,9 +54,9 @@ test.describe('Desktop breakpoint (>1024px)', () => {
     const surface = page.locator('[data-desktop-surface]');
     await expect(surface).toBeVisible();
 
-    // 4 icons should be visible
+    // 5 icons should be visible
     const icons = surface.locator('[data-desktop-icon]');
-    await expect(icons).toHaveCount(4);
+    await expect(icons).toHaveCount(5);
 
     // Labels should be visible
     const filesLabel = surface.locator('[data-desktop-icon-label]').first();
@@ -137,7 +137,7 @@ test.describe('Tablet breakpoint (768-1024px)', () => {
 
     // Floating icons should still be visible with labels
     const icons = page.locator('[data-desktop-icon]');
-    await expect(icons).toHaveCount(4);
+    await expect(icons).toHaveCount(5);
   });
 
   // Bottom bar remains full height
@@ -190,7 +190,7 @@ test.describe('Mobile breakpoint (<768px)', () => {
 
     // Floating desktop icons should be visible
     const icons = page.locator('[data-desktop-icon]');
-    await expect(icons).toHaveCount(4);
+    await expect(icons).toHaveCount(5);
     await expect(icons.first()).toBeVisible();
 
     // Desktop surface spans full viewport width
@@ -278,7 +278,7 @@ test.describe('Mobile breakpoint (<768px)', () => {
 
     // Floating icons visible
     const icons = page.locator('[data-desktop-icon]');
-    await expect(icons).toHaveCount(4);
+    await expect(icons).toHaveCount(5);
 
     // No hamburger, no rail, no overlay
     await expect(page.locator('[data-hamburger-btn]')).toHaveCount(0);

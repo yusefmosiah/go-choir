@@ -9,33 +9,39 @@ import (
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-// Supervisor monitors runtime health and surfaces degraded/recovery signals
+// Super monitors runtime health and surfaces degraded/recovery signals
 // through observable surfaces (VAL-RUNTIME-009). It runs a periodic check
 // loop that detects problems, sets health state, and publishes recovery events.
-type Supervisor struct {
+type Super struct {
 	rt       *Runtime
 	interval time.Duration
 	done     chan struct{}
 }
 
-// NewSupervisor creates a supervisor for the given runtime.
-func NewSupervisor(rt *Runtime, interval time.Duration) *Supervisor {
-	return &Supervisor{
+// NewSuper creates a super for the given runtime.
+func NewSuper(rt *Runtime, interval time.Duration) *Super {
+	return &Super{
 		rt:       rt,
 		interval: interval,
 		done:     make(chan struct{}),
 	}
 }
 
-// Start begins the supervision loop in a background goroutine.
-func (sup *Supervisor) Start(ctx context.Context) {
-	go sup.loop(ctx)
-	log.Printf("supervisor: started (interval=%s)", sup.interval)
+// NewSupervisor is kept as a compatibility alias while the codebase
+// transitions to the shorter "super" naming.
+func NewSupervisor(rt *Runtime, interval time.Duration) *Super {
+	return NewSuper(rt, interval)
 }
 
-// Stop signals the supervisor to stop and waits for it to finish.
+// Start begins the supervision loop in a background goroutine.
+func (sup *Super) Start(ctx context.Context) {
+	go sup.loop(ctx)
+	log.Printf("super: started (interval=%s)", sup.interval)
+}
+
+// Stop signals the super to stop and waits for it to finish.
 // It is safe to call Stop multiple times.
-func (sup *Supervisor) Stop() {
+func (sup *Super) Stop() {
 	select {
 	case <-sup.done:
 		// Already stopped.
@@ -43,12 +49,12 @@ func (sup *Supervisor) Stop() {
 	default:
 		close(sup.done)
 	}
-	log.Printf("supervisor: stopped")
+	log.Printf("super: stopped")
 }
 
 // loop runs the periodic supervision check until context cancellation or
 // the done channel is closed.
-func (sup *Supervisor) loop(ctx context.Context) {
+func (sup *Super) loop(ctx context.Context) {
 	ticker := newTicker(sup.interval)
 	defer ticker.Stop()
 
@@ -66,20 +72,20 @@ func (sup *Supervisor) loop(ctx context.Context) {
 
 // checkAndRecover performs one supervision cycle. It assesses the runtime
 // health based on recent task outcomes and sets the health state accordingly.
-func (sup *Supervisor) checkAndRecover(ctx context.Context) {
+func (sup *Super) checkAndRecover(ctx context.Context) {
 	currentHealth := sup.rt.HealthState()
 
 	// Count recent task failures to assess runtime health.
 	tasks, err := sup.rt.Store().ListTasksByState(ctx, types.TaskFailed, 10)
 	if err != nil {
-		log.Printf("supervisor: query failed tasks: %v", err)
+		log.Printf("super: query failed tasks: %v", err)
 		sup.rt.SetHealth(types.HealthDegraded)
 		return
 	}
 
 	blocked, err := sup.rt.Store().ListTasksByState(ctx, types.TaskBlocked, 10)
 	if err != nil {
-		log.Printf("supervisor: query blocked tasks: %v", err)
+		log.Printf("super: query blocked tasks: %v", err)
 		sup.rt.SetHealth(types.HealthDegraded)
 		return
 	}
@@ -101,7 +107,7 @@ func (sup *Supervisor) checkAndRecover(ctx context.Context) {
 		prev := currentHealth
 		sup.rt.SetHealth(newHealth)
 
-		// Emit a supervisor recovery event when transitioning out of
+		// Emit a super recovery event when transitioning out of
 		// degraded/failed state (VAL-RUNTIME-009: recovery is externally
 		// visible).
 		if newHealth == types.HealthReady && (prev == types.HealthDegraded || prev == types.HealthFailed) {
@@ -110,7 +116,7 @@ func (sup *Supervisor) checkAndRecover(ctx context.Context) {
 				Actor:  events.ActorSupervisor,
 				Cause:  events.CauseSupervisorRecovery,
 			})
-			log.Printf("supervisor: recovery complete (%s → %s)", prev, newHealth)
+			log.Printf("super: recovery complete (%s → %s)", prev, newHealth)
 		}
 	}
 }
@@ -133,8 +139,8 @@ type realTicker struct {
 	t *time.Ticker
 }
 
-func (r *realTicker) C() <-chan time.Time    { return r.t.C }
-func (r *realTicker) Stop()                   { r.t.Stop() }
+func (r *realTicker) C() <-chan time.Time { return r.t.C }
+func (r *realTicker) Stop()               { r.t.Stop() }
 
 func newTicker(d time.Duration) ticker {
 	return &realTicker{t: time.NewTicker(d)}

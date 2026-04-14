@@ -5,7 +5,7 @@
   dispatches a "launchapp" event so the Desktop can create a new
   window for that application.
 
-  The launcher includes E-Text as the first real app (VAL-DESKTOP-002)
+  The launcher includes VText as the first real app (VAL-DESKTOP-002)
   and lists placeholder entries for future apps.
 
   Data attributes for test targeting:
@@ -13,7 +13,7 @@
     data-launcher-toggle   — button to open/close the launcher
     data-launcher-menu     — dropdown menu with app entries
     data-launcher-app      — individual app entry
-    data-launcher-app-etext — E-Text app entry specifically
+    data-launcher-app-vtext — VText app entry specifically
 -->
 <script>
   import { createEventDispatcher } from 'svelte';
@@ -25,7 +25,7 @@
 
   /** Registered apps available in the launcher. */
   const apps = [
-    { id: 'etext', name: 'E-Text', icon: '📝', description: 'Document editor' },
+    { id: 'vtext', name: 'VText', icon: '📝', description: 'Versioned document editor' },
     { id: 'terminal', name: 'Terminal', icon: '💻', description: 'Coming soon' },
     { id: 'files', name: 'Files', icon: '📁', description: 'Coming soon' },
     { id: 'mindgraph', name: 'Mind Graph', icon: '🕸️', description: 'Coming soon' },
@@ -71,12 +71,12 @@
             data-launcher-app
             data-app-id={app.id}
             on:click={() => launchApp(app)}
-            disabled={app.id !== 'etext'}
+            disabled={app.id === 'mindgraph'}
             title={app.description}
           >
             <span class="app-icon">{app.icon}</span>
             <span class="app-name">{app.name}</span>
-            {#if app.id !== 'etext'}
+            {#if app.id !== 'vtext'}
               <span class="app-badge">Soon</span>
             {/if}
           </button>

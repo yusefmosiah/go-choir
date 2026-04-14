@@ -13,7 +13,7 @@
  * Each window object has:
  *   { windowId, appId, title, icon, x, y, width, height, mode, zIndex, restoredGeometry, appContext }
  *
- * App registry defines the 4 hardcoded apps with their icons.
+ * App registry defines the hardcoded apps with their icons.
  */
 
 import { writable, derived } from 'svelte/store';
@@ -25,12 +25,12 @@ export const APP_REGISTRY = [
   { id: 'browser', name: 'Browser', icon: '🌐', description: 'Web Browser' },
   { id: 'terminal', name: 'Terminal', icon: '💻', description: 'Terminal' },
   { id: 'settings', name: 'Settings', icon: '⚙️', description: 'Settings' },
-  { id: 'etext', name: 'E-Text', icon: '📝', description: 'Document Editor' },
+  { id: 'vtext', name: 'VText', icon: '📝', description: 'Versioned document editor' },
 ];
 
 /** The main apps shown as floating desktop icons */
 export const DESKTOP_ICON_APPS = APP_REGISTRY.filter((app) =>
-  ['files', 'browser', 'terminal', 'settings'].includes(app.id)
+  ['files', 'browser', 'terminal', 'settings', 'vtext'].includes(app.id)
 );
 
 // ---- Window counter ----
@@ -47,6 +47,10 @@ const DEFAULT_VIEWPORT_HEIGHT = 800;
 function generateWindowId() {
   windowCounter++;
   return `win-${Date.now()}-${windowCounter}`;
+}
+
+function normalizeAppId(appId) {
+  return appId === 'etext' ? 'vtext' : appId;
 }
 
 function clamp(value, min, max) {
@@ -186,12 +190,15 @@ export const visibleWindows = derived(windows, ($windows) =>
 // ---- Store actions ----
 
 /**
- * Open an app window (single-instance per appId).
- * If the app is already open, focuses/restores it instead.
+ * Open an app window.
+ * Most apps are single-instance per appId. VText is multi-instance so
+ * prompt/file opens create fresh windows.
  */
-export function openApp(appId, appName, icon) {
+export function openApp(appId, appName, icon, appContext = {}) {
+  const normalizedAppId = normalizeAppId(appId);
   windows.update(($windows) => {
-    const existing = $windows.find((w) => w.appId === appId && w.mode !== 'closed');
+    const allowMultiple = appContext.allowMultiple === true || normalizedAppId === 'vtext';
+    const existing = !allowMultiple ? $windows.find((w) => w.appId === normalizedAppId && w.mode !== 'closed') : null;
     if (existing) {
       // Focus existing window
       activeWindowId.set(existing.windowId);
@@ -217,8 +224,8 @@ export function openApp(appId, appName, icon) {
     const geometry = getNewWindowGeometry(openCount);
     const newWindow = {
       windowId,
-      appId,
-      title: appName || appId,
+      appId: normalizedAppId,
+      title: appContext.windowTitle || appName || appId,
       icon: icon || '📱',
       x: geometry.x,
       y: geometry.y,
@@ -227,7 +234,7 @@ export function openApp(appId, appName, icon) {
       mode: 'normal',
       zIndex: getNextZIndex(),
       restoredGeometry: null,
-      appContext: {},
+      appContext: { ...appContext },
     };
 
     activeWindowId.set(windowId);

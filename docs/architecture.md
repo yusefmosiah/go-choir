@@ -324,9 +324,11 @@ func (c *Conductor) Route(ctx context.Context, msg InboundMessage) (RouteDecisio
 **Routing logic**:
 1. Conductor receives a normalized `InboundMessage` (the proxy service or channel adapters deliver it)
 2. Inspects the message content and metadata to determine the target app
-3. For explicit app-targeted messages (e.g., user typed in the e-text prompt bar), routes directly
-4. For ambiguous messages (e.g., an email that could be handled by multiple apps), uses an LLM call via the gateway to classify
-5. Returns a `RouteDecision` — the sandbox's app router invokes the appagent's `HandleUserAction`
+3. For explicit app-targeted messages, routes directly
+4. For generic prompt-bar input, focus is not a routing hint. The default local behavior is to open a new `vtext` unless the conductor has a better explicit route
+5. For ambiguous messages (e.g., an email that could be handled by multiple apps), uses an LLM call via the gateway to classify
+6. Very lightweight prompts may resolve to a tiny UI action such as a toast rather than opening a heavier app workflow
+7. Returns a `RouteDecision` — the sandbox's app router invokes the appagent's `HandleUserAction`
 
 **Multi-channel input flow**:
 ```
@@ -1162,14 +1164,14 @@ User (via Svelte UI → Caddy → proxy → sandbox) ──┐
                                                    ├──→ E-Text Canonical State (Dolt, in sandbox) ──→ Version N+1
 AppAgent (goroutine within sandbox) ──────────────┘
 
-Workers ──→ Messages/Proposals ──→ AppAgent ──→ E-Text Canonical State ──→ Version N+1
+Workers ──→ Messages/Results ──→ AppAgent ──→ E-Text Canonical State ──→ Version N+1
 ```
 
-1. **User edits**: User modifies content in the Svelte editor. The edit goes via Caddy → proxy → sandbox JSON API → Dolt commit with user as author. Canonical. No agent involvement required.
+1. **User edits**: User may make multiple edits in the Svelte editor before explicitly prompting. That batch of changes becomes the next canonical user-authored version when the user submits.
 
 2. **AppAgent edits**: AppAgent processes a user prompt, decides on changes, writes to Dolt within the sandbox. Canonical. Equivalent authority to user edits.
 
-3. **Worker proposals**: Workers cannot commit directly. They send structured messages/proposals to the appagent via `MessageAgent`. The appagent reviews and applies (or rejects) the proposal.
+3. **Worker messages**: Workers cannot commit directly. They send structured messages/results to the appagent via `MessageAgent`. The appagent reviews them and decides whether and how to rewrite the canonical document.
 
 **Concurrency model (v1)**: Single-user, serialized writes on the `main` branch. The user and the appagent take turns — there is no concurrent editing. Real-time collaborative editing (CRDT/OT) and branch-based isolation for concurrent user+agent edits are deferred.
 
@@ -1187,7 +1189,7 @@ Full request path: `Browser → Caddy → proxy service → sandbox → /app/{ap
 
 All endpoints return JSON. The Svelte SPA handles all rendering client-side.
 
-Example for e-text:
+Example for `vtext` (current code/routes still use `etext`):
 ```
 GET    /app/etext/api/documents                    → list documents (JSON)
 POST   /app/etext/api/documents                    → create document (JSON)
@@ -1202,17 +1204,27 @@ GET    /app/etext/api/documents/{id}/blame         → blame (who edited what, J
 
 ---
 
-## 5. E-Text App (Reference Implementation)
+## 5. VText App (Reference Implementation)
 
 ### 5.1 Overview
 
-The e-text app (formerly "writer") is the first and primary app. It demonstrates the full app model: Dolt-backed versioned storage, canonical editing by users and appagent, worker proposals, and a rich JSON API. The app logic and Dolt database run **inside the sandbox binary**. The editor UI is built with **Svelte** and uses **Pretext** (`@chenglou/pretext`) for high-performance text measurement and layout without DOM reflow — Pretext runs in the browser as part of the Svelte SPA.
+The primary document app is **`vtext`** (current code still uses the historical `etext` name in routes and types). It is a version-native living document system, not a chat pane and not a sidebar-heavy editor. The core UI is one primary editable document surface. User prompts, user edits, and appagent rewrites all materialize as document versions.
+
+`vtext` demonstrates the full app model: Dolt-backed versioned storage, canonical editing by users and appagent, worker delegation through messages, and a rich JSON API. The app logic and Dolt database run **inside the sandbox binary**.
+
+The editor UI is built with **Svelte** and uses **Pretext** (`@chenglou/pretext`) for custom layout in the browser. Pretext matters here not just for text measurement, but for document-native rendering features such as:
+- inline superscript citation markers
+- click-to-expand inline transclusions
+- transcluded blocks that can render at a narrower measure than the main prose
+- embedded non-text artifacts such as images, audio, video, and interactive elements
+
+The important rule is that the document remains the primary organizing surface. Citations, transclusions, and artifacts appear inline in the flow of the document, not as the primary UI in sidebars or marginalia panes.
 
 ### 5.2 Dolt-Backed Versioned Storage
 
 Dolt runs **in-process inside the sandbox binary** via the embedded driver. Each sandbox VM has its own Dolt database.
 
-**Storage location**: Within the sandbox VM filesystem, e.g., `/data/etext/.dolt/` — one Dolt database per sandbox (per user).
+**Storage location**: Within the sandbox VM filesystem, e.g., `/data/vtext/.dolt/` — one Dolt database per sandbox (per user). Current bootstrap code may still use `etext`-named paths; the architectural target is `vtext`.
 
 **Connection** (embedded mode):
 
@@ -1344,13 +1356,15 @@ func (s *ETextStore) SaveAppAgentEdit(ctx context.Context, req AgentEditRequest)
 
 ### 5.4 AppAgent Behavior
 
-The e-text appagent runs as a goroutine within the sandbox and is the **sole agent-side canonical writer**. It:
+The `vtext` appagent runs as a goroutine within the sandbox and is the **sole agent-side canonical writer**. It:
 
 1. Receives user prompts via `HandleUserAction` (request arrived via Caddy → proxy → sandbox)
 2. Plans what changes are needed (LLM call via gateway service over vsock)
-3. Optionally delegates research/analysis to workers (goroutines within the sandbox)
-4. Applies changes to Dolt (creating a new commit as the appagent author)
+3. Optionally delegates research/analysis/execution to workers (goroutines within the sandbox)
+4. Rewrites the document into a new version when appropriate, creating a new Dolt commit as the appagent author
 5. Publishes events so the Svelte UI updates in real-time (events flow: sandbox → proxy → browser via SSE/WebSocket)
+
+`vtext` is not a request/response chat surface. The appagent owns the cumulative document state for an ongoing process or project. Prompts and edits are interpreted as changes against the current version, not as isolated conversational turns.
 
 ```go
 type ETextAppAgent struct {
@@ -1410,36 +1424,45 @@ func (a *ETextAppAgent) handlePrompt(ctx context.Context, payload any) (ActionRe
 
 ### 5.5 Worker Interaction Model
 
-Workers **propose** changes. They run as goroutines within the sandbox and cannot commit to Dolt directly.
+Workers run as goroutines within the sandbox and cannot commit to Dolt directly. They may read canonical `vtext` state if exposed as a read-only resource, but they never directly edit the document.
+
+The intended first-cut topology is:
+- one `super` agent per microVM, responsible for execution orchestration
+- a configurable number of researcher workers per microVM
+- additional coagents only when spawned intentionally by `super` or another allowed worker
 
 ```go
 // Worker tool: message_appagent
-// Workers use this to send proposals to the appagent (within the sandbox process).
-type EditProposal struct {
-    DocID       string `json:"doc_id"`
-    SectionID   string `json:"section_id"`
-    ProposedBody string `json:"proposed_body"`
-    Rationale    string `json:"rationale"`
-    Citations    []CitationRef `json:"citations,omitempty"`
+// Workers send findings, results, questions, and artifact references to the
+// appagent. The appagent decides whether and how to rewrite the document.
+type WorkerMessage struct {
+    DocID         string       `json:"doc_id"`
+    MessageType   string       `json:"message_type"` // "finding" | "result" | "question" | "artifact" | "error" | "status"
+    Summary       string       `json:"summary"`
+    Body          string       `json:"body,omitempty"`
+    ArtifactRefs  []ArtifactRef `json:"artifact_refs,omitempty"`
+    RelatedRange  string       `json:"related_range,omitempty"`
 }
 ```
 
-The worker sends an `EditProposal` message to the appagent via Go channel (in-process). The appagent receives it, evaluates it (possibly with an LLM call via gateway), and either:
-- **Accepts**: applies the edit as an appagent commit
-- **Rejects**: discards the proposal
-- **Modifies**: applies a modified version
+The worker sends a structured message to the appagent via Go channel (in-process). The appagent receives it, evaluates it (possibly with an LLM call via gateway), and may:
+- incorporate it into a new appagent-authored document version
+- hold it as context for a later rewrite
+- ignore/reject it
+
+Workers do not send canonical diffs as their primary contract. They send findings and artifacts; the appagent decides how those affect the document.
 
 ### 5.6 User Interaction Model
 
-Users interact with e-text through the Svelte SPA (browser → Caddy → proxy → sandbox):
+Users interact with `vtext` through the Svelte SPA (browser → Caddy → proxy → sandbox):
 
-1. **Direct editing**: User types in the Svelte-based editor (using Pretext for text measurement/layout in the browser) → content goes via Caddy → proxy → sandbox JSON API → Dolt commit with user author. No agent involvement. Canonical.
-
-2. **Prompting**: User submits a natural language prompt → Caddy → proxy → sandbox → appagent processes it → appagent edits Dolt. User sees changes in real-time via SSE/WebSocket (sandbox → proxy → browser).
-
-3. **Version history**: User browses commit history (Dolt log), views diffs between versions, reverts to previous versions. All via standard Dolt SQL queries exposed through the sandbox's JSON API, proxied to the browser.
-
-4. **Blame**: User can see who (user or agent) last edited each section, via `dolt_blame_content`.
+1. **Blank document or prompt bar input creates the first version**. A new `vtext` starts at `v0`, seeded by the user prompt or initial user-authored content.
+2. **Direct editing is local until the user prompts**: the user may make multiple edits anywhere in the document before pressing the prompt/action button. That edit batch becomes the next canonical user-authored version.
+3. **User edits also inform the appagent**: when the user submits after editing, the appagent should receive structured edit/diff context describing the batch of changes and any accompanying instruction.
+4. **Prompting**: User submits a natural language prompt through the prompt bar or within `vtext` → conductor routes to `vtext` appagent by default unless there is a better explicit route → appagent processes it, may delegate, and rewrites the document into a new version. User sees changes in real-time via SSE/WebSocket (sandbox → proxy → browser).
+5. **Version history**: User browses commit history (Dolt log), views diffs between versions, and reverts to previous versions.
+6. **Transclusion and citation UX**: citations and transcluded artifacts are rendered inline in the document flow, not as the primary representation in sidebars.
+7. **Desktop/file-browser unity**: ordinary textual files should open in `vtext` so the file browser and the document workflow converge rather than splitting into separate editing surfaces.
 
 ### 5.7 API Surface
 
