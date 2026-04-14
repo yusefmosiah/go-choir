@@ -8,10 +8,10 @@
  * - VAL-RESP-004: Desktop — multiple windows visible simultaneously
  * - VAL-RESP-005: Tablet — windows floating with max-width constraint
  * - VAL-RESP-006: Mobile — floating icons remain visible
- * - VAL-RESP-007: Mobile — single focus window mode (one at a time)
- * - VAL-RESP-008: Mobile — window is full width, non-draggable
+ * - VAL-RESP-007: Mobile — multiple windows remain available simultaneously
+ * - VAL-RESP-008: Mobile — window remains floating and resizable
  * - VAL-RESP-009: Mobile — prompt bar full width with >=44px touch target
- * - VAL-RESP-010: Mobile — closing window returns to empty desktop
+ * - VAL-RESP-010: Mobile — minimizing preserves window state via bottom bar
  * - VAL-RESP-011: No horizontal overflow at any breakpoint
  * - VAL-RESP-012: Breakpoint transition is smooth (no layout flash)
  * - VAL-RESP-013: Mobile — consistent desktop experience
@@ -199,79 +199,63 @@ test.describe('Mobile breakpoint (<768px)', () => {
     expect(surfaceWidth).toBeGreaterThanOrEqual(375);
   });
 
-  // VAL-RESP-007: Mobile — single focus window mode (one at a time)
-  test('single focus window mode — only one window visible', async ({ page, authenticator }) => {
+  // VAL-RESP-007: Mobile — multiple windows remain available simultaneously
+  test('multiple windows can remain open on mobile', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
-    // Open Files via double-click
     await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
-    await expect(page.locator('[data-window]')).toHaveCount(1);
-
-    // On mobile, the full-width window covers the desktop icons, preventing
-    // direct double-click on another icon. Minimize (close on mobile) the
-    // first window, then open the second to verify single-focus mode.
-    // On mobile, minimizing a window actually closes it (see Desktop.svelte
-    // handleWindowMinimize which calls closeWindow on mobile).
-    await page.locator('[data-window-minimize]').first().click();
-    await page.waitForTimeout(200);
-    await expect(page.locator('[data-window]')).toHaveCount(0);
-
-    // Now open Browser
     await openAppViaIcon(page, 'browser');
     await page.waitForTimeout(300);
 
-    // Should have exactly 1 visible window (the browser)
-    const visibleWindows = page.locator('[data-window]:visible');
-    await expect(visibleWindows).toHaveCount(1);
+    const windows = page.locator('[data-window]');
+    await expect(windows).toHaveCount(2);
+    await expect(windows.nth(0)).toBeVisible();
+    await expect(windows.nth(1)).toBeVisible();
   });
 
-  // VAL-RESP-010: Mobile — closing window returns to empty desktop
-  test('closing window returns to empty desktop', async ({ page, authenticator }) => {
+  // VAL-RESP-010: Mobile — minimizing preserves window state via bottom bar
+  test('minimizing on mobile preserves the window and exposes a restore target', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
-    // Open an app
     await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
-    await expect(page.locator('[data-window]')).toHaveCount(1);
+    const windowEl = page.locator('[data-window]').first();
+    await expect(windowEl).toBeVisible();
 
-    // Close it
-    await page.locator('[data-window-close]').first().click();
+    await page.locator('[data-window-minimize]').first().click();
     await page.waitForTimeout(200);
 
-    // No windows visible
-    await expect(page.locator('[data-window]')).toHaveCount(0);
+    await expect(windowEl).not.toBeVisible();
 
-    // Bottom bar should still be visible
-    const bottomBar = page.locator('[data-bottom-bar]');
-    await expect(bottomBar).toBeVisible();
+    const indicator = page.locator('[data-minimized-indicator]');
+    await expect(indicator).toHaveCount(1);
+    await expect(indicator.first()).toBeVisible();
 
-    // Floating icons should still be visible
-    const icons = page.locator('[data-desktop-icon]');
-    await expect(icons.first()).toBeVisible();
+    await indicator.first().click();
+    await page.waitForTimeout(200);
+    await expect(windowEl).toBeVisible();
   });
 
-  // VAL-RESP-008: Mobile — window is full width, non-draggable
-  test('window is full width and non-draggable', async ({ page, authenticator }) => {
+  // VAL-RESP-008: Mobile — window remains floating and resizable
+  test('window remains floating and resizable on mobile', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
-    // Open an app
     await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
 
     const windowEl = page.locator('[data-window]').first();
     await expect(windowEl).toBeVisible();
 
-    // Window should be full width
     const winBox = await windowEl.boundingBox();
-    expect(winBox.width).toBeGreaterThanOrEqual(375);
+    expect(winBox.width).toBeLessThan(375);
+    expect(winBox.x).toBeGreaterThan(0);
 
-    // No resize handle should be present in mobile mode
     const resizeHandle = windowEl.locator('[data-resize-handle]');
-    await expect(resizeHandle).toHaveCount(0);
+    await expect(resizeHandle).toHaveCount(1);
   });
 
   // VAL-RESP-009: Mobile — prompt bar full width with >=44px touch target
@@ -288,7 +272,7 @@ test.describe('Mobile breakpoint (<768px)', () => {
   });
 
   // VAL-RESP-013: Mobile — consistent desktop experience
-  test('consistent desktop experience — tap icon opens app in focus mode', async ({ page, authenticator }) => {
+  test('consistent desktop experience — mobile uses the same floating window model', async ({ page, authenticator }) => {
     const email = uniqueEmail();
     await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
 
@@ -301,12 +285,14 @@ test.describe('Mobile breakpoint (<768px)', () => {
     await expect(page.locator('[data-desktop-rail]')).toHaveCount(0);
     await expect(page.locator('[data-rail-backdrop]')).toHaveCount(0);
 
-    // Double-tap icon to open app
     await openAppViaIcon(page, 'files');
     await page.waitForTimeout(300);
 
-    // Window should open in focus mode
-    await expect(page.locator('[data-window]')).toHaveCount(1);
+    const windowEl = page.locator('[data-window]').first();
+    await expect(windowEl).toBeVisible();
+    await expect(windowEl.locator('[data-window-minimize]')).toBeVisible();
+    await expect(windowEl.locator('[data-window-maximize]')).toBeVisible();
+    await expect(windowEl.locator('[data-window-close]')).toBeVisible();
   });
 });
 

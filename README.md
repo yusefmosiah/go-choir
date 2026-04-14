@@ -10,8 +10,8 @@ Browser --> Caddy (TLS, static assets, Svelte SPA)
              |-- /api/*       --> proxy    (8082)
              |-- /provider/*  --> gateway  (8084)
 
-vmctl (8083) -- manages Firecracker VM lifecycle (stub)
-sandbox (8085) -- placeholder host service for Milestone 1 (will move into Firecracker microVMs)
+vmctl (8083) -- manages VM ownership and lifecycle, using host-process fallback locally and Firecracker on Linux/KVM hosts
+sandbox (8085) -- host-process runtime fallback for local development; target runtime moves into per-user microVMs
 ```
 
 **Five services:**
@@ -20,7 +20,7 @@ sandbox (8085) -- placeholder host service for Milestone 1 (will move into Firec
 |-----------|------|------|
 | auth      | 8081 | Email/password registration + login, JWT access + refresh token sessions, SQLite persistence |
 | proxy     | 8082 | Auth-gated HTTP and WebSocket proxying to the sandbox, user-context injection |
-| vmctl     | 8083 | Firecracker API socket management, VM lifecycle (stub) |
+| vmctl     | 8083 | VM ownership + lifecycle control, host-process fallback locally, Firecracker lifecycle on supported hosts |
 | gateway   | 8084 | Multi-provider LLM gateway (Fireworks, Z.AI, Bedrock) with SSE streaming |
 | sandbox   | 8085 | Placeholder shell bootstrap and WebSocket echo surface for Milestone 1 |
 
@@ -37,7 +37,7 @@ Delivered features (10):
 1. **Floating desktop icons** -- Freely-draggable app icons on the desktop surface with emoji + labels, position persistence, double-click to launch, Show Desktop button to minimize all windows.
 2. **Bottom bar** -- Fixed bottom bar with prompt input, minimized window indicators, user info, logout, and live connection status.
 3. **Floating windows** -- Simplified resize (bottom-right handle only), cascade positioning, active highlight, z-index management, minimize/maximize/restore.
-4. **Responsive layout** -- Desktop/tablet/mobile breakpoints. Same floating icons at all sizes. Single-focus window mode on mobile. Full-width non-draggable windows on mobile.
+4. **Responsive layout** -- Desktop/tablet/mobile breakpoints. Same floating desktop/window model at all sizes, with tighter default geometry on smaller screens.
 5. **File browser backend** -- CRUD API endpoints (`/api/files`) with path traversal protection.
 6. **File browser frontend** -- Component with breadcrumb navigation, folder creation, inline delete, file download.
 7. **Browser app** -- iframe-based web browsing with URL bar, back/forward/reload navigation, graceful error handling for blocked iframes.
@@ -79,7 +79,9 @@ AUTH_PORT=8081 AUTH_RP_ID="localhost" AUTH_RP_ORIGINS="http://localhost:4173" \
   AUTH_ACCESS_TOKEN_TTL="5m" AUTH_REFRESH_TOKEN_TTL="720h" AUTH_COOKIE_SECURE="false" \
   go run ./cmd/auth
 
-PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" go run ./cmd/proxy
+VMCTL_PORT=8083 VMCTL_SANDBOX_URL_BASE="http://127.0.0.1:8085" VMCTL_IDLE_TIMEOUT="30m" go run ./cmd/vmctl
+
+PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" PROXY_VMCTL_URL="http://127.0.0.1:8083" go run ./cmd/proxy
 
 GATEWAY_PORT=8084 \
   FIREWORKS_API_KEY="your-key" ZAI_API_KEY="your-key" BEDROCK_ACCESS_KEY="your-key" BEDROCK_SECRET_KEY="your-key" BEDROCK_REGION="us-east-1" \
@@ -118,7 +120,7 @@ Target: `https://draft.choir-ip.com`
 cmd/
   auth/         Auth service entry point
   proxy/        Proxy service entry point
-  vmctl/        VM controller entry point (stub)
+  vmctl/        VM controller entry point
   gateway/      LLM gateway entry point (Fireworks, Z.AI, Bedrock, SSE streaming)
   sandbox/      Sandbox entry point
 internal/
@@ -130,7 +132,7 @@ internal/
   runtime/      Agent runtime (stub)
   store/        Persistence layer (stub)
   types/        Core domain types (stub)
-  vmmanager/    Firecracker VM management (stub)
+  vmmanager/    Firecracker VM management
 frontend/       Svelte SPA: email auth UI, desktop shell, e-text editor, choir-in-choir controls
   tests/        Playwright e2e tests (auth flows, shell, rehydration, logout, re-login)
 nix/

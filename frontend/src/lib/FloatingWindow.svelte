@@ -40,7 +40,6 @@
   export let zIndex = 1;
   export let active = false;
   export let restoredGeometry = null;
-  export let isMobile = false;
 
   // Suppress unused-export warnings — props used by parent for persistence
   $: _appId = appId;
@@ -56,6 +55,8 @@
   let dragging = false;
   let dragOffsetX = 0;
   let dragOffsetY = 0;
+  let dragPointerId = null;
+  let dragPointerTarget = null;
 
   // ---- Resize state ----
   let resizing = false;
@@ -63,6 +64,28 @@
   let resizeStartY = 0;
   let resizeStartWidth = 0;
   let resizeStartHeight = 0;
+  let resizePointerId = null;
+  let resizePointerTarget = null;
+
+  function trySetPointerCapture(target, pointerId) {
+    if (!target?.setPointerCapture || pointerId == null) return;
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      // Some browsers reject capture for synthetic or already-lost pointers.
+    }
+  }
+
+  function tryReleasePointerCapture(target, pointerId) {
+    if (!target?.releasePointerCapture || pointerId == null) return;
+    try {
+      if (!target.hasPointerCapture || target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Ignore capture-release errors during teardown.
+    }
+  }
 
   // ---- Window control handlers ----
 
@@ -93,14 +116,16 @@
   // ---- Drag handlers (title bar only) ----
 
   function handleDragStart(event) {
-    if (event.button !== 0) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (event.target.closest('button')) return;
     if (mode === 'maximized') return;
-    if (isMobile) return;
 
     dragging = true;
     dragOffsetX = event.clientX - x;
     dragOffsetY = event.clientY - y;
+    dragPointerId = event.pointerId;
+    dragPointerTarget = event.currentTarget;
+    trySetPointerCapture(dragPointerTarget, dragPointerId);
 
     handleFocusWindow();
     event.preventDefault();
@@ -108,26 +133,35 @@
 
   function handleDragMove(event) {
     if (!dragging) return;
+    if (dragPointerId != null && event.pointerId !== dragPointerId) return;
     const newX = event.clientX - dragOffsetX;
     const newY = event.clientY - dragOffsetY;
     dispatch('move', { windowId, x: newX, y: newY });
   }
 
-  function handleDragEnd() {
+  function handleDragEnd(event) {
+    if (!dragging) return;
+    if (dragPointerId != null && event?.pointerId != null && event.pointerId !== dragPointerId) return;
+    tryReleasePointerCapture(dragPointerTarget, dragPointerId);
     dragging = false;
+    dragPointerId = null;
+    dragPointerTarget = null;
   }
 
   // ---- Resize handler (bottom-right handle only) ----
 
   function handleResizeStart(event) {
     if (mode !== 'normal') return;
-    if (event.button !== 0) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
 
     resizing = true;
     resizeStartX = event.clientX;
     resizeStartY = event.clientY;
     resizeStartWidth = width;
     resizeStartHeight = height;
+    resizePointerId = event.pointerId;
+    resizePointerTarget = event.currentTarget;
+    trySetPointerCapture(resizePointerTarget, resizePointerId);
 
     handleFocusWindow();
     event.preventDefault();
@@ -136,6 +170,7 @@
 
   function handleResizeMove(event) {
     if (!resizing) return;
+    if (resizePointerId != null && event.pointerId !== resizePointerId) return;
 
     const dx = event.clientX - resizeStartX;
     const dy = event.clientY - resizeStartY;
@@ -146,24 +181,33 @@
     dispatch('resize', { windowId, x, y, width: newWidth, height: newHeight });
   }
 
-  function handleResizeEnd() {
+  function handleResizeEnd(event) {
+    if (!resizing) return;
+    if (resizePointerId != null && event?.pointerId != null && event.pointerId !== resizePointerId) return;
+    tryReleasePointerCapture(resizePointerTarget, resizePointerId);
     resizing = false;
+    resizePointerId = null;
+    resizePointerTarget = null;
   }
 
-  // ---- Global mouse event wiring ----
+  // ---- Global pointer event wiring ----
 
   onMount(() => {
-    window.addEventListener('mousemove', handleDragMove);
-    window.addEventListener('mouseup', handleDragEnd);
-    window.addEventListener('mousemove', handleResizeMove);
-    window.addEventListener('mouseup', handleResizeEnd);
+    window.addEventListener('pointermove', handleDragMove);
+    window.addEventListener('pointerup', handleDragEnd);
+    window.addEventListener('pointermove', handleResizeMove);
+    window.addEventListener('pointerup', handleResizeEnd);
+    window.addEventListener('pointercancel', handleDragEnd);
+    window.addEventListener('pointercancel', handleResizeEnd);
   });
 
   onDestroy(() => {
-    window.removeEventListener('mousemove', handleDragMove);
-    window.removeEventListener('mouseup', handleDragEnd);
-    window.removeEventListener('mousemove', handleResizeMove);
-    window.removeEventListener('mouseup', handleResizeEnd);
+    window.removeEventListener('pointermove', handleDragMove);
+    window.removeEventListener('pointerup', handleDragEnd);
+    window.removeEventListener('pointermove', handleResizeMove);
+    window.removeEventListener('pointerup', handleResizeEnd);
+    window.removeEventListener('pointercancel', handleDragEnd);
+    window.removeEventListener('pointercancel', handleResizeEnd);
   });
 
   // ---- Computed styles ----
@@ -172,31 +216,27 @@
     ? 'left:0; top:0; width:100%; height:calc(100%);'
     : mode === 'minimized'
     ? 'display:none;'
-    : isMobile
-    ? 'left:0; top:0; width:100%; height:calc(100%);'
     : `left:${x}px; top:${y}px; width:${width}px; height:${height}px;`;
 
   $: maxRestoreIcon = mode === 'maximized' ? '❐' : '☐';
   $: maxRestoreTitle = mode === 'maximized' ? 'Restore' : 'Maximize';
-
-  // Only show resize handle in normal mode AND not on mobile
-  $: showResizeHandle = mode === 'normal' && !isMobile;
+  $: showResizeHandle = mode === 'normal';
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
-  class="window {active ? 'window-active' : ''} {isMobile ? 'window-mobile' : ''}"
+  class="window {active ? 'window-active' : ''}"
   style="{windowStyle} z-index: {zIndex};"
   data-window
   data-window-id={windowId}
-  on:mousedown={handleFocusWindow}
+  on:pointerdown={handleFocusWindow}
 >
   <!-- Title bar -->
   <div
     class="titlebar"
     data-window-titlebar
-    on:mousedown={handleDragStart}
+    on:pointerdown={handleDragStart}
   >
     <span class="title-text">{title}</span>
     <div class="window-controls">
@@ -234,7 +274,7 @@
     <div
       class="resize-handle resize-se"
       data-resize-handle
-      on:mousedown|stopPropagation={handleResizeStart}
+      on:pointerdown|stopPropagation={handleResizeStart}
     ></div>
   {/if}
 </div>
@@ -251,6 +291,8 @@
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
     transition: box-shadow 0.15s, border-color 0.15s;
     user-select: none;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 72px);
   }
 
   .window-active {
@@ -268,8 +310,9 @@
     min-height: 36px;
     background: #181825;
     border-bottom: 1px solid #2a2a3a;
-    cursor: default;
+    cursor: grab;
     flex-shrink: 0;
+    touch-action: none;
   }
 
   .title-text {
@@ -319,6 +362,7 @@
     flex: 1;
     overflow: auto;
     position: relative;
+    min-height: 0;
   }
 
   /* ---- Resize handle: bottom-right corner only ---- */
@@ -333,6 +377,7 @@
     width: 16px;
     height: 16px;
     cursor: se-resize;
+    touch-action: none;
   }
 
   /* Subtle visual indicator for the resize handle */
@@ -347,46 +392,31 @@
     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
   }
 
-  /* Mobile: window is full-width, no drag, no resize, no border-radius */
-  :global(.window-mobile) {
-    border-radius: 0 !important;
-    width: 100% !important;
-    left: 0 !important;
-    top: 0 !important;
-  }
-
-  :global(.window-mobile .titlebar) {
-    cursor: default;
-  }
-
-  /* Tablet: max-width constraint so windows don't exceed viewport */
   @media (max-width: 1024px) and (min-width: 769px) {
     .window {
-      max-width: calc(100vw - 56px - 20px);
+      max-width: calc(100vw - 32px);
     }
   }
 
-  /* Mobile: full-width window styling via CSS media query (backup for JS class) */
   @media (max-width: 768px) {
     .window {
-      max-width: 100vw;
-      width: 100% !important;
-      left: 0 !important;
-      top: 0 !important;
-      border-radius: 0;
-      box-shadow: none;
-      border: none;
-      border-top: 1px solid #2a2a3a;
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 64px);
     }
 
-    .window-active {
-      border-color: transparent;
-      box-shadow: none;
-      border-top: 1px solid #3b82f6;
+    .titlebar {
+      height: 40px;
+      min-height: 40px;
     }
 
-    .window .titlebar {
-      cursor: default;
+    .ctrl-btn {
+      width: 32px;
+      height: 32px;
+    }
+
+    .resize-se {
+      width: 20px;
+      height: 20px;
     }
   }
 </style>

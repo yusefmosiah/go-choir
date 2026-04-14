@@ -24,7 +24,8 @@ function uniqueEmail() {
 }
 
 // Helper: register a passkey and get to the authenticated desktop.
-async function registerAndLoadDesktop(page, authenticator, email) {
+async function registerAndLoadDesktop(page, authenticator, email, viewportSize = { width: 1280, height: 720 }) {
+  await page.setViewportSize(viewportSize);
   await page.goto(BASE_URL);
   await registerPasskey(page, email, BASE_URL);
   await page.reload();
@@ -264,6 +265,29 @@ test('floating window drag via title bar only', async ({ page, authenticator }) 
 
   // Window should still be visible
   await expect(windowEl).toBeVisible();
+});
+
+// ---------------------------------------------------------------
+// Test: floating window drag via touch on mobile-sized viewport
+// ---------------------------------------------------------------
+test('floating window can be dragged on mobile-sized screens', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email, { width: 375, height: 812 });
+
+  await openAppViaIcon(page, 'files');
+  const windowEl = page.locator('[data-window]').first();
+  await expect(windowEl).toBeVisible({ timeout: 5000 });
+
+  const before = await windowEl.boundingBox();
+  const titlebar = windowEl.locator('[data-window-titlebar]');
+  await titlebar.dragTo(page.locator('[data-desktop-windows]'), {
+    sourcePosition: { x: 48, y: 20 },
+    targetPosition: { x: 220, y: 180 },
+  });
+
+  const after = await windowEl.boundingBox();
+  expect(after.x).toBeGreaterThan(before.x + 25);
+  expect(after.y).toBeGreaterThan(before.y + 25);
 });
 
 // ---------------------------------------------------------------

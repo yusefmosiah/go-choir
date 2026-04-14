@@ -9,7 +9,7 @@
   Responsive layout across three breakpoints:
     - Desktop (>1024px): full floating icons with labels, floating draggable windows
     - Tablet (768-1024px): floating icons, windows with max-width constraint
-    - Mobile (<768px): floating icons, single focus window mode (one at a time, full width)
+    - Mobile (<768px): same floating desktop/window model with tighter geometry
 
   Data attributes for test targeting:
     data-desktop             — root desktop container
@@ -46,11 +46,7 @@
     moveWindow,
     resizeWindow,
     setWindows,
-    hideWindow,
-    showWindow,
     setIconPositions,
-    getDefaultIconPositions,
-    toggleShowDesktop,
   } from './stores/desktop.js';
 
   export let currentUser = null;
@@ -75,13 +71,6 @@
   let stateLoaded = false;
   let saveTimer = null;
   const SAVE_DEBOUNCE_MS = 500;
-
-  // ---- Responsive state ----
-  let isMobile = false;
-
-  function updateViewport() {
-    isMobile = window.innerWidth < 768;
-  }
 
   // ---- Desktop state persistence ----
 
@@ -277,50 +266,11 @@
   // ---- Event handlers ----
 
   function handleLaunchApp(event) {
-    if (isMobile) {
-      // Mobile single-focus mode: hide all other visible windows first
-      let currentWins;
-      windows.subscribe((w) => { currentWins = w; })();
-      const existing = currentWins.find(
-        (w) => w.appId === event.detail.appId && w.mode !== 'closed' && w.mode !== 'hidden'
-      );
-      if (existing) {
-        if (existing.mode === 'hidden') {
-          // Show the hidden window, hide any other visible ones
-          currentWins.forEach((w) => {
-            if (w.windowId !== existing.windowId && w.mode !== 'closed' && w.mode !== 'hidden') {
-              hideWindow(w.windowId);
-            }
-          });
-          showWindow(existing.windowId);
-        } else {
-          // Already visible, just focus it
-          focusWindow(existing.windowId);
-        }
-      } else {
-        // Hide all visible windows, then open the new one
-        currentWins.forEach((w) => {
-          if (w.mode !== 'closed' && w.mode !== 'hidden') hideWindow(w.windowId);
-        });
-        openApp(event.detail.appId, event.detail.appName, event.detail.icon);
-      }
-    } else {
-      openApp(event.detail.appId, event.detail.appName, event.detail.icon);
-    }
+    openApp(event.detail.appId, event.detail.appName, event.detail.icon);
   }
 
   function handleWindowClose(event) {
-    if (isMobile) {
-      // On mobile, closing the last visible window returns to empty desktop
-      // Also close any hidden windows to clean up state
-      let currentWins;
-      windows.subscribe((w) => { currentWins = w; })();
-      currentWins.forEach((w) => {
-        if (w.mode !== 'closed') closeWindow(w.windowId);
-      });
-    } else {
-      closeWindow(event.detail.windowId);
-    }
+    closeWindow(event.detail.windowId);
     scheduleSave();
   }
 
@@ -330,12 +280,7 @@
   }
 
   function handleWindowMinimize(event) {
-    if (isMobile) {
-      // On mobile, minimizing closes the window (returns to empty desktop)
-      closeWindow(event.detail.windowId);
-    } else {
-      minimizeWindow(event.detail.windowId);
-    }
+    minimizeWindow(event.detail.windowId);
     scheduleSave();
   }
 
@@ -350,13 +295,11 @@
   }
 
   function handleWindowMove(event) {
-    if (isMobile) return; // No moving on mobile
     moveWindow(event.detail.windowId, event.detail.x, event.detail.y);
     scheduleSave();
   }
 
   function handleWindowResize(event) {
-    if (isMobile) return; // No resizing on mobile
     resizeWindow(
       event.detail.windowId,
       event.detail.x,
@@ -387,9 +330,6 @@
   // ---- Lifecycle ----
 
   onMount(() => {
-    updateViewport();
-    window.addEventListener('resize', updateViewport);
-
     fetchBootstrap();
     connectLiveChannel();
     loadDesktopState();
@@ -407,7 +347,6 @@
   });
 
   onDestroy(() => {
-    window.removeEventListener('resize', updateViewport);
     wsClosedByLogout = true;
     if (ws) {
       ws.close();
@@ -442,7 +381,6 @@
             zIndex={win.zIndex}
             active={win.windowId === $activeWindowId}
             restoredGeometry={win.restoredGeometry}
-            isMobile={isMobile}
             on:close={handleWindowClose}
             on:focus={handleWindowFocus}
             on:minimize={handleWindowMinimize}
