@@ -88,6 +88,7 @@ jobs:
             echo "==> Pulling latest code"
             git fetch origin
             git reset --hard origin/main
+            git clean -ffdX
 
             systemctl reset-failed nixos-rebuild-switch-to-configuration.service 2>/dev/null || true
 
