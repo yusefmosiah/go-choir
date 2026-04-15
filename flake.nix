@@ -34,6 +34,8 @@
             (baseNameOf path == "go.sum");
         };
         vendorHash = "sha256-7sTVRCu7SWElqse4g82ERcaJAeWd9EAKmgAdmRa7Ezw=";
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.icu ];
         doCheck = false; # Tests run separately in CI
       };
 
