@@ -558,7 +558,12 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	// task completion aligned with document-version availability.
 	rt.handleTaskCompletion(ctx, rec)
 
-	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
+	// Use a background context for post-provider persistence so that a fast
+	// shutdown or cancellation after the provider returns cannot drop the
+	// completed-task transition or parent notification.
+	persistCtx := context.Background()
+
+	if err := rt.store.UpdateTask(persistCtx, *rec); err != nil {
 		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
 		return
 	}
@@ -567,13 +572,13 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 		"input_tokens":  usage.InputTokens,
 		"output_tokens": usage.OutputTokens,
 	})
-	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+	rt.emitEvent(persistCtx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
 	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskCompleted, rec.Result, "")
+	rt.updateWorkItemState(persistCtx, rec.TaskID, types.TaskCompleted, rec.Result, "")
 
 	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
-	rt.notifyParent(ctx, rec)
+	rt.notifyParent(persistCtx, rec)
 
 }
 
@@ -605,18 +610,23 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	// task completion aligned with document-version availability.
 	rt.handleTaskCompletion(ctx, rec)
 
-	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
+	// Use a background context for post-provider persistence so that a fast
+	// shutdown or cancellation after the provider returns cannot drop the
+	// completed-task transition or parent notification.
+	persistCtx := context.Background()
+
+	if err := rt.store.UpdateTask(persistCtx, *rec); err != nil {
 		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
 		return
 	}
 	resultLenPayload, _ := json.Marshal(map[string]int{"result_length": len(result)})
-	rt.emitEvent(ctx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+	rt.emitEvent(persistCtx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
 	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskCompleted, rec.Result, "")
+	rt.updateWorkItemState(persistCtx, rec.TaskID, types.TaskCompleted, rec.Result, "")
 
 	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
-	rt.notifyParent(ctx, rec)
+	rt.notifyParent(persistCtx, rec)
 
 }
 

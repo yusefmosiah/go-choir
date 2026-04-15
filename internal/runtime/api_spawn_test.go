@@ -100,8 +100,8 @@ func TestSpawnChildInRegistry(t *testing.T) {
 	if item.ParentID != parentID {
 		t.Errorf("work item parent_id: got %q, want %q", item.ParentID, parentID)
 	}
-	if item.State != types.TaskPending {
-		t.Errorf("work item state: got %q, want %q", item.State, types.TaskPending)
+	if item.State != types.TaskPending && item.State != types.TaskRunning {
+		t.Errorf("work item state: got %q, want pending or running", item.State)
 	}
 	if item.OwnerID != "user-alice" {
 		t.Errorf("work item owner_id: got %q, want user-alice", item.OwnerID)

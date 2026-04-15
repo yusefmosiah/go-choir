@@ -249,40 +249,59 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 		t.Errorf("input_tokens: got %v, want 130", fetched.Metadata["input_tokens"])
 	}
 
-	// Verify tool events were emitted and persisted.
-	evts, err := s.ListEvents(context.Background(), rec.TaskID, 100)
-	if err != nil {
-		t.Fatalf("list events: %v", err)
-	}
+	// Verify tool events were emitted and persisted. The task state can become
+	// visible a moment before the final event query observes the completed-event
+	// row, so poll briefly instead of assuming a single read is enough.
+	var (
+		evts          []types.EventRecord
+		toolInvoked   bool
+		toolResult    bool
+		taskCompleted bool
+	)
 
-	var toolInvoked, toolResult, taskCompleted bool
-	for _, ev := range evts {
-		switch ev.Kind {
-		case types.EventToolInvoked:
-			toolInvoked = true
-			// Verify the payload contains the tool name.
-			var payload map[string]string
-			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-				t.Errorf("unmarshal tool.invoked payload: %v", err)
-			} else if payload["tool"] != "file_read" {
-				t.Errorf("tool.invoked tool: got %q, want file_read", payload["tool"])
-			}
-		case types.EventToolResult:
-			toolResult = true
-			var payload map[string]any
-			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-				t.Errorf("unmarshal tool.result payload: %v", err)
-			} else {
-				if payload["tool"] != "file_read" {
-					t.Errorf("tool.result tool: got %v, want file_read", payload["tool"])
-				}
-				if isError, _ := payload["is_error"].(bool); isError {
-					t.Error("tool.result should not be an error")
-				}
-			}
-		case types.EventTaskCompleted:
-			taskCompleted = true
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		evts, err = s.ListEvents(context.Background(), rec.TaskID, 100)
+		if err != nil {
+			t.Fatalf("list events: %v", err)
 		}
+
+		toolInvoked = false
+		toolResult = false
+		taskCompleted = false
+		for _, ev := range evts {
+			switch ev.Kind {
+			case types.EventToolInvoked:
+				toolInvoked = true
+				// Verify the payload contains the tool name.
+				var payload map[string]string
+				if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+					t.Errorf("unmarshal tool.invoked payload: %v", err)
+				} else if payload["tool"] != "file_read" {
+					t.Errorf("tool.invoked tool: got %q, want file_read", payload["tool"])
+				}
+			case types.EventToolResult:
+				toolResult = true
+				var payload map[string]any
+				if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+					t.Errorf("unmarshal tool.result payload: %v", err)
+				} else {
+					if payload["tool"] != "file_read" {
+						t.Errorf("tool.result tool: got %v, want file_read", payload["tool"])
+					}
+					if isError, _ := payload["is_error"].(bool); isError {
+						t.Error("tool.result should not be an error")
+					}
+				}
+			case types.EventTaskCompleted:
+				taskCompleted = true
+			}
+		}
+
+		if toolInvoked && toolResult && taskCompleted {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	if !toolInvoked {

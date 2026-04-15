@@ -145,18 +145,35 @@ func openVTextWorkspaceDB(path string) (*sql.DB, string, error) {
 		"file://%s?commitname=Choir&commitemail=system@choir.local&database=vtext&multistatements=true",
 		workspacePath,
 	)
-	dbCfg, err := embedded.ParseDSN(dbDSN)
-	if err != nil {
-		return nil, "", fmt.Errorf("vtext workspace: parse database dsn: %w", err)
+
+	var lastErr error
+	for attempt := range 8 {
+		dbCfg, err := embedded.ParseDSN(dbDSN)
+		if err != nil {
+			return nil, "", fmt.Errorf("vtext workspace: parse database dsn: %w", err)
+		}
+		dbConnector, err := embedded.NewConnector(dbCfg)
+		if err != nil {
+			lastErr = fmt.Errorf("vtext workspace: new database connector: %w", err)
+		} else {
+			db := sql.OpenDB(dbConnector)
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+			if pingErr := db.Ping(); pingErr == nil {
+				return db, workspacePath, nil
+			} else {
+				lastErr = fmt.Errorf("vtext workspace: ping database: %w", pingErr)
+			}
+			_ = db.Close()
+		}
+
+		if !strings.Contains(strings.ToLower(lastErr.Error()), "non 0 lock") {
+			break
+		}
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
 	}
-	dbConnector, err := embedded.NewConnector(dbCfg)
-	if err != nil {
-		return nil, "", fmt.Errorf("vtext workspace: new database connector: %w", err)
-	}
-	db := sql.OpenDB(dbConnector)
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	return db, workspacePath, nil
+
+	return nil, "", lastErr
 }
 
 func (s *Store) vtextHandle() *sql.DB {

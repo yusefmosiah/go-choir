@@ -65,7 +65,7 @@ func failureIsolationSetup(t *testing.T, provider Provider) (*Runtime, *APIHandl
 	})
 
 	// Create a parent task that stays running for the duration of the test.
-	parentRec, err := rt.SubmitTask(context.Background(), "parent task for failure isolation tests", "user-alice")
+	parentRec, err := rt.SubmitTask(context.Background(), "parent task for isolation tests", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}

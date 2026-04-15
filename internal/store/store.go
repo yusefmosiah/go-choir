@@ -175,7 +175,16 @@ func (s *Store) bootstrap() error {
 func (s *Store) Close() error {
 	var err error
 	if s.vtextDB != nil {
-		err = s.vtextDB.Close()
+		func() {
+			defer func() {
+				if r := recover(); r != nil && err == nil {
+					err = fmt.Errorf("close vtext workspace: %v", r)
+				}
+			}()
+			if closeErr := s.vtextDB.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}()
 	}
 	if s.db != nil {
 		// Checkpoint WAL before closing.
