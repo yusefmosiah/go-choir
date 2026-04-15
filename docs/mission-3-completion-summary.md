@@ -55,7 +55,7 @@
 
 ### Functionality - LLM/MAS (Priority 3)
 - **Not end-to-end tested** - tool calling loop not verified with real providers
-- **Multi-agent spawning** - etext app should spawn researchers and coding agents
+- **Multi-agent spawning** - vtext app should spawn researchers and coding agents
 - **Provider streaming** - SSE response streaming not fully validated
 - **Error handling** - LLM failure modes not robustly handled
 
@@ -69,7 +69,7 @@
 
 ## Mission 4 Priorities (Per User Direction)
 
-**Philosophy:** Core functionality and security first. Then build "choir in choir" - using the etext app as a control plane to spawn researchers and coding agents to build more features concurrently in microVMs.
+**Philosophy:** Core functionality and security first. Then build "choir in choir" - using the vtext app as a control plane to spawn researchers and coding agents to build more features concurrently in microVMs.
 
 ### Priority 1: Fix Auth
 1. Debug login failure (registration works, login doesn't)
@@ -80,7 +80,7 @@
 ### Priority 2: Core MAS Functionality
 1. End-to-end test LLM tool calling with real providers (Bedrock/Z.AI)
 2. Verify SSE streaming works through proxy → runtime → provider
-3. Implement agent spawning from etext app
+3. Implement agent spawning from vtext app
 4. Add proper error handling and retries
 
 ### Priority 3: Security Hardening

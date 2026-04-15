@@ -1,17 +1,23 @@
 <!--
-  VTextEditor — minimal versioned document surface for go-choir.
+  VTextEditor — focused version-native document surface for go-choir.
 
-  This is the first-cut VText UI:
-    - one large editable text area
-    - no sidebar-first layout
-    - footer prompt/version action only
-    - accepts appContext for blank prompts or file-backed documents
-    - speaks the vtext API directly
+  The window should feel like the document itself:
+    - the text area fills almost the entire window
+    - floating controls handle prompt/apply and version navigation
+    - prompt/apply creates a user revision, then invokes the vtext appagent
 -->
 <script>
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { AuthRequiredError, fetchWithRenewal } from './auth.js';
-  import { createDocument, getDocument, getRevision, createRevision } from './vtext.js';
+  import {
+    createDocument,
+    getDocument,
+    getRevision,
+    createRevision,
+    listRevisions,
+    submitAgentRevision,
+    getAgentRevisionStatus,
+  } from './vtext.js';
 
   export let currentUser = null;
   export let appContext = {};
@@ -19,11 +25,13 @@
   const dispatch = createEventDispatcher();
 
   let loading = true;
-  let saving = false;
+  let prompting = false;
   let error = '';
   let saveStatus = '';
   let currentDoc = null;
   let currentRevision = null;
+  let revisions = [];
+  let activeRevisionIndex = -1;
   let editorValue = '';
   let initializedKey = '';
 
@@ -60,12 +68,129 @@
     return '/api/files/' + sourcePath.split('/').map(encodeURIComponent).join('/');
   }
 
+  function sortRevisionsChronologically(items) {
+    return [...items].sort((left, right) => {
+      return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+    });
+  }
+
+  function buildRevisionMetadata() {
+    return {
+      source_path: appContext.sourcePath || '',
+      seed_prompt: appContext.seedPrompt || '',
+      conductor_task_id: appContext.conductorTaskId || '',
+    };
+  }
+
+  async function refreshRevisions(docId, preferredRevisionId = '') {
+    const listed = await listRevisions(docId);
+    const ordered = sortRevisionsChronologically(listed.revisions || []);
+    revisions = ordered;
+
+    if (ordered.length === 0) {
+      activeRevisionIndex = -1;
+      currentRevision = null;
+      return;
+    }
+
+    let nextIndex = ordered.length - 1;
+    if (preferredRevisionId) {
+      const found = ordered.findIndex((rev) => rev.revision_id === preferredRevisionId);
+      if (found >= 0) {
+        nextIndex = found;
+      }
+    }
+
+    await loadRevisionAt(nextIndex);
+  }
+
+  async function loadRevisionAt(index) {
+    if (index < 0 || index >= revisions.length) return;
+    const summary = revisions[index];
+    const revision = await getRevision(summary.revision_id);
+    currentRevision = revision;
+    activeRevisionIndex = index;
+    editorValue = revision.content || '';
+  }
+
+  async function writeThroughToFile(content) {
+    if (!appContext.sourcePath) return;
+    const filePath = buildFilePath(appContext.sourcePath);
+    const fileRes = await fetchWithRenewal(filePath, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: content,
+    });
+    if (!fileRes.ok) {
+      const body = await fileRes.json().catch(() => ({}));
+      throw new Error(body.error || `File save failed (${fileRes.status})`);
+    }
+  }
+
+  async function reloadDocument(preferredRevisionId = '') {
+    currentDoc = await getDocument(currentDoc.doc_id);
+    await refreshRevisions(currentDoc.doc_id, preferredRevisionId);
+  }
+
+  async function saveUserVersion() {
+    const revision = await createRevision(currentDoc.doc_id, {
+      content: editorValue,
+      authorKind: 'user',
+      authorLabel: getAuthorLabel(),
+      metadata: buildRevisionMetadata(),
+      parentRevisionId: currentRevision?.revision_id || '',
+    });
+
+    await reloadDocument(revision.revision_id);
+    return revision;
+  }
+
+  function buildAgentPrompt() {
+    const parts = [];
+
+    if (appContext.seedPrompt?.trim()) {
+      parts.push(`Original user request:\n${appContext.seedPrompt.trim()}`);
+    }
+
+    if (appContext.sourcePath) {
+      parts.push(`This is a file-backed document from ${appContext.sourcePath}. Preserve the file's structure and return the complete revised contents.`);
+    }
+
+    parts.push(
+      'Revise the current document into the next complete version. Treat the latest document text as canonical. Incorporate any inline instructions, corrections, TODOs, edits, or meta-prompts that the user has added. Output only the complete revised document.'
+    );
+
+    return parts.join('\n\n');
+  }
+
+  async function pollAgentRevision(taskId) {
+    for (;;) {
+      const status = await getAgentRevisionStatus(taskId);
+      if (status.state === 'completed') {
+        await reloadDocument();
+        if (appContext.sourcePath) {
+          await writeThroughToFile(editorValue);
+        }
+        saveStatus = 'Agent created next version';
+        return;
+      }
+      if (status.state === 'failed' || status.state === 'blocked' || status.state === 'cancelled') {
+        throw new Error(status.error || `Agent revision ${status.state}`);
+      }
+      saveStatus = 'Prompting…';
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+  }
+
   async function loadContext() {
     loading = true;
+    prompting = false;
     error = '';
     saveStatus = '';
     currentDoc = null;
     currentRevision = null;
+    revisions = [];
+    activeRevisionIndex = -1;
     editorValue = '';
 
     try {
@@ -73,36 +198,31 @@
 
       if (appContext.docId) {
         currentDoc = await getDocument(appContext.docId);
-        if (currentDoc.current_revision_id) {
-          currentRevision = await getRevision(currentDoc.current_revision_id);
-          editorValue = currentRevision.content || '';
-        } else {
+        await refreshRevisions(currentDoc.doc_id);
+        if (revisions.length === 0) {
           editorValue = initialValue || '';
+          saveStatus = initialValue ? 'Loaded document content' : 'Blank document ready';
+        } else {
+          saveStatus = 'Document loaded';
         }
-        saveStatus = 'Document loaded';
       } else {
-        const title = normalizeTitle(appContext);
-        currentDoc = await createDocument(title);
+        currentDoc = await createDocument(normalizeTitle(appContext));
         editorValue = initialValue || '';
+
         if (appContext.createInitialVersion && initialValue) {
-          currentRevision = await createRevision(currentDoc.doc_id, {
+          const initialRevision = await createRevision(currentDoc.doc_id, {
             content: initialValue,
             authorKind: 'user',
             authorLabel: getAuthorLabel(),
             metadata: {
-              source_path: appContext.sourcePath || '',
-              seed_prompt: appContext.seedPrompt || '',
+              ...buildRevisionMetadata(),
               created_from: 'conductor',
-              conductor_task_id: appContext.conductorTaskId || '',
             },
           });
-          currentDoc = await getDocument(currentDoc.doc_id);
+          await reloadDocument(initialRevision.revision_id);
           saveStatus = 'Created v0';
         } else {
-          currentRevision = null;
-          saveStatus = initialValue
-            ? 'Loaded document content'
-            : 'Blank document ready';
+          saveStatus = initialValue ? 'Loaded document content' : 'Blank document ready';
         }
       }
     } catch (err) {
@@ -116,50 +236,49 @@
     }
   }
 
-  async function handleVersion() {
-    if (!currentDoc) return;
-    saving = true;
+  async function handlePrompt() {
+    if (!currentDoc || loading || prompting) return;
+
+    prompting = true;
     error = '';
-    saveStatus = '';
+    saveStatus = 'Saving user version…';
 
     try {
-      if (appContext.sourcePath) {
-        const filePath = buildFilePath(appContext.sourcePath);
-        const fileRes = await fetchWithRenewal(filePath, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body: editorValue,
-        });
-        if (!fileRes.ok) {
-          const body = await fileRes.json().catch(() => ({}));
-          throw new Error(body.error || `File save failed (${fileRes.status})`);
-        }
-      }
+      await writeThroughToFile(editorValue);
+      await saveUserVersion();
+      saveStatus = 'Submitting to vtext agent…';
 
-      const metadata = {
-        source_path: appContext.sourcePath || '',
-        seed_prompt: appContext.seedPrompt || '',
-      };
-
-      const revision = await createRevision(currentDoc.doc_id, {
-        content: editorValue,
-        authorKind: 'user',
-        authorLabel: getAuthorLabel(),
-        metadata,
-      });
-
-      currentRevision = revision;
-      currentDoc = await getDocument(currentDoc.doc_id);
-      saveStatus = 'Version saved';
+      const submitted = await submitAgentRevision(currentDoc.doc_id, buildAgentPrompt());
+      await pollAgentRevision(submitted.task_id);
     } catch (err) {
       if (err instanceof AuthRequiredError) {
         dispatch('authexpired');
         return;
       }
-      error = err.message || 'Failed to save version';
-      saveStatus = 'Save failed';
+      error = err.message || 'Failed to prompt VText';
+      saveStatus = 'Prompt failed';
     } finally {
-      saving = false;
+      prompting = false;
+    }
+  }
+
+  async function handlePrevVersion() {
+    if (activeRevisionIndex <= 0 || prompting) return;
+    error = '';
+    saveStatus = '';
+    await loadRevisionAt(activeRevisionIndex - 1);
+    saveStatus = `Viewing v${activeRevisionIndex}`;
+  }
+
+  async function handleNextVersion() {
+    if (activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1 || prompting) return;
+    error = '';
+    saveStatus = '';
+    await loadRevisionAt(activeRevisionIndex + 1);
+    if (activeRevisionIndex === revisions.length - 1) {
+      saveStatus = 'Viewing latest version';
+    } else {
+      saveStatus = `Viewing v${activeRevisionIndex}`;
     }
   }
 
@@ -169,15 +288,64 @@
     loadContext();
   }
 
+  $: isViewingHistorical = revisions.length > 0 && activeRevisionIndex !== revisions.length - 1;
+  $: versionLabel = activeRevisionIndex >= 0 ? `v${activeRevisionIndex}` : 'v0';
+
   onMount(() => {
     if (!initializedKey) {
       initializedKey = contextKey;
       loadContext();
     }
   });
+
+  onDestroy(() => {
+    // No-op for now; polling is awaited inline rather than held by interval state.
+  });
 </script>
 
-<div class="vtext-editor" data-vtext-editor data-etext-editor>
+<div class="vtext-editor" data-vtext-editor>
+  <textarea
+    class="editor"
+    data-vtext-editor-area
+    bind:value={editorValue}
+    placeholder="Start typing the document..."
+    disabled={loading}
+    readonly={isViewingHistorical || prompting}
+    spellcheck="true"
+  ></textarea>
+
+  <div class="nav-float">
+    <span class="nav-version" data-vtext-version>{versionLabel}</span>
+    <button
+      class="nav-btn"
+      data-vtext-prev
+      aria-label="Older version"
+      on:click={handlePrevVersion}
+      disabled={loading || prompting || activeRevisionIndex <= 0}
+    >
+      &lt;
+    </button>
+    <button
+      class="nav-btn"
+      data-vtext-next
+      aria-label="Newer version"
+      on:click={handleNextVersion}
+      disabled={loading || prompting || activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1}
+    >
+      &gt;
+    </button>
+  </div>
+
+  <button
+    class="prompt-btn"
+    data-vtext-prompt
+    data-vtext-save
+    on:click={handlePrompt}
+    disabled={loading || prompting || isViewingHistorical}
+  >
+    {prompting ? 'Prompting…' : 'Prompt'}
+  </button>
+
   {#if error}
     <div class="notice notice-error">{error}</div>
   {/if}
@@ -186,153 +354,161 @@
     <div class="notice notice-loading">Loading VText…</div>
   {/if}
 
-  <div class="header">
-    <div class="title-row">
-      <h3 class="title" data-vtext-title data-etext-title>{normalizeTitle(appContext)}</h3>
-      {#if appContext.sourcePath}
-        <span class="source-path">{appContext.sourcePath}</span>
-      {/if}
-    </div>
-    <div class="version-row">
-      <span class="version-label">Current version</span>
-      <span class="version-id">{currentRevision?.revision_id ? currentRevision.revision_id.slice(0, 8) : 'v0'}</span>
-      {#if saveStatus}
-        <span class="save-status" data-vtext-save-status data-etext-save-status>{saveStatus}</span>
-      {/if}
-    </div>
-  </div>
-
-  <textarea
-    class="editor"
-    data-vtext-editor-area data-etext-editor-area
-    bind:value={editorValue}
-    placeholder="Start typing the document..."
-    disabled={loading}
-  ></textarea>
-
-  <div class="footer">
-    <div class="footer-copy">
-      <span class="footer-label">Prompt/apply creates the next version. Multiple edits before that count as one version.</span>
-    </div>
-    <button
-      class="version-btn"
-      data-vtext-save data-etext-save
-      on:click={handleVersion}
-      disabled={loading || saving}
-    >
-      {saving ? 'Saving…' : 'Prompt / Version'}
-    </button>
-  </div>
+  <div class="sr-only" aria-live="polite" data-vtext-save-status>{saveStatus}</div>
 </div>
 
 <style>
   .vtext-editor {
-    display: flex;
-    flex-direction: column;
+    position: relative;
     height: 100%;
     min-height: 0;
-    gap: 0.75rem;
-    color: #e7e7ef;
-  }
-
-  .notice {
-    padding: 0.55rem 0.75rem;
-    border-radius: 10px;
-    font-size: 0.84rem;
-  }
-
-  .notice-error {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.25);
-    color: #fca5a5;
-  }
-
-  .notice-loading {
-    color: #9ca3af;
-  }
-
-  .header {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    min-height: 0;
-  }
-
-  .title-row,
-  .version-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 1.05rem;
-    font-weight: 650;
-    color: #fff;
-  }
-
-  .source-path,
-  .version-label,
-  .version-id,
-  .save-status,
-  .footer-label {
-    font-size: 0.78rem;
-    color: #a7a7bb;
-  }
-
-  .version-id {
-    color: #d9d9ee;
-    background: rgba(255, 255, 255, 0.06);
-    padding: 0.2rem 0.45rem;
-    border-radius: 999px;
+    color: #eef2ff;
+    background:
+      radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 30%),
+      rgba(9, 10, 16, 0.98);
   }
 
   .editor {
-    flex: 1;
-    min-height: 0;
     width: 100%;
+    height: 100%;
     resize: none;
-    border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(11, 12, 19, 0.98);
-    color: #f3f4f6;
-    padding: 1rem 1.1rem;
+    border: none;
+    background: transparent;
+    color: #f8fafc;
+    padding: 0.95rem 1rem 4.4rem;
     font: inherit;
-    line-height: 1.6;
+    line-height: 1.65;
     outline: none;
   }
 
-  .editor:focus {
-    border-color: rgba(96, 165, 250, 0.35);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+  .editor::placeholder {
+    color: rgba(203, 213, 225, 0.45);
   }
 
-  .footer {
+  .editor:focus {
+    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22);
+  }
+
+  .editor[readonly] {
+    color: rgba(226, 232, 240, 0.82);
+  }
+
+  .nav-float {
+    position: absolute;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+    gap: 0.4rem;
+    z-index: 2;
   }
 
-  .footer-copy {
-    min-width: 0;
+  .nav-float {
+    top: 0.75rem;
+    right: 0.75rem;
   }
 
-  .version-btn {
-    border: 1px solid rgba(96, 165, 250, 0.28);
-    background: rgba(96, 165, 250, 0.16);
-    color: #d9e9ff;
+  .nav-version {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.3rem;
+    height: 1.95rem;
+    padding: 0 0.6rem;
     border-radius: 999px;
-    padding: 0.6rem 0.95rem;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(15, 23, 42, 0.72);
+    color: #e2e8f0;
+    font-size: 0.76rem;
     font-weight: 650;
-    cursor: pointer;
+    backdrop-filter: blur(8px);
   }
 
-  .version-btn:disabled {
-    opacity: 0.5;
+  .nav-btn,
+  .prompt-btn {
+    border: 1px solid rgba(96, 165, 250, 0.28);
+    background: rgba(15, 23, 42, 0.82);
+    color: #e0ecff;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+    transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+  }
+
+  .nav-btn {
+    width: 1.95rem;
+    height: 1.95rem;
+    border-radius: 999px;
+    font-size: 0.92rem;
+    font-weight: 700;
+  }
+
+  .prompt-btn {
+    position: absolute;
+    right: 0.85rem;
+    bottom: 0.85rem;
+    z-index: 2;
+    border-radius: 999px;
+    padding: 0.62rem 0.95rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  .nav-btn:hover:enabled,
+  .prompt-btn:hover:enabled {
+    transform: translateY(-1px);
+    background: rgba(30, 41, 59, 0.92);
+    border-color: rgba(96, 165, 250, 0.42);
+  }
+
+  .nav-btn:disabled,
+  .prompt-btn:disabled {
+    opacity: 0.46;
     cursor: not-allowed;
+  }
+
+  .notice {
+    position: absolute;
+    left: 0.85rem;
+    bottom: 0.85rem;
+    z-index: 2;
+    max-width: min(70%, 32rem);
+    padding: 0.55rem 0.8rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    backdrop-filter: blur(8px);
+  }
+
+  .notice-error {
+    background: rgba(127, 29, 29, 0.82);
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    color: #fecaca;
+  }
+
+  .notice-loading {
+    background: rgba(15, 23, 42, 0.86);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    color: #cbd5e1;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (max-width: 768px) {
+    .editor {
+      padding: 0.85rem 0.85rem 4.7rem;
+    }
+
+    .prompt-btn {
+      right: 0.7rem;
+      bottom: 0.7rem;
+      padding: 0.58rem 0.82rem;
+    }
   }
 </style>

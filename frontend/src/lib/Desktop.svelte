@@ -89,7 +89,7 @@
         if (state.windows && state.windows.length > 0) {
           const restoredWindows = state.windows.map((w) => ({
             windowId: w.window_id,
-            appId: w.app_id === 'etext' ? 'vtext' : w.app_id,
+            appId: w.app_id,
             title: w.title,
             icon: getIconForApp(w.app_id),
             x: w.geometry?.x ?? 100,
@@ -116,7 +116,6 @@
   }
 
   function getIconForApp(appId) {
-    const normalizedAppId = appId === 'etext' ? 'vtext' : appId;
     const icons = {
       files: '📁',
       browser: '🌐',
@@ -124,7 +123,7 @@
       settings: '⚙️',
       vtext: '📝',
     };
-    return icons[normalizedAppId] || '📱';
+    return icons[appId] || '📱';
   }
 
   function scheduleSave() {
@@ -486,7 +485,7 @@
                 <TerminalApp windowId={win.windowId} />
               </div>
             {:else if win.appId === 'vtext'}
-              <div class="app-content vtext-content" data-vtext-app data-etext-app>
+              <div class="app-content vtext-content" data-vtext-app>
                 <VTextEditor {currentUser} appContext={win.appContext} on:authexpired={() => dispatch('authexpired')} />
               </div>
             {:else}

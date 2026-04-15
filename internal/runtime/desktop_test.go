@@ -61,7 +61,7 @@ func TestDesktopStateSaveAndGet(t *testing.T) {
 		Windows: []types.WindowState{
 			{
 				WindowID: "win-1",
-				AppID:    "etext",
+				AppID:    "vtext",
 				Title:    "E-Text Editor",
 				Geometry: types.WindowGeometry{X: 100, Y: 100, Width: 600, Height: 400},
 				Mode:     types.WindowNormal,
@@ -106,8 +106,8 @@ func TestDesktopStateSaveAndGet(t *testing.T) {
 	if resp.Windows[0].WindowID != "win-1" {
 		t.Errorf("Window[0].WindowID = %q, want %q", resp.Windows[0].WindowID, "win-1")
 	}
-	if resp.Windows[0].AppID != "etext" {
-		t.Errorf("Window[0].AppID = %q, want %q", resp.Windows[0].AppID, "etext")
+	if resp.Windows[0].AppID != "vtext" {
+		t.Errorf("Window[0].AppID = %q, want %q", resp.Windows[0].AppID, "vtext")
 	}
 	if resp.ActiveWindowID != "win-1" {
 		t.Errorf("ActiveWindowID = %q, want %q", resp.ActiveWindowID, "win-1")
@@ -139,7 +139,7 @@ func TestDesktopStateUserIsolation(t *testing.T) {
 	// Save state for user-1.
 	saveReq1 := desktopStateSaveRequest{
 		Windows: []types.WindowState{
-			{WindowID: "win-a", AppID: "etext", Title: "User 1 Doc", Geometry: types.WindowGeometry{X: 10, Y: 10, Width: 400, Height: 300}, Mode: types.WindowNormal, ZIndex: 1},
+			{WindowID: "win-a", AppID: "vtext", Title: "User 1 Doc", Geometry: types.WindowGeometry{X: 10, Y: 10, Width: 400, Height: 300}, Mode: types.WindowNormal, ZIndex: 1},
 		},
 		ActiveWindowID: "win-a",
 	}
@@ -182,7 +182,7 @@ func TestDesktopStateUserIsolation(t *testing.T) {
 	if err := json.NewDecoder(getW1.Body).Decode(&resp1); err != nil {
 		t.Fatalf("decode user-1 response: %v", err)
 	}
-	if len(resp1.Windows) != 1 || resp1.Windows[0].AppID != "etext" {
+	if len(resp1.Windows) != 1 || resp1.Windows[0].AppID != "vtext" {
 		t.Errorf("user-1 desktop state was affected by user-2 save")
 	}
 

@@ -569,29 +569,16 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/events", h.HandleEvents)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
 
-	// E-text document/revision/history/diff/blame APIs.
-	// All e-text routes are dispatched from a single prefix handler
-	// that inspects the URL path and method to route to the correct
-	// handler. This avoids ambiguity with Go's ServeMux prefix matching.
-	RegisterEtextRoutes(s, h)
+	// VText document/revision/history/diff/blame APIs.
+	// All routes are dispatched from a single prefix handler that inspects
+	// the URL path and method to route to the correct handler. This avoids
+	// ambiguity with Go's ServeMux prefix matching.
 	RegisterVTextRoutes(s, h)
 }
 
-// RegisterEtextRoutes registers e-text API routes on the given server.
+// RegisterVTextRoutes registers the vtext API routes on the given server.
 // These routes expose document CRUD, revision, history, snapshot, diff,
 // and blame APIs through the authenticated same-origin proxy path.
-func RegisterEtextRoutes(s *server.Server, h *APIHandler) {
-	// Exact match for document collection (create/list).
-	s.HandleFunc("/api/etext/documents", h.HandleEtextDocumentsRoot)
-
-	// Prefix match for all other e-text routes: individual documents,
-	// revisions, history, diff, blame.
-	s.HandleFunc("/api/etext/", h.HandleEtextRouter)
-}
-
-// RegisterVTextRoutes registers vtext API aliases on the given server.
-// These routes rewrite /api/vtext/... requests to the historical /api/etext/...
-// handlers so the product-facing naming can move ahead of the internal rename.
 func RegisterVTextRoutes(s *server.Server, h *APIHandler) {
 	// Exact match for document collection (create/list).
 	s.HandleFunc("/api/vtext/documents", h.HandleVTextDocumentsRoot)
@@ -600,98 +587,80 @@ func RegisterVTextRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/vtext/", h.HandleVTextRouter)
 }
 
-func rewriteEtextToVText(r *http.Request) *http.Request {
-	req := r.Clone(r.Context())
-	req.URL.Path = strings.Replace(req.URL.Path, "/api/vtext/", "/api/etext/", 1)
-	return req
-}
-
-// HandleVTextRouter dispatches vtext API requests by rewriting them to the
-// historical e-text route handlers.
+// HandleVTextRouter dispatches vtext API requests based on URL path and
+// method. It handles all paths under /api/vtext/ that are not matched by
+// the exact /api/vtext/documents route.
+//
+// Route mapping:
+//
+//	GET    /api/vtext/documents/{id}           → get document
+//	PUT    /api/vtext/documents/{id}           → update document
+//	DELETE /api/vtext/documents/{id}           → delete document
+//	POST   /api/vtext/documents/{id}/revisions → create revision
+//	GET    /api/vtext/documents/{id}/revisions → list revisions
+//	POST   /api/vtext/documents/{id}/agent-revision → submit agent revision
+//	GET    /api/vtext/documents/{id}/history   → revision history
+//	GET    /api/vtext/revisions/{id}          → get revision (snapshot)
+//	GET    /api/vtext/revisions/{id}/blame     → blame revision
+//	GET    /api/vtext/diff                     → diff two revisions
 func (h *APIHandler) HandleVTextRouter(w http.ResponseWriter, r *http.Request) {
-	h.HandleEtextRouter(w, rewriteEtextToVText(r))
+	path := r.URL.Path
+
+	// Diff endpoint: /api/vtext/diff
+	if path == "/api/vtext/diff" {
+		h.HandleVTextDiff(w, r)
+		return
+	}
+
+	// Revision item: /api/vtext/revisions/{id}
+	if strings.HasPrefix(path, "/api/vtext/revisions/") {
+		// Check for blame suffix: /api/vtext/revisions/{id}/blame
+		if strings.HasSuffix(path, "/blame") {
+			h.HandleVTextBlame(w, r)
+			return
+		}
+		h.HandleVTextRevision(w, r)
+		return
+	}
+
+	// Document sub-paths: /api/vtext/documents/{id}/...
+	if strings.HasPrefix(path, "/api/vtext/documents/") {
+		// Extract the part after /api/vtext/documents/
+		rest := strings.TrimPrefix(path, "/api/vtext/documents/")
+
+		// Check for sub-resource suffixes.
+		if strings.HasSuffix(rest, "/revisions") {
+			// /api/vtext/documents/{id}/revisions
+			h.HandleVTextRevisions(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, "/agent-revision") {
+			// /api/vtext/documents/{id}/agent-revision
+			h.HandleVTextAgentRevision(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, "/history") {
+			// /api/vtext/documents/{id}/history
+			h.HandleVTextHistory(w, r)
+			return
+		}
+
+		// Otherwise, it's a document item: /api/vtext/documents/{id}
+		h.HandleVTextDocument(w, r)
+		return
+	}
+
+	writeAPIJSON(w, http.StatusNotFound, apiError{Error: "vtext endpoint not found"})
 }
 
 // HandleVTextDocumentsRoot routes POST to create and GET to list at
 // /api/vtext/documents (exact match, no trailing slash).
 func (h *APIHandler) HandleVTextDocumentsRoot(w http.ResponseWriter, r *http.Request) {
-	h.HandleEtextDocumentsRoot(w, rewriteEtextToVText(r))
-}
-
-// HandleEtextRouter dispatches e-text API requests based on URL path and
-// method. It handles all paths under /api/etext/ that are not matched by
-// the exact /api/etext/documents route.
-//
-// Route mapping:
-//
-//	GET    /api/etext/documents/{id}           → get document
-//	PUT    /api/etext/documents/{id}           → update document
-//	DELETE /api/etext/documents/{id}           → delete document
-//	POST   /api/etext/documents/{id}/revisions → create revision
-//	GET    /api/etext/documents/{id}/revisions → list revisions
-//	POST   /api/etext/documents/{id}/agent-revision → submit agent revision
-//	GET    /api/etext/documents/{id}/history   → revision history
-//	GET    /api/etext/revisions/{id}          → get revision (snapshot)
-//	GET    /api/etext/revisions/{id}/blame     → blame revision
-//	GET    /api/etext/diff                     → diff two revisions
-func (h *APIHandler) HandleEtextRouter(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// Diff endpoint: /api/etext/diff
-	if path == "/api/etext/diff" {
-		h.HandleEtextDiff(w, r)
-		return
-	}
-
-	// Revision item: /api/etext/revisions/{id}
-	if strings.HasPrefix(path, "/api/etext/revisions/") {
-		// Check for blame suffix: /api/etext/revisions/{id}/blame
-		if strings.HasSuffix(path, "/blame") {
-			h.HandleEtextBlame(w, r)
-			return
-		}
-		h.HandleEtextRevision(w, r)
-		return
-	}
-
-	// Document sub-paths: /api/etext/documents/{id}/...
-	if strings.HasPrefix(path, "/api/etext/documents/") {
-		// Extract the part after /api/etext/documents/
-		rest := strings.TrimPrefix(path, "/api/etext/documents/")
-
-		// Check for sub-resource suffixes.
-		if strings.HasSuffix(rest, "/revisions") {
-			// /api/etext/documents/{id}/revisions
-			h.HandleEtextRevisions(w, r)
-			return
-		}
-		if strings.HasSuffix(rest, "/agent-revision") {
-			// /api/etext/documents/{id}/agent-revision
-			h.HandleEtextAgentRevision(w, r)
-			return
-		}
-		if strings.HasSuffix(rest, "/history") {
-			// /api/etext/documents/{id}/history
-			h.HandleEtextHistory(w, r)
-			return
-		}
-
-		// Otherwise, it's a document item: /api/etext/documents/{id}
-		h.HandleEtextDocument(w, r)
-		return
-	}
-
-	writeAPIJSON(w, http.StatusNotFound, apiError{Error: "e-text endpoint not found"})
-}
-
-// HandleEtextDocumentsRoot routes POST to create and GET to list at
-// /api/etext/documents (exact match, no trailing slash).
-func (h *APIHandler) HandleEtextDocumentsRoot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		h.HandleEtextCreateDocument(w, r)
+		h.HandleVTextCreateDocument(w, r)
 	case http.MethodGet:
-		h.HandleEtextListDocuments(w, r)
+		h.HandleVTextListDocuments(w, r)
 	default:
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 	}

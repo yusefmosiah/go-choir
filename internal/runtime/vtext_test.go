@@ -17,9 +17,9 @@ import (
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-func etextAPISetup(t *testing.T) (*APIHandler, *store.Store) {
+func vtextAPISetup(t *testing.T) (*APIHandler, *store.Store) {
 	t.Helper()
-	dir := filepath.Join(os.TempDir(), "go-choir-m3-etext-test")
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-vtext-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -28,12 +28,12 @@ func etextAPISetup(t *testing.T) (*APIHandler, *store.Store) {
 
 	s, err := store.Open(dbPath)
 	if err != nil {
-		t.Fatalf("open etext api test store: %v", err)
+		t.Fatalf("open vtext api test store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := Config{
-		SandboxID:           "sandbox-etext-test",
+		SandboxID:           "sandbox-vtext-test",
 		StorePath:           dbPath,
 		ProviderTimeout:     2 * time.Second,
 		SupervisionInterval: 5 * time.Second,
@@ -46,7 +46,7 @@ func etextAPISetup(t *testing.T) (*APIHandler, *store.Store) {
 	return NewAPIHandler(rt), s
 }
 
-func etextRequest(t *testing.T, method, path string, body interface{}) *http.Request {
+func vtextRequest(t *testing.T, method, path string, body interface{}) *http.Request {
 	t.Helper()
 	var reqBody *bytes.Reader
 	if body != nil {
@@ -65,19 +65,19 @@ func etextRequest(t *testing.T, method, path string, body interface{}) *http.Req
 
 // ----- Document creation -----
 
-func TestEtextAPICreateDocument(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPICreateDocument(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "My Document"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
+	h.HandleVTextCreateDocument(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusCreated, w.Body.String())
 	}
 
-	var resp etextCreateDocResponse
+	var resp vtextCreateDocResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -92,14 +92,14 @@ func TestEtextAPICreateDocument(t *testing.T) {
 	}
 }
 
-func TestEtextAPICreateDocumentAuth(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPICreateDocumentAuth(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// No auth header.
-	req := httptest.NewRequest(http.MethodPost, "/api/etext/documents",
+	req := httptest.NewRequest(http.MethodPost, "/api/vtext/documents",
 		bytes.NewReader([]byte(`{"title":"test"}`)))
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
+	h.HandleVTextCreateDocument(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -108,30 +108,30 @@ func TestEtextAPICreateDocumentAuth(t *testing.T) {
 
 // ----- Document list -----
 
-func TestEtextAPIListDocuments(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIListDocuments(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create 2 documents.
 	for _, title := range []string{"Doc A", "Doc B"} {
-		req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+		req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 			map[string]string{"title": title})
 		w := httptest.NewRecorder()
-		h.HandleEtextCreateDocument(w, req)
+		h.HandleVTextCreateDocument(w, req)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create document: status = %d", w.Code)
 		}
 	}
 
 	// List documents.
-	req := etextRequest(t, http.MethodGet, "/api/etext/documents", nil)
+	req := vtextRequest(t, http.MethodGet, "/api/vtext/documents", nil)
 	w := httptest.NewRecorder()
-	h.HandleEtextListDocuments(w, req)
+	h.HandleVTextListDocuments(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp etextListDocsResponse
+	var resp vtextListDocsResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -142,27 +142,27 @@ func TestEtextAPIListDocuments(t *testing.T) {
 
 // ----- Document get -----
 
-func TestEtextAPIGetDocument(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIGetDocument(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var createResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var createResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&createResp)
 
 	// Get the document.
-	req = etextRequest(t, http.MethodGet, "/api/etext/documents/"+createResp.DocID, nil)
+	req = vtextRequest(t, http.MethodGet, "/api/vtext/documents/"+createResp.DocID, nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextDocument(w, req)
+	h.HandleVTextDocument(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var resp etextDocumentResponse
+	var resp vtextDocumentResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -173,32 +173,32 @@ func TestEtextAPIGetDocument(t *testing.T) {
 
 // ----- Revision creation (user edit) -----
 
-func TestEtextAPICreateRevisionUserEdit(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPICreateRevisionUserEdit(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create a user-authored revision.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Hello, world!",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusCreated, w.Body.String())
 	}
 
-	var revResp etextRevisionResponse
+	var revResp vtextRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&revResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -215,42 +215,42 @@ func TestEtextAPICreateRevisionUserEdit(t *testing.T) {
 
 // ----- Revision creation (appagent edit) -----
 
-func TestEtextAPICreateRevisionAppAgent(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPICreateRevisionAppAgent(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create a user revision first.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Create an appagent revision.
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "AI-improved draft",
 		AuthorKind:  types.AuthorAppAgent,
 		AuthorLabel: "appagent",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusCreated, w.Body.String())
 	}
 
-	var revResp etextRevisionResponse
+	var revResp vtextRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&revResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -261,26 +261,26 @@ func TestEtextAPICreateRevisionAppAgent(t *testing.T) {
 
 // ----- Invalid author kind rejected -----
 
-func TestEtextAPIRejectInvalidAuthorKind(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIRejectInvalidAuthorKind(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Try to create a revision with "worker" author kind.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Worker content",
 		AuthorKind:  "worker",
 		AuthorLabel: "worker-1",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
@@ -289,46 +289,46 @@ func TestEtextAPIRejectInvalidAuthorKind(t *testing.T) {
 
 // ----- History -----
 
-func TestEtextAPIGetHistory(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIGetHistory(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create revisions.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "AI-improved",
 		AuthorKind:  types.AuthorAppAgent,
 		AuthorLabel: "appagent",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Get history.
-	req = etextRequest(t, http.MethodGet, "/api/etext/documents/"+docResp.DocID+"/history", nil)
+	req = vtextRequest(t, http.MethodGet, "/api/vtext/documents/"+docResp.DocID+"/history", nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextHistory(w, req)
+	h.HandleVTextHistory(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var resp etextHistoryResponse
+	var resp vtextHistoryResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -343,50 +343,50 @@ func TestEtextAPIGetHistory(t *testing.T) {
 
 // ----- Diff -----
 
-func TestEtextAPIGetDiff(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIGetDiff(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document and revisions.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
-	var rev1Resp etextRevisionResponse
+	h.HandleVTextRevisions(w, req)
+	var rev1Resp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&rev1Resp)
 
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "AI-improved draft",
 		AuthorKind:  types.AuthorAppAgent,
 		AuthorLabel: "appagent",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
-	var rev2Resp etextRevisionResponse
+	h.HandleVTextRevisions(w, req)
+	var rev2Resp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&rev2Resp)
 
 	// Get diff.
-	req = etextRequest(t, http.MethodGet,
-		"/api/etext/diff?from="+rev1Resp.RevisionID+"&to="+rev2Resp.RevisionID, nil)
+	req = vtextRequest(t, http.MethodGet,
+		"/api/vtext/diff?from="+rev1Resp.RevisionID+"&to="+rev2Resp.RevisionID, nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextDiff(w, req)
+	h.HandleVTextDiff(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var resp etextDiffResponse
+	var resp vtextDiffResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -400,48 +400,48 @@ func TestEtextAPIGetDiff(t *testing.T) {
 
 // ----- Blame -----
 
-func TestEtextAPIGetBlame(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIGetBlame(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document and revisions.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "AI-improved draft",
 		AuthorKind:  types.AuthorAppAgent,
 		AuthorLabel: "appagent",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
-	var rev2Resp etextRevisionResponse
+	h.HandleVTextRevisions(w, req)
+	var rev2Resp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&rev2Resp)
 
 	// Get blame.
-	req = etextRequest(t, http.MethodGet,
-		"/api/etext/revisions/"+rev2Resp.RevisionID+"/blame", nil)
+	req = vtextRequest(t, http.MethodGet,
+		"/api/vtext/revisions/"+rev2Resp.RevisionID+"/blame", nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextBlame(w, req)
+	h.HandleVTextBlame(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var resp etextBlameResponse
+	var resp vtextBlameResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -455,49 +455,49 @@ func TestEtextAPIGetBlame(t *testing.T) {
 
 // ----- Snapshot (view historical revision) -----
 
-func TestEtextAPISnapshotDoesNotMutateHead(t *testing.T) {
-	h, s := etextAPISetup(t)
+func TestVTextAPISnapshotDoesNotMutateHead(t *testing.T) {
+	h, s := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create two revisions.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
-	var rev1Resp etextRevisionResponse
+	h.HandleVTextRevisions(w, req)
+	var rev1Resp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&rev1Resp)
 
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "Second draft",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// View the first (historical) revision.
-	req = etextRequest(t, http.MethodGet,
-		"/api/etext/revisions/"+rev1Resp.RevisionID, nil)
+	req = vtextRequest(t, http.MethodGet,
+		"/api/vtext/revisions/"+rev1Resp.RevisionID, nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevision(w, req)
+	h.HandleVTextRevision(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var snapshotResp etextRevisionResponse
+	var snapshotResp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&snapshotResp)
 	if snapshotResp.Content != "First draft" {
 		t.Errorf("snapshot content = %q, want %q", snapshotResp.Content, "First draft")
@@ -513,18 +513,18 @@ func TestEtextAPISnapshotDoesNotMutateHead(t *testing.T) {
 	}
 }
 
-// ----- Auth gating on e-text endpoints -----
+// ----- Auth gating on vtext endpoints -----
 
-func TestEtextAPIAuthGating(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPIAuthGating(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	endpoints := []struct {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/api/etext/documents"},
-		{http.MethodPost, "/api/etext/documents"},
-		{http.MethodGet, "/api/etext/diff"},
+		{http.MethodGet, "/api/vtext/documents"},
+		{http.MethodPost, "/api/vtext/documents"},
+		{http.MethodGet, "/api/vtext/diff"},
 	}
 
 	for _, ep := range endpoints {
@@ -532,10 +532,10 @@ func TestEtextAPIAuthGating(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		switch {
-		case strings.HasPrefix(ep.path, "/api/etext/documents"):
-			h.HandleEtextDocumentsRoot(w, req)
-		case strings.HasPrefix(ep.path, "/api/etext/diff"):
-			h.HandleEtextDiff(w, req)
+		case strings.HasPrefix(ep.path, "/api/vtext/documents"):
+			h.HandleVTextDocumentsRoot(w, req)
+		case strings.HasPrefix(ep.path, "/api/vtext/diff"):
+			h.HandleVTextDiff(w, req)
 		}
 
 		if w.Code != http.StatusUnauthorized {
@@ -546,15 +546,15 @@ func TestEtextAPIAuthGating(t *testing.T) {
 
 // ----- Citations and metadata -----
 
-func TestEtextAPICitationsMetadataRoundTrip(t *testing.T) {
-	h, _ := etextAPISetup(t)
+func TestVTextAPICitationsMetadataRoundTrip(t *testing.T) {
+	h, _ := vtextAPISetup(t)
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create a revision with citations and metadata.
@@ -564,29 +564,29 @@ func TestEtextAPICitationsMetadataRoundTrip(t *testing.T) {
 	citJSON, _ := json.Marshal(citations)
 	metaJSON, _ := json.Marshal(map[string]any{"tags": []string{"draft"}})
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Document with citations",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 		Citations:   citJSON,
 		Metadata:    metaJSON,
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
-	var revResp etextRevisionResponse
+	var revResp vtextRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&revResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
 	// Get the revision back and check citations/metadata.
-	req = etextRequest(t, http.MethodGet,
-		"/api/etext/revisions/"+revResp.RevisionID, nil)
+	req = vtextRequest(t, http.MethodGet,
+		"/api/vtext/revisions/"+revResp.RevisionID, nil)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevision(w, req)
+	h.HandleVTextRevision(w, req)
 
-	var getResp etextRevisionResponse
+	var getResp vtextRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&getResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -611,11 +611,11 @@ func TestEtextAPICitationsMetadataRoundTrip(t *testing.T) {
 
 // ----- Agent revision tests -----
 
-// etextAPISetupWithRuntime creates a test setup with a started runtime
+// vtextAPISetupWithRuntime creates a test setup with a started runtime
 // so that tasks actually execute and complete.
-func etextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime) {
+func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime) {
 	t.Helper()
-	dir := filepath.Join(os.TempDir(), "go-choir-m3-etext-test")
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-vtext-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -624,12 +624,12 @@ func etextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime
 
 	s, err := store.Open(dbPath)
 	if err != nil {
-		t.Fatalf("open etext api test store: %v", err)
+		t.Fatalf("open vtext api test store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := Config{
-		SandboxID:           "sandbox-etext-test",
+		SandboxID:           "sandbox-vtext-test",
 		StorePath:           dbPath,
 		ProviderTimeout:     5 * time.Second,
 		SupervisionInterval: 5 * time.Second,
@@ -654,29 +654,29 @@ func createDocWithUserRevision(t *testing.T, h *APIHandler) (string, string) {
 	t.Helper()
 
 	// Create a document.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Test Doc"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
+	h.HandleVTextCreateDocument(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create document: status = %d, body: %s", w.Code, w.Body.String())
 	}
-	var docResp etextCreateDocResponse
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create a user-authored revision.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Hello, world!",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create user revision: status = %d, body: %s", w.Code, w.Body.String())
 	}
-	var revResp etextRevisionResponse
+	var revResp vtextRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&revResp)
 
 	return docResp.DocID, revResp.RevisionID
@@ -688,7 +688,7 @@ func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout t
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		req := etextRequest(t, http.MethodGet, "/api/agent/status?task_id="+taskID, nil)
+		req := vtextRequest(t, http.MethodGet, "/api/agent/status?task_id="+taskID, nil)
 		w := httptest.NewRecorder()
 		h.HandleTaskStatus(w, req)
 		if w.Code != http.StatusOK {
@@ -705,25 +705,25 @@ func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout t
 	return ""
 }
 
-// TestEtextAgentRevisionCreatesCanonicalRevision verifies that submitting
+// TestVTextAgentRevisionCreatesCanonicalRevision verifies that submitting
 // an agent revision prompt creates a canonical appagent-authored revision
 // (VAL-ETEXT-003).
-func TestEtextAgentRevisionCreatesCanonicalRevision(t *testing.T) {
-	h, s, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionCreatesCanonicalRevision(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// Submit an agent revision request.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Make it more formal"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("agent revision: status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
 	}
 
-	var resp etextAgentRevisionResponse
+	var resp vtextAgentRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -779,38 +779,38 @@ func TestEtextAgentRevisionCreatesCanonicalRevision(t *testing.T) {
 	}
 }
 
-// TestEtextAgentRevisionAuthRequired verifies that agent revision
+// TestVTextAgentRevisionAuthRequired verifies that agent revision
 // requires authentication (VAL-ETEXT-003: auth-gated).
-func TestEtextAgentRevisionAuthRequired(t *testing.T) {
-	h, _, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionAuthRequired(t *testing.T) {
+	h, _, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// No auth header.
-	req := httptest.NewRequest(http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := httptest.NewRequest(http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		bytes.NewReader([]byte(`{"prompt":"test"}`)))
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
-// TestEtextAgentRevisionPreservesUserAndAppAgentAttribution verifies
+// TestVTextAgentRevisionPreservesUserAndAppAgentAttribution verifies
 // that an end-to-end flow preserves both user and appagent attribution
 // in history (VAL-CROSS-119).
-func TestEtextAgentRevisionPreservesUserAndAppAgentAttribution(t *testing.T) {
-	h, s, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionPreservesUserAndAppAgentAttribution(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// Submit an agent revision.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Improve the text"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var resp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var resp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
@@ -820,14 +820,14 @@ func TestEtextAgentRevisionPreservesUserAndAppAgentAttribution(t *testing.T) {
 	}
 
 	// Make another user edit after the agent revision.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "User final edit",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/revisions", revReq)
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("user edit after agent: status = %d, body: %s", w.Code, w.Body.String())
 	}
@@ -861,21 +861,21 @@ func TestEtextAgentRevisionPreservesUserAndAppAgentAttribution(t *testing.T) {
 	}
 }
 
-// TestEtextAgentRevisionNoWorkerAuthorship verifies that when subordinate
+// TestVTextAgentRevisionNoWorkerAuthorship verifies that when subordinate
 // workers might contribute to an appagent-driven change, the resulting
 // canonical history attributes the change to the appagent, not to any
 // worker identity (VAL-CROSS-120).
-func TestEtextAgentRevisionNoWorkerAuthorship(t *testing.T) {
-	h, s, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionNoWorkerAuthorship(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// Submit an agent revision.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Make it better"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var resp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var resp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
@@ -896,30 +896,30 @@ func TestEtextAgentRevisionNoWorkerAuthorship(t *testing.T) {
 	}
 }
 
-// TestEtextAgentRevisionNoDuplicateOnRenewalRetry verifies that renewal
+// TestVTextAgentRevisionNoDuplicateOnRenewalRetry verifies that renewal
 // and retry does not duplicate a canonical document mutation (VAL-CROSS-122).
-func TestEtextAgentRevisionNoDuplicateOnRenewalRetry(t *testing.T) {
-	h, s, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionNoDuplicateOnRenewalRetry(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// Submit an agent revision.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Make it concise"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var resp1 etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var resp1 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&resp1)
 
 	// Simulate a renewal/retry by submitting the same request again
 	// before the task completes. The idempotency check should return
 	// the same task ID.
-	req = etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req = vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Make it concise"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
-	var resp2 etextAgentRevisionResponse
+	var resp2 vtextAgentRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp2); err != nil {
 		t.Fatalf("decode retry response: %v", err)
 	}
@@ -952,11 +952,11 @@ func TestEtextAgentRevisionNoDuplicateOnRenewalRetry(t *testing.T) {
 	}
 }
 
-// TestEtextAgentRevisionMutationCompletedOnlyOnce verifies that even if
+// TestVTextAgentRevisionMutationCompletedOnlyOnce verifies that even if
 // the task completion hook is called multiple times (e.g., after crash
 // recovery), only one canonical revision is created (VAL-CROSS-122).
-func TestEtextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
-	_, s, rt := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
+	_, s, rt := vtextAPISetupWithRuntime(t)
 
 	ctx := context.Background()
 
@@ -998,19 +998,19 @@ func TestEtextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 		t.Fatalf("create agent mutation: %v", err)
 	}
 
-	// Create a completed task record with etext agent revision metadata.
+	// Create a completed task record with vtext agent revision metadata.
 	taskRec := &types.TaskRecord{
 		TaskID:    "task-mutation-test",
 		OwnerID:   "user-1",
-		SandboxID: "sandbox-etext-test",
+		SandboxID: "sandbox-vtext-test",
 		State:     types.TaskCompleted,
 		Prompt:    "Revise the document",
 		Result:    "Revised content",
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 		Metadata: map[string]any{
-			"type":              "etext_agent_revision",
-			"doc_id":            "doc-mutation-test",
+			"type":                "vtext_agent_revision",
+			"doc_id":              "doc-mutation-test",
 			"current_revision_id": "rev-user-1",
 		},
 	}
@@ -1036,11 +1036,11 @@ func TestEtextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 	}
 }
 
-// TestEtextAgentRevisionProgressEvents verifies that progress events
+// TestVTextAgentRevisionProgressEvents verifies that progress events
 // are emitted during agent revision execution with the doc_id so
 // the frontend can correlate to the open document (VAL-ETEXT-004).
-func TestEtextAgentRevisionProgressEvents(t *testing.T) {
-	h, s, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionProgressEvents(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
@@ -1048,11 +1048,11 @@ func TestEtextAgentRevisionProgressEvents(t *testing.T) {
 	bus := s // We'll use the store to query events after completion.
 
 	// Submit an agent revision.
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": "Add more detail"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var resp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var resp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
@@ -1061,18 +1061,18 @@ func TestEtextAgentRevisionProgressEvents(t *testing.T) {
 		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
 	}
 
-	// Check that etext agent revision events were persisted.
+	// Check that vtext agent revision events were persisted.
 	events, err := bus.ListEvents(context.Background(), resp.TaskID, 200)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
-	// We should find etext.agent_revision.started and
-	// etext.agent_revision.completed events.
+	// We should find vtext.agent_revision.started and
+	// vtext.agent_revision.completed events.
 	var foundStarted, foundCompleted bool
 	for _, ev := range events {
 		switch ev.Kind {
-		case types.EventEtextAgentRevisionStarted:
+		case types.EventVTextAgentRevisionStarted:
 			foundStarted = true
 			// Verify the payload contains doc_id.
 			var payload map[string]string
@@ -1081,7 +1081,7 @@ func TestEtextAgentRevisionProgressEvents(t *testing.T) {
 					t.Errorf("started event doc_id = %q, want %q", payload["doc_id"], docID)
 				}
 			}
-		case types.EventEtextAgentRevisionCompleted:
+		case types.EventVTextAgentRevisionCompleted:
 			foundCompleted = true
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
@@ -1095,58 +1095,58 @@ func TestEtextAgentRevisionProgressEvents(t *testing.T) {
 		}
 	}
 	if !foundStarted {
-		t.Error("missing etext.agent_revision.started event (VAL-ETEXT-004)")
+		t.Error("missing vtext.agent_revision.started event (VAL-ETEXT-004)")
 	}
 	if !foundCompleted {
-		t.Error("missing etext.agent_revision.completed event (VAL-ETEXT-004)")
+		t.Error("missing vtext.agent_revision.completed event (VAL-ETEXT-004)")
 	}
 }
 
-// TestEtextAgentRevisionEmptyPromptRejected verifies that an empty prompt
+// TestVTextAgentRevisionEmptyPromptRejected verifies that an empty prompt
 // is rejected with a bad request.
-func TestEtextAgentRevisionEmptyPromptRejected(t *testing.T) {
-	h, _, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionEmptyPromptRejected(t *testing.T) {
+	h, _, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		map[string]string{"prompt": ""})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 
-// TestEtextAgentRevisionDocumentNotFound verifies that requesting an
+// TestVTextAgentRevisionDocumentNotFound verifies that requesting an
 // agent revision for a non-existent document returns 404.
-func TestEtextAgentRevisionDocumentNotFound(t *testing.T) {
-	h, _, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionDocumentNotFound(t *testing.T) {
+	h, _, _ := vtextAPISetupWithRuntime(t)
 
-	req := etextRequest(t, http.MethodPost, "/api/etext/documents/nonexistent/agent-revision",
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/nonexistent/agent-revision",
 		map[string]string{"prompt": "test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-// TestEtextAgentRevisionWrongOwner verifies that requesting an agent
+// TestVTextAgentRevisionWrongOwner verifies that requesting an agent
 // revision for a document owned by another user returns 404.
-func TestEtextAgentRevisionWrongOwner(t *testing.T) {
-	h, _, _ := etextAPISetupWithRuntime(t)
+func TestVTextAgentRevisionWrongOwner(t *testing.T) {
+	h, _, _ := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	// Use a different user.
-	req := httptest.NewRequest(http.MethodPost, "/api/etext/documents/"+docID+"/agent-revision",
+	req := httptest.NewRequest(http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
 		bytes.NewReader([]byte(`{"prompt":"test"}`)))
 	req.Header.Set("X-Authenticated-User", "user-2")
 	w := httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d (wrong owner)", w.Code, http.StatusNotFound)

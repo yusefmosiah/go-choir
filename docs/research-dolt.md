@@ -1,7 +1,7 @@
 # Dolt Integration Research for E-Text Versioned Storage
 
 > **Date**: 2026-04-08
-> **Context**: Unified multiagent system in Go; e-text app with user + appagent edits, full provenance
+> **Context**: Unified multiagent system in Go; vtext app with user + appagent edits, full provenance
 
 ---
 
@@ -39,7 +39,7 @@ import (
 )
 
 cfg, _ := embedded.ParseDSN(
-    "file:///path/to/dbs?commitname=User&commitemail=user@example.com&database=etext",
+    "file:///path/to/dbs?commitname=User&commitemail=user@example.com&database=vtext",
 )
 connector, _ := embedded.NewConnector(cfg)
 db := sql.OpenDB(connector)
@@ -68,7 +68,7 @@ Run Dolt as a standalone MySQL-compatible server. Connect from Go using any MySQ
 
 - Best for multi-service architectures where multiple processes need concurrent access
 - Adds operational complexity (process management, networking)
-- **Not recommended** for per-user embedded e-text storage
+- **Not recommended** for per-user embedded vtext storage
 
 ### Option C: Direct Programmatic Go API (Internal)
 
@@ -76,7 +76,7 @@ The Dolt codebase (`github.com/dolthub/dolt/go/...`) exposes internal Go package
 
 ### Recommendation: **Embedded mode** via `dolthub/driver`
 
-For a per-user e-text database where the Go application is the sole writer, embedded mode gives us:
+For a per-user vtext database where the Go application is the sole writer, embedded mode gives us:
 - Zero operational overhead (no server process)
 - Lowest latency (in-process)
 - Standard `database/sql` interface
@@ -135,7 +135,7 @@ CALL dolt_commit('-Am', 'User revised intro',
 
 -- AppAgent edit
 CALL dolt_commit('-Am', 'AppAgent refined paragraph structure',
-    '--author', 'ETextAgent <etext-agent@choiros.app>');
+    '--author', 'ETextAgent <vtext-agent@choiros.app>');
 ```
 
 In embedded mode, the DSN's `commitname`/`commitemail` serve as defaults, but can be overridden per-commit with `--author`.
@@ -191,7 +191,7 @@ ORDER BY commit_date DESC;
 - Only **one connection at a time** can hold a write lock
 - Multiple concurrent readers are supported
 - The `dolthub/driver` supports configurable retry with exponential backoff for lock contention
-- For a per-user e-text database, this is fine: the user and the appagent are mediated by the same Go process, which serializes writes
+- For a per-user vtext database, this is fine: the user and the appagent are mediated by the same Go process, which serializes writes
 
 **Server mode**:
 - Full MySQL-style transaction isolation (serializable, read committed, etc.)
@@ -263,7 +263,7 @@ For our use case (small per-user databases with individual documents), performan
 ### Scalability Considerations
 
 - Dolt is designed for databases up to hundreds of GB
-- For per-user e-text (likely < 100MB per user), Dolt is vastly overpowered — this is a sweet spot
+- For per-user vtext (likely < 100MB per user), Dolt is vastly overpowered — this is a sweet spot
 - Prolly tree diff is O(d) where d = diff size, not O(n) where n = data size
 - The Go embedded engine has the same performance characteristics as the server
 
@@ -339,7 +339,7 @@ func (s *ETextStore) SaveAppAgentEdit(ctx context.Context, docID, sectionID, new
     tx.ExecContext(ctx, `CALL dolt_add('.')`)
     tx.ExecContext(ctx, `CALL dolt_commit('-m', ?, '--author', ?)`,
         fmt.Sprintf("Agent revised section %s of doc %s", sectionID, docID),
-        "ETextAgent <etext-agent@choiros.local>")
+        "ETextAgent <vtext-agent@choiros.local>")
     
     return tx.Commit()
 }
@@ -429,7 +429,7 @@ rows := db.QueryRow(`CALL dolt_merge('agent/revise-doc-123')`)
 
 3. **Go dependency size**: The `dolthub/driver` pulls in the entire Dolt engine as a Go dependency. This significantly increases binary size and compile time. Expect the compiled binary to be 100MB+.
 
-4. **MySQL compatibility gaps**: While highly MySQL-compatible, some advanced MySQL features may not be supported. Dolt tracks compatibility carefully — for e-text CRUD operations this is not a concern.
+4. **MySQL compatibility gaps**: While highly MySQL-compatible, some advanced MySQL features may not be supported. Dolt tracks compatibility carefully — for vtext CRUD operations this is not a concern.
 
 5. **No built-in CRDT or OT**: Dolt's merge is cell-level (entire cell contents). If two editors change the same cell (e.g., same paragraph), Dolt flags a conflict — it doesn't attempt character-level merge within a cell. Your application must handle intra-cell conflicts.
 
@@ -440,7 +440,7 @@ rows := db.QueryRow(`CALL dolt_merge('agent/revise-doc-123')`)
 ### Things That Might Not Work Well
 
 - **Real-time collaborative editing** (Google Docs style): Dolt commits are coarse-grained snapshots, not real-time operation streams. If you need sub-second real-time collaboration, you'd need a CRDT/OT layer on top, with Dolt as the persistence/versioning backend.
-- **Very high write throughput**: Not a concern for e-text, but worth noting.
+- **Very high write throughput**: Not a concern for vtext, but worth noting.
 - **Cross-user database sync**: While Dolt supports push/pull to remotes, setting up a DoltHub/DoltLab remote for per-user sync adds infrastructure. However, for our use case (single user per database), this isn't needed.
 
 ### Alternatives for Specific Sub-Problems
@@ -466,7 +466,7 @@ rows := db.QueryRow(`CALL dolt_merge('agent/revise-doc-123')`)
 │        │              │               │         │
 │        ▼              ▼               │         │
 │  ┌─────────────────────────┐          │         │
-│  │   EText Service Layer   │◄─────────┘         │
+│  │   VText Service Layer   │◄─────────┘         │
 │  │  (serializes writes,    │   (reads proposals, │
 │  │   manages commits)      │    does not write)  │
 │  └───────────┬─────────────┘                    │
@@ -480,7 +480,7 @@ rows := db.QueryRow(`CALL dolt_merge('agent/revise-doc-123')`)
 └──────────────┼──────────────────────────────────┘
                │
                ▼
-         ~/.choiros/users/<user-id>/etext/
+         ~/.choiros/users/<user-id>/vtext/
          └── .dolt/  (Dolt database files)
 ```
 

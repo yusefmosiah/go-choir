@@ -63,7 +63,7 @@ func agentProfileForTask(rec *types.TaskRecord) string {
 			return strings.TrimSpace(profile)
 		}
 	}
-	if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
+	if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
 		return AgentProfileVText
 	}
 	return AgentProfileSuper

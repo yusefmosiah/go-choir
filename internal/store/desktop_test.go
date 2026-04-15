@@ -44,7 +44,7 @@ func TestDesktopStateSaveAndGet(t *testing.T) {
 		Windows: []types.WindowState{
 			{
 				WindowID: "win-1",
-				AppID:    "etext",
+				AppID:    "vtext",
 				Title:    "E-Text Editor",
 				Geometry: types.WindowGeometry{X: 100, Y: 100, Width: 600, Height: 400},
 				Mode:     types.WindowNormal,
@@ -56,12 +56,12 @@ func TestDesktopStateSaveAndGet(t *testing.T) {
 				UpdatedAt: now,
 			},
 			{
-				WindowID: "win-2",
-				AppID:    "terminal",
-				Title:    "Terminal",
-				Geometry: types.WindowGeometry{X: 200, Y: 200, Width: 500, Height: 300},
-				Mode:     types.WindowMinimized,
-				ZIndex:   0,
+				WindowID:  "win-2",
+				AppID:     "terminal",
+				Title:     "Terminal",
+				Geometry:  types.WindowGeometry{X: 200, Y: 200, Width: 500, Height: 300},
+				Mode:      types.WindowMinimized,
+				ZIndex:    0,
 				CreatedAt: now,
 				UpdatedAt: now,
 			},
@@ -94,8 +94,8 @@ func TestDesktopStateSaveAndGet(t *testing.T) {
 	if w1.WindowID != "win-1" {
 		t.Errorf("Window[0].WindowID = %q, want %q", w1.WindowID, "win-1")
 	}
-	if w1.AppID != "etext" {
-		t.Errorf("Window[0].AppID = %q, want %q", w1.AppID, "etext")
+	if w1.AppID != "vtext" {
+		t.Errorf("Window[0].AppID = %q, want %q", w1.AppID, "vtext")
 	}
 	if w1.Geometry.X != 100 || w1.Geometry.Y != 100 || w1.Geometry.Width != 600 || w1.Geometry.Height != 400 {
 		t.Errorf("Window[0].Geometry = %+v, want {100 100 600 400}", w1.Geometry)
@@ -127,7 +127,7 @@ func TestDesktopStateUpdate(t *testing.T) {
 		Windows: []types.WindowState{
 			{
 				WindowID:  "win-1",
-				AppID:     "etext",
+				AppID:     "vtext",
 				Title:     "E-Text",
 				Geometry:  types.WindowGeometry{X: 100, Y: 100, Width: 600, Height: 400},
 				Mode:      types.WindowNormal,
@@ -182,7 +182,7 @@ func TestDesktopStateIsolation(t *testing.T) {
 	state1 := types.DesktopState{
 		OwnerID: "user-1",
 		Windows: []types.WindowState{
-			{WindowID: "win-a", AppID: "etext", Title: "User 1 Doc", Geometry: types.WindowGeometry{X: 10, Y: 10, Width: 400, Height: 300}, Mode: types.WindowNormal, ZIndex: 1, CreatedAt: now, UpdatedAt: now},
+			{WindowID: "win-a", AppID: "vtext", Title: "User 1 Doc", Geometry: types.WindowGeometry{X: 10, Y: 10, Width: 400, Height: 300}, Mode: types.WindowNormal, ZIndex: 1, CreatedAt: now, UpdatedAt: now},
 		},
 		ActiveWindowID: "win-a",
 		UpdatedAt:      now,
@@ -209,7 +209,7 @@ func TestDesktopStateIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDesktopState user-1: %v", err)
 	}
-	if len(got1.Windows) != 1 || got1.Windows[0].AppID != "etext" {
+	if len(got1.Windows) != 1 || got1.Windows[0].AppID != "vtext" {
 		t.Errorf("user-1 desktop state was affected by user-2 save")
 	}
 
@@ -236,15 +236,15 @@ func TestDesktopStateWithMaximizedRestore(t *testing.T) {
 		OwnerID: "user-1",
 		Windows: []types.WindowState{
 			{
-				WindowID:        "win-1",
-				AppID:           "etext",
-				Title:           "E-Text",
-				Geometry:        types.WindowGeometry{X: 0, Y: 0, Width: 1920, Height: 1080},
+				WindowID:         "win-1",
+				AppID:            "vtext",
+				Title:            "E-Text",
+				Geometry:         types.WindowGeometry{X: 0, Y: 0, Width: 1920, Height: 1080},
 				RestoredGeometry: &restored,
-				Mode:            types.WindowMaximized,
-				ZIndex:          1,
-				CreatedAt:       now,
-				UpdatedAt:       now,
+				Mode:             types.WindowMaximized,
+				ZIndex:           1,
+				CreatedAt:        now,
+				UpdatedAt:        now,
 			},
 		},
 		ActiveWindowID: "win-1",

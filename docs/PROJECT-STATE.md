@@ -1,7 +1,7 @@
 # go-choir Project State
 
-**Last Updated:** 2026-04-13  
-**Current Mission:** 6 Complete → Starting Mission 7
+**Last Updated:** 2026-04-14  
+**Current Mission:** Local `vtext` + Dolt completion before `vmctl` deepening
 
 ---
 
@@ -70,7 +70,7 @@ Cogent remains important as a source of runtime patterns and temporary bootstrap
 - Deploy pipeline to Node B (OVH)
 - Auth service with WebAuthn
 - Proxy/gateway/vmctl infrastructure
-- Versioned document app (`vtext`, currently still named `etext` in code)
+- Versioned document app (`vtext`)
 - Firecracker microVM support
 
 ### Mission 4: Core Functionality ✓ COMPLETE
@@ -81,7 +81,7 @@ Cogent remains important as a source of runtime patterns and temporary bootstrap
 2. ✅ **Email-based auth migration** - Username dropped, email primary identifier
 3. ✅ **Multi-provider LLM gateway** - Fireworks, Z.AI, Bedrock routing with SSE streaming
 4. ✅ **Tool calling validation** - file_read tool working end-to-end
-5. ✅ **Choir-in-choir (minimal)** - Scheduler, spawn API, parent-child tasks, early `etext`-based experimentation
+5. ✅ **Choir-in-choir (minimal)** - Scheduler, spawn API, parent-child tasks, early `vtext`-based experimentation
 6. ✅ **All tests passing** - 127+ tests across 13 packages
 
 **Deployed to Node B:** Code is live but needs verification (see Mission 5)
@@ -178,12 +178,12 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 │   ├── gateway/     # Multi-provider routing
 │   ├── runtime/     # Task execution, tool loop, channels
 │   ├── scheduler/   # Work registry (in progress)
-│   └── store/       # SQLite persistence
+│   └── store/       # SQLite runtime state + embedded Dolt vtext persistence
 ├── frontend/        # Svelte SPA
 │   ├── src/lib/
 │   │   ├── Desktop.svelte
-│   │   ├── ETextEditor.svelte
-│   │   └── [components to rewrite in Mission 6]
+│   │   ├── VTextEditor.svelte
+│   │   └── [desktop/runtime components under active refinement]
 │   └── tests/       # Playwright tests
 ├── nix/
 │   └── node-b.nix   # NixOS config for Node B
@@ -208,7 +208,7 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 3. ✅ **Not responsive** - Resolved (3 breakpoints, desktop-parity windowing on mobile-sized screens)
 4. ⏸️ **Settings app** - Deferred to Mission 7 (requires conductor agent)
 5. ⚠️ **Browser app** - Limited by iframe security (X-Frame-Options). Only sites allowing embedding (like Wikipedia) work. Full proxy solution deferred to Mission 7+ (requires server-side proxy with HTML rewriting).
-6. ❌ **E-text UX** - Not addressed (Mission 7 scope)
+6. ⚠️ **VText UX** - Hard-cutover shell is in progress; complete locally before `vmctl`
 
 ### Testing
 - ✅ Unit tests pass (all Go packages)
@@ -226,8 +226,26 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 ### Mission 6: Desktop UX Rewrite (COMPLETE)
 **Delivered:** 10/13 features (see Mission History above)
 
-### Mission 7: Cogent Integration + MicroVM Architecture (NEXT)
-**Goal:** Properly integrate ChoirOS microVM patterns from `~/choiros-rs` with Cogent work graph from `~/cogent`, replacing stub implementations.
+### Immediate Local Sequence (NEXT)
+**Goal:** Finish the local `vtext` core and version-native storage model before going deeper on `vmctl` / microVM lifecycle.
+
+**Why this comes first:**
+1. The current `vtext` UI is still the wrong shape for the product.
+2. The floating prompt/version action was not actually wired to the appagent path.
+3. The historical `etext` name is still embedded in active runtime/store paths.
+4. The sandbox still persists document state in SQLite, while the architecture already assumes embedded Dolt.
+5. `vmctl` work should happen after the sandbox state model is the one we actually want to run inside VMs.
+
+**Current local priority order:**
+1. `vtext` window becomes almost entirely the document surface
+2. floating prompt button + `<` / `>` version navigation
+3. prompt/apply calls the real `vtext` appagent path
+4. complete the active `etext` → `vtext` rename as a hard cutover, with no compatibility shims
+5. replace sandbox document storage with embedded Dolt
+6. then return to `vmctl` and x86 microVM validation
+
+### Mission 7: MicroVM Architecture + Runtime Deepening (AFTER LOCAL `VTEXT`/DOLT)
+**Goal:** Properly integrate ChoirOS microVM patterns from `~/choiros-rs` with Cogent work graph from `~/cogent`, replacing stub implementations once the local `vtext` core is solid.
 
 **Doc:** `docs/mission-7-cogent-integration.md`
 
@@ -251,7 +269,7 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 **Key tasks:**
 1. Verify auth schema migration on Node B (or clean reset)
 2. Deploy Fireworks + Z.AI API keys
-3. Test: register → login → etext → LLM prompt → response
+3. Test: register → login → `vtext` → LLM prompt → response
 
 **Blockers:** None (just needs execution)
 
@@ -267,7 +285,7 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 - Citations, metadata integrated into text (not sidebar)
 - Show artifacts (images, videos, audio, interactive elements) inline
 
-Note: current code still uses the historical `etext` name. Architecturally this app is now understood as `vtext`: a version-native, transclusion-capable living document rather than a generic text editor.
+Note: the rename is no longer just a docs convention. Completing the active `etext` → `vtext` rename as a hard cutover is part of the immediate local work so the UI, runtime, and storage layers all describe the same app.
 
 **Choir-in-Choir:**
 - Fork microVM to build new apps in background
@@ -347,6 +365,6 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 2. **Get Node B credentials:** Query `~/choiros-rs/.cogent/cogent-private.db`
 3. **Verify deploy:** Test auth registration on https://draft.choir-ip.com
 4. **Add provider keys:** Update `nix/node-b.nix`, rebuild
-5. **Test end-to-end:** Full flow from auth → etext → LLM
+5. **Test end-to-end:** Full flow from auth → `vtext` → LLM
 
 **For questions:** Reference this doc, then specific mission docs, then external repos (choiros-rs, cogent).

@@ -56,7 +56,7 @@ test('terminal launches from floating desktop icon', async ({ page, authenticato
   await expect(terminalWindow).toBeVisible();
 
   // Title should be "Terminal"
-  const titleText = await terminalWindow.locator('[data-window-titlebar] .title-text, [data-window-titlebar]').first().textContent();
+  const titleText = await terminalWindow.locator('[data-window-titlebar] .titlvtext, [data-window-titlebar]').first().textContent();
   expect(titleText).toContain('Terminal');
 });
 

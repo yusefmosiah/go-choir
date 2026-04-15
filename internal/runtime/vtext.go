@@ -1,21 +1,21 @@
-// Package runtime provides e-text document API handlers for the go-choir
+// Package runtime provides vtext document API handlers for the go-choir
 // sandbox runtime. These handlers expose the document CRUD, revision,
 // history, snapshot, diff, blame, and agent revision APIs through the
 // authenticated same-origin proxy path.
 //
 // API endpoints:
 //
-//	POST   /api/etext/documents          — create a new document
-//	GET    /api/etext/documents          — list documents for the authenticated user
-//	GET    /api/etext/documents/{id}     — get a document by ID
-//	PUT    /api/etext/documents/{id}     — update a document (e.g., title)
-//	DELETE /api/etext/documents/{id}     — delete a document and its revisions
-//	POST   /api/etext/documents/{id}/revisions — create a new revision (user edit or appagent edit)
-//	GET    /api/etext/documents/{id}/revisions — list revisions for a document
-//	GET    /api/etext/revisions/{id}    — get a specific revision (snapshot)
-//	GET    /api/etext/documents/{id}/history — get revision history with attribution
-//	GET    /api/etext/diff?from={id}&to={id} — diff two revisions
-//	GET    /api/etext/revisions/{id}/blame — blame a revision
+//	POST   /api/vtext/documents          — create a new document
+//	GET    /api/vtext/documents          — list documents for the authenticated user
+//	GET    /api/vtext/documents/{id}     — get a document by ID
+//	PUT    /api/vtext/documents/{id}     — update a document (e.g., title)
+//	DELETE /api/vtext/documents/{id}     — delete a document and its revisions
+//	POST   /api/vtext/documents/{id}/revisions — create a new revision (user edit or appagent edit)
+//	GET    /api/vtext/documents/{id}/revisions — list revisions for a document
+//	GET    /api/vtext/revisions/{id}    — get a specific revision (snapshot)
+//	GET    /api/vtext/documents/{id}/history — get revision history with attribution
+//	GET    /api/vtext/diff?from={id}&to={id} — diff two revisions
+//	GET    /api/vtext/revisions/{id}/blame — blame a revision
 package runtime
 
 import (
@@ -36,21 +36,21 @@ import (
 
 // ----- Request/Response types -----
 
-// etextCreateDocRequest is the JSON payload for POST /api/etext/documents.
-type etextCreateDocRequest struct {
+// vtextCreateDocRequest is the JSON payload for POST /api/vtext/documents.
+type vtextCreateDocRequest struct {
 	Title string `json:"title"`
 }
 
-// etextCreateDocResponse is the JSON response for POST /api/etext/documents.
-type etextCreateDocResponse struct {
+// vtextCreateDocResponse is the JSON response for POST /api/vtext/documents.
+type vtextCreateDocResponse struct {
 	DocID     string `json:"doc_id"`
 	OwnerID   string `json:"owner_id"`
 	Title     string `json:"title"`
 	CreatedAt string `json:"created_at"`
 }
 
-// etextDocumentResponse is the JSON response for GET /api/etext/documents/{id}.
-type etextDocumentResponse struct {
+// vtextDocumentResponse is the JSON response for GET /api/vtext/documents/{id}.
+type vtextDocumentResponse struct {
 	DocID             string `json:"doc_id"`
 	OwnerID           string `json:"owner_id"`
 	Title             string `json:"title"`
@@ -59,19 +59,19 @@ type etextDocumentResponse struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
-// etextUpdateDocRequest is the JSON payload for PUT /api/etext/documents/{id}.
-type etextUpdateDocRequest struct {
+// vtextUpdateDocRequest is the JSON payload for PUT /api/vtext/documents/{id}.
+type vtextUpdateDocRequest struct {
 	Title string `json:"title"`
 }
 
-// etextListDocsResponse is the JSON response for GET /api/etext/documents.
-type etextListDocsResponse struct {
-	Documents []etextDocumentResponse `json:"documents"`
+// vtextListDocsResponse is the JSON response for GET /api/vtext/documents.
+type vtextListDocsResponse struct {
+	Documents []vtextDocumentResponse `json:"documents"`
 }
 
-// etextCreateRevisionRequest is the JSON payload for
-// POST /api/etext/documents/{id}/revisions.
-type etextCreateRevisionRequest struct {
+// vtextCreateRevisionRequest is the JSON payload for
+// POST /api/vtext/documents/{id}/revisions.
+type vtextCreateRevisionRequest struct {
 	Content          string           `json:"content"`
 	AuthorKind       types.AuthorKind `json:"author_kind"`
 	AuthorLabel      string           `json:"author_label"`
@@ -80,8 +80,8 @@ type etextCreateRevisionRequest struct {
 	ParentRevisionID string           `json:"parent_revision_id,omitempty"`
 }
 
-// etextRevisionResponse is the JSON response for revision-related endpoints.
-type etextRevisionResponse struct {
+// vtextRevisionResponse is the JSON response for revision-related endpoints.
+type vtextRevisionResponse struct {
 	RevisionID       string           `json:"revision_id"`
 	DocID            string           `json:"doc_id"`
 	OwnerID          string           `json:"owner_id"`
@@ -94,36 +94,36 @@ type etextRevisionResponse struct {
 	CreatedAt        string           `json:"created_at"`
 }
 
-// etextListRevisionsResponse is the JSON response for
-// GET /api/etext/documents/{id}/revisions.
-type etextListRevisionsResponse struct {
-	Revisions []etextRevisionResponse `json:"revisions"`
+// vtextListRevisionsResponse is the JSON response for
+// GET /api/vtext/documents/{id}/revisions.
+type vtextListRevisionsResponse struct {
+	Revisions []vtextRevisionResponse `json:"revisions"`
 }
 
-// etextHistoryResponse is the JSON response for
-// GET /api/etext/documents/{id}/history.
-type etextHistoryResponse struct {
+// vtextHistoryResponse is the JSON response for
+// GET /api/vtext/documents/{id}/history.
+type vtextHistoryResponse struct {
 	DocID   string               `json:"doc_id"`
 	Entries []types.HistoryEntry `json:"entries"`
 }
 
-// etextDiffResponse is the JSON response for GET /api/etext/diff.
-type etextDiffResponse struct {
+// vtextDiffResponse is the JSON response for GET /api/vtext/diff.
+type vtextDiffResponse struct {
 	types.DiffResult
 }
 
-// etextBlameResponse is the JSON response for
-// GET /api/etext/revisions/{id}/blame.
-type etextBlameResponse struct {
+// vtextBlameResponse is the JSON response for
+// GET /api/vtext/revisions/{id}/blame.
+type vtextBlameResponse struct {
 	types.BlameResult
 }
 
 // ----- Helper functions -----
 
 // extractDocID extracts the document ID from the URL path.
-// Expected pattern: /api/etext/documents/{docID}/...
+// Expected pattern: /api/vtext/documents/{docID}/...
 func extractDocID(path string) string {
-	const prefix = "/api/etext/documents/"
+	const prefix = "/api/vtext/documents/"
 	if !strings.HasPrefix(path, prefix) {
 		return ""
 	}
@@ -134,9 +134,9 @@ func extractDocID(path string) string {
 }
 
 // extractRevisionID extracts the revision ID from the URL path.
-// Expected pattern: /api/etext/revisions/{revisionID}/...
+// Expected pattern: /api/vtext/revisions/{revisionID}/...
 func extractRevisionID(path string) string {
-	const prefix = "/api/etext/revisions/"
+	const prefix = "/api/vtext/revisions/"
 	if !strings.HasPrefix(path, prefix) {
 		return ""
 	}
@@ -147,9 +147,9 @@ func extractRevisionID(path string) string {
 
 // ----- Handler methods -----
 
-// HandleEtextCreateDocument handles POST /api/etext/documents.
+// HandleVTextCreateDocument handles POST /api/vtext/documents.
 // It creates a new document with a durable document identity (VAL-ETEXT-001).
-func (h *APIHandler) HandleEtextCreateDocument(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextCreateDocument(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -161,7 +161,7 @@ func (h *APIHandler) HandleEtextCreateDocument(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var req etextCreateDocRequest
+	var req vtextCreateDocRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
 		return
@@ -182,12 +182,12 @@ func (h *APIHandler) HandleEtextCreateDocument(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.rt.Store().CreateDocument(r.Context(), doc); err != nil {
-		log.Printf("etext api: create document: %v", err)
+		log.Printf("vtext api: create document: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create document"})
 		return
 	}
 
-	writeAPIJSON(w, http.StatusCreated, etextCreateDocResponse{
+	writeAPIJSON(w, http.StatusCreated, vtextCreateDocResponse{
 		DocID:     doc.DocID,
 		OwnerID:   doc.OwnerID,
 		Title:     doc.Title,
@@ -195,9 +195,9 @@ func (h *APIHandler) HandleEtextCreateDocument(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// HandleEtextListDocuments handles GET /api/etext/documents.
+// HandleVTextListDocuments handles GET /api/vtext/documents.
 // It returns documents owned by the authenticated user.
-func (h *APIHandler) HandleEtextListDocuments(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextListDocuments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -211,14 +211,14 @@ func (h *APIHandler) HandleEtextListDocuments(w http.ResponseWriter, r *http.Req
 
 	docs, err := h.rt.Store().ListDocumentsByOwner(r.Context(), ownerID, 50)
 	if err != nil {
-		log.Printf("etext api: list documents: %v", err)
+		log.Printf("vtext api: list documents: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list documents"})
 		return
 	}
 
-	resp := etextListDocsResponse{Documents: make([]etextDocumentResponse, 0, len(docs))}
+	resp := vtextListDocsResponse{Documents: make([]vtextDocumentResponse, 0, len(docs))}
 	for _, doc := range docs {
-		resp.Documents = append(resp.Documents, etextDocumentResponse{
+		resp.Documents = append(resp.Documents, vtextDocumentResponse{
 			DocID:             doc.DocID,
 			OwnerID:           doc.OwnerID,
 			Title:             doc.Title,
@@ -231,8 +231,8 @@ func (h *APIHandler) HandleEtextListDocuments(w http.ResponseWriter, r *http.Req
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
-// HandleEtextDocument handles GET/PUT/DELETE /api/etext/documents/{id}.
-func (h *APIHandler) HandleEtextDocument(w http.ResponseWriter, r *http.Request) {
+// HandleVTextDocument handles GET/PUT/DELETE /api/vtext/documents/{id}.
+func (h *APIHandler) HandleVTextDocument(w http.ResponseWriter, r *http.Request) {
 	docID := extractDocID(r.URL.Path)
 	if docID == "" {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "document ID is required"})
@@ -264,7 +264,7 @@ func (h *APIHandler) handleEtextGetDocument(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextDocumentResponse{
+	writeAPIJSON(w, http.StatusOK, vtextDocumentResponse{
 		DocID:             doc.DocID,
 		OwnerID:           doc.OwnerID,
 		Title:             doc.Title,
@@ -281,7 +281,7 @@ func (h *APIHandler) handleEtextUpdateDocument(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var req etextUpdateDocRequest
+	var req vtextUpdateDocRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
 		return
@@ -297,12 +297,12 @@ func (h *APIHandler) handleEtextUpdateDocument(w http.ResponseWriter, r *http.Re
 	doc.UpdatedAt = time.Now().UTC()
 
 	if err := h.rt.Store().UpdateDocument(r.Context(), doc); err != nil {
-		log.Printf("etext api: update document: %v", err)
+		log.Printf("vtext api: update document: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to update document"})
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextDocumentResponse{
+	writeAPIJSON(w, http.StatusOK, vtextDocumentResponse{
 		DocID:             doc.DocID,
 		OwnerID:           doc.OwnerID,
 		Title:             doc.Title,
@@ -327,9 +327,9 @@ func (h *APIHandler) handleEtextDeleteDocument(w http.ResponseWriter, r *http.Re
 	writeAPIJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// HandleEtextRevisions handles POST and GET
-// /api/etext/documents/{id}/revisions.
-func (h *APIHandler) HandleEtextRevisions(w http.ResponseWriter, r *http.Request) {
+// HandleVTextRevisions handles POST and GET
+// /api/vtext/documents/{id}/revisions.
+func (h *APIHandler) HandleVTextRevisions(w http.ResponseWriter, r *http.Request) {
 	docID := extractDocID(r.URL.Path)
 	if docID == "" {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "document ID is required"})
@@ -353,7 +353,7 @@ func (h *APIHandler) handleEtextCreateRevision(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var req etextCreateRevisionRequest
+	var req vtextCreateRevisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
 		return
@@ -403,12 +403,12 @@ func (h *APIHandler) handleEtextCreateRevision(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.rt.Store().CreateRevision(r.Context(), rev); err != nil {
-		log.Printf("etext api: create revision: %v", err)
+		log.Printf("vtext api: create revision: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create revision"})
 		return
 	}
 
-	writeAPIJSON(w, http.StatusCreated, etextRevisionResponse{
+	writeAPIJSON(w, http.StatusCreated, vtextRevisionResponse{
 		RevisionID:       rev.RevisionID,
 		DocID:            rev.DocID,
 		OwnerID:          rev.OwnerID,
@@ -431,14 +431,14 @@ func (h *APIHandler) handleEtextListRevisions(w http.ResponseWriter, r *http.Req
 
 	revs, err := h.rt.Store().ListRevisionsByDoc(r.Context(), docID, ownerID, 50)
 	if err != nil {
-		log.Printf("etext api: list revisions: %v", err)
+		log.Printf("vtext api: list revisions: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list revisions"})
 		return
 	}
 
-	resp := etextListRevisionsResponse{Revisions: make([]etextRevisionResponse, 0, len(revs))}
+	resp := vtextListRevisionsResponse{Revisions: make([]vtextRevisionResponse, 0, len(revs))}
 	for _, rev := range revs {
-		resp.Revisions = append(resp.Revisions, etextRevisionResponse{
+		resp.Revisions = append(resp.Revisions, vtextRevisionResponse{
 			RevisionID:       rev.RevisionID,
 			DocID:            rev.DocID,
 			OwnerID:          rev.OwnerID,
@@ -455,10 +455,10 @@ func (h *APIHandler) handleEtextListRevisions(w http.ResponseWriter, r *http.Req
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
-// HandleEtextRevision handles GET /api/etext/revisions/{id}.
+// HandleVTextRevision handles GET /api/vtext/revisions/{id}.
 // Opening a historical revision does not mutate the document head
 // (VAL-ETEXT-007: historical snapshots can be opened without mutating head).
-func (h *APIHandler) HandleEtextRevision(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextRevision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -482,7 +482,7 @@ func (h *APIHandler) HandleEtextRevision(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextRevisionResponse{
+	writeAPIJSON(w, http.StatusOK, vtextRevisionResponse{
 		RevisionID:       rev.RevisionID,
 		DocID:            rev.DocID,
 		OwnerID:          rev.OwnerID,
@@ -496,11 +496,11 @@ func (h *APIHandler) HandleEtextRevision(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// HandleEtextHistory handles GET /api/etext/documents/{id}/history.
+// HandleVTextHistory handles GET /api/vtext/documents/{id}/history.
 // It returns the revision history with explicit attribution metadata
 // (VAL-ETEXT-006: version history lists revisions with explicit
 // attribution metadata).
-func (h *APIHandler) HandleEtextHistory(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -520,22 +520,22 @@ func (h *APIHandler) HandleEtextHistory(w http.ResponseWriter, r *http.Request) 
 
 	entries, err := h.rt.Store().GetHistory(r.Context(), docID, ownerID, 50)
 	if err != nil {
-		log.Printf("etext api: get history: %v", err)
+		log.Printf("vtext api: get history: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to get history"})
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextHistoryResponse{
+	writeAPIJSON(w, http.StatusOK, vtextHistoryResponse{
 		DocID:   docID,
 		Entries: entries,
 	})
 }
 
-// HandleEtextDiff handles GET /api/etext/diff?from={id}&to={id}.
+// HandleVTextDiff handles GET /api/vtext/diff?from={id}&to={id}.
 // It compares selected from and to revisions and shows the changed
 // sections (VAL-ETEXT-008: diff view compares selected revisions and
 // changed sections).
-func (h *APIHandler) HandleEtextDiff(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextDiff(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -560,14 +560,14 @@ func (h *APIHandler) HandleEtextDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextDiffResponse{DiffResult: diff})
+	writeAPIJSON(w, http.StatusOK, vtextDiffResponse{DiffResult: diff})
 }
 
-// HandleEtextBlame handles GET /api/etext/revisions/{id}/blame.
+// HandleVTextBlame handles GET /api/vtext/revisions/{id}/blame.
 // It provides section-level attribution that distinguishes whether the
 // last editor was the user or the agent (VAL-ETEXT-009: blame identifies
 // the last editor per section).
-func (h *APIHandler) HandleEtextBlame(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextBlame(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -591,32 +591,32 @@ func (h *APIHandler) HandleEtextBlame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, etextBlameResponse{BlameResult: blame})
+	writeAPIJSON(w, http.StatusOK, vtextBlameResponse{BlameResult: blame})
 }
 
 // ----- Agent revision -----
 
-// etextAgentRevisionRequest is the JSON payload for
-// POST /api/etext/documents/{id}/agent-revision.
+// vtextAgentRevisionRequest is the JSON payload for
+// POST /api/vtext/documents/{id}/agent-revision.
 // Submitting a natural-language revision request from within an open document
 // creates a new canonical revision attributable to the appagent
 // (VAL-ETEXT-003).
-type etextAgentRevisionRequest struct {
+type vtextAgentRevisionRequest struct {
 	Prompt string `json:"prompt"`
 }
 
-// etextAgentRevisionResponse is the JSON response for agent revision
+// vtextAgentRevisionResponse is the JSON response for agent revision
 // submission. It returns the stable task handle so the client can track
 // progress through the event stream (VAL-ETEXT-004).
-type etextAgentRevisionResponse struct {
+type vtextAgentRevisionResponse struct {
 	TaskID    string          `json:"task_id"`
 	DocID     string          `json:"doc_id"`
 	State     types.TaskState `json:"state"`
 	CreatedAt string          `json:"created_at"`
 }
 
-// HandleEtextAgentRevision handles POST
-// /api/etext/documents/{id}/agent-revision.
+// HandleVTextAgentRevision handles POST
+// /api/vtext/documents/{id}/agent-revision.
 //
 // It creates a runtime task that, when completed, will create a canonical
 // appagent-authored revision. The task ID is returned so the client can
@@ -628,7 +628,7 @@ type etextAgentRevisionResponse struct {
 // returned instead of creating a new mutation, preventing duplicate
 // canonical revisions when renewal/retry occurs mid-mutation
 // (VAL-CROSS-122).
-func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -646,7 +646,7 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	var req etextAgentRevisionRequest
+	var req vtextAgentRevisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
 		return
@@ -670,10 +670,10 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 	// renewal/retry occurs mid-mutation (VAL-CROSS-122).
 	existing, err := h.rt.Store().GetPendingAgentMutationByDoc(r.Context(), docID, ownerID)
 	if err != nil {
-		log.Printf("etext api: check pending mutation: %v", err)
+		log.Printf("vtext api: check pending mutation: %v", err)
 	} else if existing != nil {
 		// Return the existing task — idempotent response.
-		writeAPIJSON(w, http.StatusAccepted, etextAgentRevisionResponse{
+		writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
 			TaskID:    existing.TaskID,
 			DocID:     docID,
 			State:     types.TaskPending,
@@ -693,9 +693,9 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 
 	agentPrompt := buildAgentRevisionPrompt(currentContent, req.Prompt)
 
-	// Create the runtime task with etext agent revision metadata.
+	// Create the runtime task with vtext agent revision metadata.
 	metadata := map[string]any{
-		"type":                "etext_agent_revision",
+		"type":                "vtext_agent_revision",
 		"agent_profile":       AgentProfileVText,
 		"agent_role":          AgentProfileVText,
 		"doc_id":              docID,
@@ -705,7 +705,7 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 
 	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, metadata)
 	if err != nil {
-		log.Printf("etext api: submit agent revision task: %v", err)
+		log.Printf("vtext api: submit agent revision task: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
 		return
 	}
@@ -718,18 +718,18 @@ func (h *APIHandler) HandleEtextAgentRevision(w http.ResponseWriter, r *http.Req
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
-		log.Printf("etext api: create agent mutation: %v", err)
+		log.Printf("vtext api: create agent mutation: %v", err)
 	}
 
-	// Emit the etext-specific agent revision started event.
+	// Emit the vtext-specific agent revision started event.
 	startedPayload, _ := json.Marshal(map[string]string{
 		"doc_id":  docID,
 		"task_id": rec.TaskID,
 	})
-	h.rt.emitEtextAgentEvent(r.Context(), rec, types.EventEtextAgentRevisionStarted,
+	h.rt.emitVTextAgentEvent(r.Context(), rec, types.EventVTextAgentRevisionStarted,
 		events.CauseTaskLifecycle, startedPayload)
 
-	writeAPIJSON(w, http.StatusAccepted, etextAgentRevisionResponse{
+	writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
 		TaskID:    rec.TaskID,
 		DocID:     docID,
 		State:     rec.State,
@@ -754,10 +754,10 @@ func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
 	return b.String()
 }
 
-// emitEtextAgentEvent is a helper that emits an etext-specific agent revision
+// emitVTextAgentEvent is a helper that emits an vtext-specific agent revision
 // event, carrying the doc_id in the payload so the frontend can correlate
 // progress to the open document (VAL-ETEXT-004).
-func (rt *Runtime) emitEtextAgentEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
+func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
 	rt.bus.Publish(events.RuntimeEvent{
 		Record: types.EventRecord{
 			EventID:   uuid.New().String(),
@@ -780,6 +780,6 @@ func (rt *Runtime) emitEtextAgentEvent(ctx context.Context, rec *types.TaskRecor
 		Kind:      kind,
 		Payload:   payload,
 	}); err != nil {
-		log.Printf("runtime: persist etext agent event: %v", err)
+		log.Printf("runtime: persist vtext agent event: %v", err)
 	}
 }

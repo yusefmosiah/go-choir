@@ -42,7 +42,7 @@
 - Desktop icons on left rail
 - Floating windows
 - Prompt bar at bottom (conductor)
-- Focused `vtext` document surface (current code still uses `etext`)
+- Focused `vtext` document surface
 - Responsive for mobile
 
 See: `docs/mission-6-desktop-ux-rewrite.md`
@@ -85,7 +85,7 @@ See: `docs/mission-6-desktop-ux-rewrite.md`
 ### Milestone 3: End-to-End Verification
 **Full flow test on production:**
 1. Register/login on draft.choir-ip.com
-2. Open the document app (`etext` in current code, `vtext` architecturally), create document
+2. Open the document app (`vtext`), create document
 3. Type in prompt bar (conductor) - request research
 4. See worker spawn and complete
 5. Results appear in the document app

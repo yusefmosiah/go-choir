@@ -1,8 +1,8 @@
 # Mission 4: Core Functionality, Security, and Choir in Choir
 
-**Goal:** Fix critical auth issues, harden security, and enable the "choir in choir" vision where the etext app spawns agents to build features concurrently.
+**Goal:** Fix critical auth issues, harden security, and enable the "choir in choir" vision where the vtext app spawns agents to build features concurrently.
 
-**Philosophy:** Core functionality and security first. Then build "choir in choir" - using the etext app as a control plane to spawn researchers and coding agents to build more features concurrently in microVMs.
+**Philosophy:** Core functionality and security first. Then build "choir in choir" - using the vtext app as a control plane to spawn researchers and coding agents to build more features concurrently in microVMs.
 
 ---
 
@@ -44,7 +44,7 @@
 ### Problem Statement
 - Tool calling loop not tested with real providers
 - SSE streaming not fully validated
-- No agent spawning from etext app
+- No agent spawning from vtext app
 
 ### Deliverables
 1. **Provider integration testing**
@@ -61,14 +61,14 @@
 
 3. **Etext app → agent spawning**
    - UI button to spawn researcher agent
-   - Researcher agent receives context from etext
+   - Researcher agent receives context from vtext
    - Agent runs in isolated microVM
-   - Results returned to etext app
+   - Results returned to vtext app
 
 ### Verification
 - Real LLM call with tool execution succeeds
 - Streaming events visible in UI
-- Agent spawned from etext completes task
+- Agent spawned from vtext completes task
 - Failed LLM calls handled gracefully
 
 ---
@@ -117,7 +117,7 @@
 ## Milestone 4: Choir in Choir (Control Plane)
 
 ### Vision
-The etext app becomes a control plane for spawning agents. Users write tasks in etext, and agents execute them in parallel microVMs.
+The vtext app becomes a control plane for spawning agents. Users write tasks in vtext, and agents execute them in parallel microVMs.
 
 ### Deliverables
 1. **Agent orchestration API**
@@ -199,7 +199,7 @@ Apply GLM-5.1's long-horizon refinement approach: establish framework, then iter
 1. **Auth:** 100% login success rate, 0 username-based accounts
 2. **LLM:** Real Bedrock/Z.AI calls succeed, streaming works
 3. **Security:** VMs constrained, network isolated, APIs rate-limited
-4. **Choir in Choir:** Can spawn 5+ agents from etext, monitor progress
+4. **Choir in Choir:** Can spawn 5+ agents from vtext, monitor progress
 5. **Desktop:** Usable on mobile, visually consistent
 
 ---

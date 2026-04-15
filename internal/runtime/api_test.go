@@ -1028,7 +1028,7 @@ func TestHandleVTextDocumentsRootAliasesEtext(t *testing.T) {
 		t.Fatalf("create status: got %d, want %d", createW.Code, http.StatusCreated)
 	}
 
-	var createResp etextCreateDocResponse
+	var createResp vtextCreateDocResponse
 	if err := json.NewDecoder(createW.Body).Decode(&createResp); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
@@ -1044,7 +1044,7 @@ func TestHandleVTextDocumentsRootAliasesEtext(t *testing.T) {
 		t.Fatalf("list status: got %d, want %d", listW.Code, http.StatusOK)
 	}
 
-	var listResp etextListDocsResponse
+	var listResp vtextListDocsResponse
 	if err := json.NewDecoder(listW.Body).Decode(&listResp); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}

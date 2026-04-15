@@ -24,7 +24,7 @@ sandbox (8085) -- host-process runtime fallback for local development; target ru
 | gateway   | 8084 | Multi-provider LLM gateway (Fireworks, Z.AI, Bedrock) with SSE streaming |
 | sandbox   | 8085 | Placeholder shell bootstrap and WebSocket echo surface for Milestone 1 |
 
-**Frontend:** Svelte SPA with email auth UI, desktop shell, and the versioned document app (`vtext`, currently still named `etext` in code/routes) plus choir-in-choir controls.
+**Frontend:** Svelte SPA with email auth UI, desktop shell, and the versioned document app (`vtext`) plus choir-in-choir controls.
 
 All services expose a `/health` endpoint.
 
@@ -43,7 +43,7 @@ Delivered features (10):
 7. **Browser app** -- iframe-based web browsing with URL bar, back/forward/reload navigation, graceful error handling for blocked iframes.
 8. **Terminal backend** -- PTY WebSocket endpoint (`/api/terminal/ws`) with auth gating, per-session management, cleanup on disconnect, multiple concurrent sessions.
 9. **Terminal frontend** -- ghostty-web WASM terminal emulator with dark theme, FitAddon responsive fit, 10000-line scrollback, WebSocket PTY connection.
-10. **Cross-area integration** -- Deploy-readiness tests for new layout, all cross-area flows verified (168 Playwright tests passing).
+10. **Cross-area integration** -- Deploy-readiness tests for new layout, all cross-area flows verified.
 
 Deferred to Mission 7:
 
@@ -60,7 +60,7 @@ Prior milestones still in place:
 - Playwright e2e test suite (168+ tests passing)
 - Go unit tests (all packages passing)
 
-Next: Mission 7 (conductor agent, settings UI, VM isolation, production hardening).
+Next: finish the hard-cutover `vtext` + embedded Dolt local path, then return to `vmctl` and microVM deepening.
 
 ## Development Setup
 
@@ -133,7 +133,7 @@ internal/
   store/        Persistence layer (stub)
   types/        Core domain types (stub)
   vmmanager/    Firecracker VM management
-frontend/       Svelte SPA: email auth UI, desktop shell, versioned document UI (`vtext` / current `etext`), choir-in-choir controls
+frontend/       Svelte SPA: email auth UI, desktop shell, versioned document UI (`vtext`), choir-in-choir controls
   tests/        Playwright e2e tests (auth flows, shell, rehydration, logout, re-login)
 nix/
   node-b.nix    NixOS module: systemd services, Caddy config

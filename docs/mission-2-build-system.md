@@ -98,7 +98,7 @@ See `docs/architecture.md` for the full spec. Key sections:
 - Version history viewer
 - App launcher
 
-**Verification:** Create an e-text document, edit it, prompt the agent to revise it, view version history with user vs agent attribution — all on draft.choir-ip.com.
+**Verification:** Create an vtext document, edit it, prompt the agent to revise it, view version history with user vs agent attribution — all on draft.choir-ip.com.
 
 ### Milestone 4: Gateway + VM Isolation
 
@@ -136,7 +136,7 @@ See `docs/architecture.md` for the full spec. Key sections:
 
 - **No CLI inside sandbox** — agents use Go function calls via ToolRegistry, not CLI subprocesses
 - **No external adapters** — all agent execution is in-process via the native tool-calling loop
-- **One Dolt per sandbox** — all state (e-text, work graph, sessions, events) in one embedded Dolt database
+- **One Dolt per sandbox** — all state (vtext, work graph, sessions, events) in one embedded Dolt database
 - **Conductor and scheduler are independent** — conductor routes inputs, scheduler tracks background work
 - **Users and appagents are peer canonical editors** — both create canonical versions in Dolt
 - **Workers are subordinate** — they send messages/proposals to appagents, never write canonical state directly

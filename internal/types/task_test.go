@@ -46,14 +46,14 @@ func TestTaskRecordJSONRoundTrip(t *testing.T) {
 	finishedAt := now.Add(10 * time.Second)
 
 	rec := TaskRecord{
-		TaskID:    "task-001",
-		OwnerID:   "user-alice",
-		SandboxID: "sandbox-dev",
-		State:     TaskCompleted,
-		Prompt:    "explain closures in Go",
-		Result:    "Closures in Go capture variables...",
-		CreatedAt: now,
-		UpdatedAt: now.Add(5 * time.Second),
+		TaskID:     "task-001",
+		OwnerID:    "user-alice",
+		SandboxID:  "sandbox-dev",
+		State:      TaskCompleted,
+		Prompt:     "explain closures in Go",
+		Result:     "Closures in Go capture variables...",
+		CreatedAt:  now,
+		UpdatedAt:  now.Add(5 * time.Second),
 		FinishedAt: &finishedAt,
 		Metadata: map[string]any{
 			"model":    "claude-3",
@@ -305,19 +305,19 @@ func TestWorkItemUsesTaskState(t *testing.T) {
 	}
 }
 
-func TestEtextAgentRevisionEventKinds(t *testing.T) {
-	// Verify the etext agent revision event kinds exist and are distinct.
+func TestVTextAgentRevisionEventKinds(t *testing.T) {
+	// Verify the vtext agent revision event kinds exist and are distinct.
 	eventKinds := []EventKind{
-		EventEtextAgentRevisionStarted,
-		EventEtextAgentRevisionProgress,
-		EventEtextAgentRevisionCompleted,
-		EventEtextAgentRevisionFailed,
+		EventVTextAgentRevisionStarted,
+		EventVTextAgentRevisionProgress,
+		EventVTextAgentRevisionCompleted,
+		EventVTextAgentRevisionFailed,
 	}
 	expected := []string{
-		"etext.agent_revision.started",
-		"etext.agent_revision.progress",
-		"etext.agent_revision.completed",
-		"etext.agent_revision.failed",
+		"vtext.agent_revision.started",
+		"vtext.agent_revision.progress",
+		"vtext.agent_revision.completed",
+		"vtext.agent_revision.failed",
 	}
 	for i, kind := range eventKinds {
 		if string(kind) != expected[i] {
@@ -341,7 +341,7 @@ func TestEtextAgentRevisionEventKinds(t *testing.T) {
 	}
 	for _, tk := range taskKinds {
 		if seen[string(tk)] {
-			t.Errorf("etext event kind collides with task event kind: %q", tk)
+			t.Errorf("vtext event kind collides with task event kind: %q", tk)
 		}
 	}
 }

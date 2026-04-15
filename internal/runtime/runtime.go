@@ -110,7 +110,7 @@ func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*typ
 
 // SubmitTaskWithMetadata creates a new task with the given metadata, persists
 // it, emits a submitted event, and begins execution in a goroutine. Metadata
-// is used to carry feature-specific context (e.g., etext agent revision info).
+// is used to carry feature-specific context (e.g., vtext agent revision info).
 func (rt *Runtime) SubmitTaskWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.TaskRecord, error) {
 	now := time.Now().UTC()
 	if metadata == nil {
@@ -481,8 +481,8 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		if kind == types.EventToolInvoked || kind == types.EventToolResult {
 			cause = events.CauseToolExecution
 		}
-		// Also emit etext-specific progress events for agent revision tasks.
-		if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
+		// Also emit vtext-specific progress events for agent revision tasks.
+		if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
 			if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 				if kind == types.EventTaskProgress {
 					progressPayload, _ := json.Marshal(map[string]string{
@@ -490,7 +490,7 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 						"task_id": rec.TaskID,
 						"phase":   phase,
 					})
-					rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionProgress,
+					rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionProgress,
 						events.CauseProviderProgress, progressPayload)
 				}
 			}
@@ -553,6 +553,11 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	rec.Metadata["input_tokens"] = usage.InputTokens
 	rec.Metadata["output_tokens"] = usage.OutputTokens
 
+	// For vtext agent revision tasks, create the canonical revision and emit the
+	// vtext completion event before the task is surfaced as completed. This keeps
+	// task completion aligned with document-version availability.
+	rt.handleTaskCompletion(ctx, rec)
+
 	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
 		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
 		return
@@ -570,9 +575,6 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(ctx, rec)
 
-	// Post-completion: handle feature-specific side effects (e.g., etext
-	// agent revision canonical revision creation).
-	rt.handleTaskCompletion(ctx, rec)
 }
 
 // executeWithProvider runs the task through the simple Provider.Execute path.
@@ -597,6 +599,12 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	rec.Result = result
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
+
+	// For vtext agent revision tasks, create the canonical revision and emit the
+	// vtext completion event before the task is surfaced as completed. This keeps
+	// task completion aligned with document-version availability.
+	rt.handleTaskCompletion(ctx, rec)
+
 	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
 		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
 		return
@@ -610,13 +618,10 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(ctx, rec)
 
-	// Post-completion: handle feature-specific side effects (e.g., etext
-	// agent revision canonical revision creation).
-	rt.handleTaskCompletion(ctx, rec)
 }
 
 // handleTaskCompletion processes feature-specific side effects after a task
-// completes successfully. For etext agent revision tasks, it creates the
+// completes successfully. For vtext agent revision tasks, it creates the
 // canonical appagent-authored revision and emits the completion event
 // (VAL-ETEXT-003, VAL-CROSS-120).
 //
@@ -626,30 +631,35 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 // (VAL-CROSS-122).
 func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskRecord) {
 	taskType, _ := rec.Metadata["type"].(string)
-	if taskType != "etext_agent_revision" {
+	if taskType != "vtext_agent_revision" {
 		return
 	}
 
+	// Use a background context for post-completion persistence so the canonical
+	// revision and completion event survive a fast runtime shutdown that
+	// cancels the task context immediately after the provider returns.
+	persistCtx := context.Background()
+
 	docID, _ := rec.Metadata["doc_id"].(string)
 	if docID == "" {
-		log.Printf("runtime: etext agent revision task %s: missing doc_id in metadata", rec.TaskID)
+		log.Printf("runtime: vtext agent revision task %s: missing doc_id in metadata", rec.TaskID)
 		return
 	}
 
 	// Check the agent mutation record to ensure we don't create a duplicate
 	// canonical revision (VAL-CROSS-122).
-	mutation, err := rt.store.GetAgentMutationByTask(ctx, rec.TaskID)
+	mutation, err := rt.store.GetAgentMutationByTask(persistCtx, rec.TaskID)
 	if err != nil {
-		log.Printf("runtime: etext agent revision task %s: get mutation: %v", rec.TaskID, err)
+		log.Printf("runtime: vtext agent revision task %s: get mutation: %v", rec.TaskID, err)
 		return
 	}
 	if mutation == nil {
-		log.Printf("runtime: etext agent revision task %s: no mutation record found", rec.TaskID)
+		log.Printf("runtime: vtext agent revision task %s: no mutation record found", rec.TaskID)
 		return
 	}
 	if mutation.State == "completed" {
 		// Already created the revision — idempotent skip.
-		log.Printf("runtime: etext agent revision task %s: mutation already completed, skipping", rec.TaskID)
+		log.Printf("runtime: vtext agent revision task %s: mutation already completed, skipping", rec.TaskID)
 		return
 	}
 
@@ -660,10 +670,10 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 	}
 
 	// Get the current document state for the parent revision ID.
-	doc, err := rt.store.GetDocument(ctx, docID, ownerID)
+	doc, err := rt.store.GetDocument(persistCtx, docID, ownerID)
 	if err != nil {
-		log.Printf("runtime: etext agent revision task %s: get document: %v", rec.TaskID, err)
-		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+		log.Printf("runtime: vtext agent revision task %s: get document: %v", rec.TaskID, err)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
 		return
 	}
 
@@ -692,24 +702,24 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 		CreatedAt:        now,
 	}
 
-	if err := rt.store.CreateRevision(ctx, rev); err != nil {
-		log.Printf("runtime: etext agent revision task %s: create revision: %v", rec.TaskID, err)
-		_ = rt.store.FailAgentMutation(ctx, rec.TaskID)
+	if err := rt.store.CreateRevision(persistCtx, rev); err != nil {
+		log.Printf("runtime: vtext agent revision task %s: create revision: %v", rec.TaskID, err)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
 		return
 	}
 
 	// Mark the mutation as completed. If this fails because it's already
 	// completed, the revision was already created — no duplicate
 	// (VAL-CROSS-122).
-	if err := rt.store.CompleteAgentMutation(ctx, rec.TaskID, rev.RevisionID); err != nil {
+	if err := rt.store.CompleteAgentMutation(persistCtx, rec.TaskID, rev.RevisionID); err != nil {
 		if err == store.ErrMutationAlreadyCompleted {
-			log.Printf("runtime: etext agent revision task %s: mutation already completed (race condition), revision %s is the canonical one", rec.TaskID, rev.RevisionID)
+			log.Printf("runtime: vtext agent revision task %s: mutation already completed (race condition), revision %s is the canonical one", rec.TaskID, rev.RevisionID)
 		} else {
-			log.Printf("runtime: etext agent revision task %s: complete mutation: %v", rec.TaskID, err)
+			log.Printf("runtime: vtext agent revision task %s: complete mutation: %v", rec.TaskID, err)
 		}
 	}
 
-	// Emit the etext-specific agent revision completed event with doc_id
+	// Emit the vtext-specific agent revision completed event with doc_id
 	// and revision_id so the frontend can correlate to the open document
 	// (VAL-ETEXT-004).
 	completedPayload, _ := json.Marshal(map[string]string{
@@ -717,10 +727,10 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 		"revision_id": rev.RevisionID,
 		"task_id":     rec.TaskID,
 	})
-	rt.emitEtextAgentEvent(ctx, rec, types.EventEtextAgentRevisionCompleted,
+	rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionCompleted,
 		events.CauseTaskLifecycle, completedPayload)
 
-	log.Printf("runtime: etext agent revision task %s: created canonical revision %s for doc %s", rec.TaskID, rev.RevisionID, docID)
+	log.Printf("runtime: vtext agent revision task %s: created canonical revision %s for doc %s", rec.TaskID, rev.RevisionID, docID)
 }
 
 // handleExecutionError transitions a task to failed/blocked and emits the
@@ -762,9 +772,9 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	errPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 	rt.emitEvent(persistCtx, rec, kind, cause, errPayload)
 
-	// If this is an etext agent revision task, mark the mutation as failed
-	// and emit the etext-specific failure event.
-	if taskType, _ := rec.Metadata["type"].(string); taskType == "etext_agent_revision" {
+	// If this is an vtext agent revision task, mark the mutation as failed
+	// and emit the vtext-specific failure event.
+	if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
 		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
@@ -772,7 +782,7 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 				"task_id": rec.TaskID,
 				"error":   err.Error(),
 			})
-			rt.emitEtextAgentEvent(persistCtx, rec, types.EventEtextAgentRevisionFailed,
+			rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
 				events.CauseProviderFailure, failPayload)
 		}
 	}

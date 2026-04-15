@@ -1,14 +1,14 @@
-// Package store provides e-text document persistence for the go-choir sandbox
+// Package store provides vtext document persistence for the go-choir sandbox
 // runtime.
 //
-// The e-text store persists documents, revisions, citations, and metadata
-// using SQLite, enabling history-capable persistence with history/snapshot/
-// diff/blame APIs. The schema is designed to migrate toward Dolt-backed
-// per-user workspaces in later milestones.
+// The vtext store persists documents, revisions, citations, and metadata
+// using an embedded Dolt workspace, enabling history-capable persistence with
+// first-class versioning semantics, history/snapshot/diff/blame APIs, and
+// per-user in-process storage inside the sandbox.
 //
 // Design decisions:
-//   - SQLite with WAL mode for concurrent read performance, matching the
-//     existing runtime store pattern.
+//   - Embedded Dolt (`github.com/dolthub/driver`) for version-native document
+//     storage without a separate server process.
 //   - Full-content revisions (not deltas) so that historical snapshots are
 //     directly accessible without reconstruction.
 //   - Citations and metadata are stored per-revision as JSON blobs so they
@@ -32,112 +32,160 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	embedded "github.com/dolthub/driver"
 
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-// etextSchemaDDL creates the e-text tables if they do not already exist.
-const etextSchemaDDL = `
-CREATE TABLE IF NOT EXISTS etext_documents (
-	doc_id              TEXT PRIMARY KEY,
-	owner_id            TEXT NOT NULL,
-	title               TEXT NOT NULL DEFAULT '',
-	current_revision_id TEXT NOT NULL DEFAULT '',
+// vtextSchemaDDL creates the vtext tables if they do not already exist.
+const vtextSchemaDDL = `
+CREATE TABLE IF NOT EXISTS vtext_documents (
+	doc_id              VARCHAR(255) PRIMARY KEY,
+	owner_id            VARCHAR(255) NOT NULL,
+	title               VARCHAR(1024) NOT NULL DEFAULT '',
+	current_revision_id VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL,
 	updated_at          DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS etext_revisions (
-	revision_id         TEXT PRIMARY KEY,
-	doc_id              TEXT NOT NULL,
-	owner_id            TEXT NOT NULL,
-	author_kind         TEXT NOT NULL,
-	author_label        TEXT NOT NULL DEFAULT '',
-	content             TEXT NOT NULL DEFAULT '',
-	citations_json      TEXT NOT NULL DEFAULT '',
-	metadata_json       TEXT NOT NULL DEFAULT '',
-	parent_revision_id  TEXT NOT NULL DEFAULT '',
+CREATE TABLE IF NOT EXISTS vtext_revisions (
+	revision_id         VARCHAR(255) PRIMARY KEY,
+	doc_id              VARCHAR(255) NOT NULL,
+	owner_id            VARCHAR(255) NOT NULL,
+	author_kind         VARCHAR(64) NOT NULL,
+	author_label        VARCHAR(255) NOT NULL DEFAULT '',
+	content             LONGTEXT NOT NULL,
+	citations_json      LONGTEXT NOT NULL,
+	metadata_json       LONGTEXT NOT NULL,
+	parent_revision_id  VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_etext_docs_owner ON etext_documents(owner_id);
-CREATE INDEX IF NOT EXISTS idx_etext_revs_doc ON etext_revisions(doc_id);
-CREATE INDEX IF NOT EXISTS idx_etext_revs_owner ON etext_revisions(owner_id);
-CREATE INDEX IF NOT EXISTS idx_etext_revs_doc_created ON etext_revisions(doc_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vtext_docs_owner ON vtext_documents(owner_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc ON vtext_revisions(doc_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_revs_owner ON vtext_revisions(owner_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc_created ON vtext_revisions(doc_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS etext_agent_mutations (
-	doc_id              TEXT NOT NULL,
-	task_id             TEXT NOT NULL,
-	owner_id            TEXT NOT NULL,
-	state               TEXT NOT NULL DEFAULT 'pending',
-	revision_id         TEXT NOT NULL DEFAULT '',
+CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
+	doc_id              VARCHAR(255) NOT NULL,
+	task_id             VARCHAR(255) NOT NULL,
+	owner_id            VARCHAR(255) NOT NULL,
+	state               VARCHAR(64) NOT NULL DEFAULT 'pending',
+	revision_id         VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL,
 	completed_at        DATETIME,
 	PRIMARY KEY (doc_id, task_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_etext_mutations_doc ON etext_agent_mutations(doc_id);
-CREATE INDEX IF NOT EXISTS idx_etext_mutations_task ON etext_agent_mutations(task_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_mutations_doc ON vtext_agent_mutations(doc_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_mutations_task ON vtext_agent_mutations(task_id);
 `
 
-// OpenEtextWorkspace opens (or creates) a SQLite database for e-text
-// per-user workspace storage. It applies the e-text schema and returns
-// a Store ready for e-text operations.
-func OpenEtextWorkspace(dbPath string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("etext workspace: create directory: %w", err)
-	}
-
-	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=60000")
+// OpenVTextWorkspace opens (or creates) an embedded Dolt workspace for
+// vtext document storage only. It is mainly used by store-level tests and
+// by local sandbox workflows that need the document store without the rest
+// of the runtime SQLite tables.
+func OpenVTextWorkspace(path string) (*Store, error) {
+	db, workspacePath, err := openVTextWorkspaceDB(path)
 	if err != nil {
-		return nil, fmt.Errorf("etext workspace: open %s: %w", dbPath, err)
+		return nil, err
 	}
-
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	s := &Store{path: path, vtextDB: db, vtextPath: workspacePath}
+	if err := s.bootstrapVText(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("etext workspace: set WAL mode: %w", err)
+		return nil, fmt.Errorf("vtext workspace: bootstrap: %w", err)
 	}
-
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("etext workspace: enable foreign keys: %w", err)
-	}
-
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	s := &Store{db: db, path: dbPath}
-	if err := s.bootstrapEtext(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("etext workspace: bootstrap: %w", err)
-	}
-
 	return s, nil
 }
 
-// bootstrapEtext applies the e-text schema DDL to the database.
-func (s *Store) bootstrapEtext() error {
-	_, err := s.db.Exec(etextSchemaDDL)
+func deriveVTextWorkspacePath(path string) string {
+	if path == "" {
+		return filepath.Join(os.TempDir(), "go-choir-vtext")
+	}
+	trimmed := strings.TrimSuffix(path, filepath.Ext(path))
+	if trimmed == "" {
+		trimmed = path
+	}
+	return trimmed + ".vtext"
+}
+
+func openVTextWorkspaceDB(path string) (*sql.DB, string, error) {
+	workspacePath := deriveVTextWorkspacePath(path)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		_ = os.RemoveAll(workspacePath)
+	}
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		return nil, "", fmt.Errorf("vtext workspace: create directory: %w", err)
+	}
+
+	rootDSN := fmt.Sprintf(
+		"file://%s?commitname=Choir&commitemail=system@choir.local&multistatements=true",
+		workspacePath,
+	)
+	cfg, err := embedded.ParseDSN(rootDSN)
 	if err != nil {
-		return fmt.Errorf("apply etext schema: %w", err)
+		return nil, "", fmt.Errorf("vtext workspace: parse dsn: %w", err)
+	}
+	connector, err := embedded.NewConnector(cfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("vtext workspace: new connector: %w", err)
+	}
+	rootDB := sql.OpenDB(connector)
+	rootDB.SetMaxOpenConns(1)
+	rootDB.SetMaxIdleConns(1)
+	if _, err := rootDB.Exec("CREATE DATABASE IF NOT EXISTS vtext"); err != nil {
+		_ = rootDB.Close()
+		return nil, "", fmt.Errorf("vtext workspace: create database: %w", err)
+	}
+	if err := rootDB.Close(); err != nil {
+		return nil, "", fmt.Errorf("vtext workspace: close bootstrap connection: %w", err)
+	}
+
+	dbDSN := fmt.Sprintf(
+		"file://%s?commitname=Choir&commitemail=system@choir.local&database=vtext&multistatements=true",
+		workspacePath,
+	)
+	dbCfg, err := embedded.ParseDSN(dbDSN)
+	if err != nil {
+		return nil, "", fmt.Errorf("vtext workspace: parse database dsn: %w", err)
+	}
+	dbConnector, err := embedded.NewConnector(dbCfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("vtext workspace: new database connector: %w", err)
+	}
+	db := sql.OpenDB(dbConnector)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return db, workspacePath, nil
+}
+
+func (s *Store) vtextHandle() *sql.DB {
+	if s.vtextDB != nil {
+		return s.vtextDB
+	}
+	return s.db
+}
+
+// bootstrapVText applies the vtext schema DDL to the embedded workspace.
+func (s *Store) bootstrapVText() error {
+	_, err := s.vtextHandle().Exec(vtextSchemaDDL)
+	if err != nil {
+		return fmt.Errorf("apply vtext schema: %w", err)
 	}
 	return nil
 }
 
-// EnsureEtextSchema applies the e-text schema to an existing runtime store.
-// This allows the runtime store to also serve e-text operations without
-// requiring a separate workspace database.
-func (s *Store) EnsureEtextSchema() error {
-	return s.bootstrapEtext()
+// EnsureVTextSchema applies the vtext schema to the embedded workspace.
+func (s *Store) EnsureVTextSchema() error {
+	return s.bootstrapVText()
 }
 
 // ----- Document CRUD -----
 
 // CreateDocument inserts a new document record.
 func (s *Store) CreateDocument(ctx context.Context, doc types.Document) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO etext_documents (doc_id, owner_id, title, current_revision_id, created_at, updated_at)
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT INTO vtext_documents (doc_id, owner_id, title, current_revision_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		doc.DocID,
 		doc.OwnerID,
@@ -147,7 +195,7 @@ func (s *Store) CreateDocument(ctx context.Context, doc types.Document) error {
 		doc.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return fmt.Errorf("insert etext document: %w", err)
+		return fmt.Errorf("insert vtext document: %w", err)
 	}
 	return nil
 }
@@ -156,9 +204,9 @@ func (s *Store) CreateDocument(ctx context.Context, doc types.Document) error {
 // given owner. If the document does not exist or does not belong to the
 // owner, it returns ErrNotFound.
 func (s *Store) GetDocument(ctx context.Context, docID, ownerID string) (types.Document, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.vtextHandle().QueryRowContext(ctx,
 		`SELECT doc_id, owner_id, title, current_revision_id, created_at, updated_at
-		   FROM etext_documents
+		   FROM vtext_documents
 		  WHERE doc_id = ? AND owner_id = ?`,
 		docID, ownerID,
 	)
@@ -171,16 +219,16 @@ func (s *Store) ListDocumentsByOwner(ctx context.Context, ownerID string, limit 
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.vtextHandle().QueryContext(ctx,
 		`SELECT doc_id, owner_id, title, current_revision_id, created_at, updated_at
-		   FROM etext_documents
+		   FROM vtext_documents
 		  WHERE owner_id = ?
 		  ORDER BY updated_at DESC
 		  LIMIT ?`,
 		ownerID, limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query etext documents: %w", err)
+		return nil, fmt.Errorf("query vtext documents: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -193,15 +241,15 @@ func (s *Store) ListDocumentsByOwner(ctx context.Context, ownerID string, limit 
 		docs = append(docs, doc)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate etext documents: %w", err)
+		return nil, fmt.Errorf("iterate vtext documents: %w", err)
 	}
 	return docs, nil
 }
 
 // UpdateDocument updates an existing document record.
 func (s *Store) UpdateDocument(ctx context.Context, doc types.Document) error {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE etext_documents
+	result, err := s.vtextHandle().ExecContext(ctx,
+		`UPDATE vtext_documents
 		    SET owner_id = ?,
 		        title = ?,
 		        current_revision_id = ?,
@@ -215,7 +263,7 @@ func (s *Store) UpdateDocument(ctx context.Context, doc types.Document) error {
 		doc.OwnerID,
 	)
 	if err != nil {
-		return fmt.Errorf("update etext document: %w", err)
+		return fmt.Errorf("update vtext document: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -231,17 +279,17 @@ func (s *Store) UpdateDocument(ctx context.Context, doc types.Document) error {
 // to the given owner.
 func (s *Store) DeleteDocument(ctx context.Context, docID, ownerID string) error {
 	// Delete revisions first (no FK constraint, so manual cleanup).
-	_, _ = s.db.ExecContext(ctx,
-		`DELETE FROM etext_revisions WHERE doc_id = ? AND owner_id = ?`,
+	_, _ = s.vtextHandle().ExecContext(ctx,
+		`DELETE FROM vtext_revisions WHERE doc_id = ? AND owner_id = ?`,
 		docID, ownerID,
 	)
 
-	result, err := s.db.ExecContext(ctx,
-		`DELETE FROM etext_documents WHERE doc_id = ? AND owner_id = ?`,
+	result, err := s.vtextHandle().ExecContext(ctx,
+		`DELETE FROM vtext_documents WHERE doc_id = ? AND owner_id = ?`,
 		docID, ownerID,
 	)
 	if err != nil {
-		return fmt.Errorf("delete etext document: %w", err)
+		return fmt.Errorf("delete vtext document: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -267,8 +315,8 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 		metadata = "{}"
 	}
 
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO etext_revisions (revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at)
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT INTO vtext_revisions (revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rev.RevisionID,
 		rev.DocID,
@@ -282,12 +330,12 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 		rev.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return fmt.Errorf("insert etext revision: %w", err)
+		return fmt.Errorf("insert vtext revision: %w", err)
 	}
 
 	// Update the document's current_revision_id and updated_at.
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE etext_documents
+	_, err = s.vtextHandle().ExecContext(ctx,
+		`UPDATE vtext_documents
 		    SET current_revision_id = ?,
 		        updated_at = ?
 		  WHERE doc_id = ? AND owner_id = ?`,
@@ -297,7 +345,7 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 		rev.OwnerID,
 	)
 	if err != nil {
-		return fmt.Errorf("update etext document head: %w", err)
+		return fmt.Errorf("update vtext document head: %w", err)
 	}
 	return nil
 }
@@ -305,9 +353,9 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 // GetRevision returns the revision with the given revision ID, scoped to
 // the given owner.
 func (s *Store) GetRevision(ctx context.Context, revisionID, ownerID string) (types.Revision, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.vtextHandle().QueryRowContext(ctx,
 		`SELECT revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at
-		   FROM etext_revisions
+		   FROM vtext_revisions
 		  WHERE revision_id = ? AND owner_id = ?`,
 		revisionID, ownerID,
 	)
@@ -318,9 +366,9 @@ func (s *Store) GetRevision(ctx context.Context, revisionID, ownerID string) (ty
 // Used internally for diff/blame computation where the revision chain
 // is already known to belong to the same owner.
 func (s *Store) GetRevisionUnscoped(ctx context.Context, revisionID string) (types.Revision, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.vtextHandle().QueryRowContext(ctx,
 		`SELECT revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at
-		   FROM etext_revisions
+		   FROM vtext_revisions
 		  WHERE revision_id = ?`,
 		revisionID,
 	)
@@ -334,16 +382,16 @@ func (s *Store) ListRevisionsByDoc(ctx context.Context, docID, ownerID string, l
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.vtextHandle().QueryContext(ctx,
 		`SELECT revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at
-		   FROM etext_revisions
+		   FROM vtext_revisions
 		  WHERE doc_id = ? AND owner_id = ?
 		  ORDER BY created_at DESC
 		  LIMIT ?`,
 		docID, ownerID, limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query etext revisions: %w", err)
+		return nil, fmt.Errorf("query vtext revisions: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -356,7 +404,7 @@ func (s *Store) ListRevisionsByDoc(ctx context.Context, docID, ownerID string, l
 		revs = append(revs, rev)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate etext revisions: %w", err)
+		return nil, fmt.Errorf("iterate vtext revisions: %w", err)
 	}
 	return revs, nil
 }
@@ -364,49 +412,39 @@ func (s *Store) ListRevisionsByDoc(ctx context.Context, docID, ownerID string, l
 // ----- History -----
 
 // GetHistory returns the revision history for a document as a list of
-// HistoryEntry values, ordered by created_at descending (newest first).
-// Each entry carries revision ID, author kind, author label, timestamp,
-// and parent revision ID — enough for the history view to show a
-// chronological revision list with explicit attribution (VAL-ETEXT-006).
+// HistoryEntry values ordered from the current head backward through the
+// parent_revision chain. Using the explicit revision chain rather than a raw
+// timestamp sort avoids ambiguity when multiple revisions share the same
+// coarse database timestamp.
 func (s *Store) GetHistory(ctx context.Context, docID, ownerID string, limit int) ([]types.HistoryEntry, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT revision_id, doc_id, author_kind, author_label, parent_revision_id, created_at
-		   FROM etext_revisions
-		  WHERE doc_id = ? AND owner_id = ?
-		  ORDER BY created_at DESC
-		  LIMIT ?`,
-		docID, ownerID, limit,
-	)
+
+	doc, err := s.GetDocument(ctx, docID, ownerID)
 	if err != nil {
-		return nil, fmt.Errorf("query etext history: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
+	if doc.CurrentRevisionID == "" {
+		return []types.HistoryEntry{}, nil
+	}
 
-	var entries []types.HistoryEntry
-	for rows.Next() {
-		var e types.HistoryEntry
-		var authorKind, createdAt string
-		var parentRevID string
-
-		if err := rows.Scan(&e.RevisionID, &e.DocID, &authorKind, &e.AuthorLabel, &parentRevID, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan history entry: %w", err)
-		}
-
-		e.AuthorKind = types.AuthorKind(authorKind)
-		e.ParentRevisionID = parentRevID
-
-		e.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	currentID := doc.CurrentRevisionID
+	entries := make([]types.HistoryEntry, 0, limit)
+	for len(entries) < limit && currentID != "" {
+		rev, err := s.GetRevision(ctx, currentID, ownerID)
 		if err != nil {
-			return nil, fmt.Errorf("parse history created_at: %w", err)
+			return nil, fmt.Errorf("load vtext history revision %s: %w", currentID, err)
 		}
-
-		entries = append(entries, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate etext history: %w", err)
+		entries = append(entries, types.HistoryEntry{
+			RevisionID:       rev.RevisionID,
+			DocID:            rev.DocID,
+			AuthorKind:       rev.AuthorKind,
+			AuthorLabel:      rev.AuthorLabel,
+			ParentRevisionID: rev.ParentRevisionID,
+			CreatedAt:        rev.CreatedAt,
+		})
+		currentID = rev.ParentRevisionID
 	}
 	return entries, nil
 }
@@ -488,8 +526,8 @@ func computeLineDiff(from, to string) []types.DiffSection {
 			Type:        "unchanged",
 			FromLine:    match.fi,
 			ToLine:      match.fi,
-			ToLineNum:    match.ti,
-			ToEndLine:    match.ti,
+			ToLineNum:   match.ti,
+			ToEndLine:   match.ti,
 			FromContent: fromLines[match.fi],
 			ToContent:   toLines[match.ti],
 		})
@@ -792,8 +830,8 @@ func computeBlame(chain []types.Revision, head types.Revision) []types.BlameSect
 				rev = chain[ci]
 			}
 			sections = append(sections, types.BlameSection{
-				RevisionID: rev.RevisionID,
-				AuthorKind: rev.AuthorKind,
+				RevisionID:  rev.RevisionID,
+				AuthorKind:  rev.AuthorKind,
 				AuthorLabel: rev.AuthorLabel,
 				StartLine:   start,
 				EndLine:     i - 1,
@@ -826,7 +864,7 @@ func scanDocument(row interface{ Scan(...any) error }) (types.Document, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return types.Document{}, ErrNotFound
 		}
-		return types.Document{}, fmt.Errorf("scan etext document: %w", err)
+		return types.Document{}, fmt.Errorf("scan vtext document: %w", err)
 	}
 
 	doc.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -864,7 +902,7 @@ func scanRevision(row interface{ Scan(...any) error }) (types.Revision, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return types.Revision{}, ErrNotFound
 		}
-		return types.Revision{}, fmt.Errorf("scan etext revision: %w", err)
+		return types.Revision{}, fmt.Errorf("scan vtext revision: %w", err)
 	}
 
 	rev.AuthorKind = types.AuthorKind(authorKind)
@@ -902,15 +940,15 @@ type AgentMutation struct {
 }
 
 // CreateAgentMutation records a new in-flight appagent mutation. It uses
-// INSERT OR IGNORE so that duplicate (doc_id, task_id) pairs are silently
+// INSERT IGNORE so that duplicate (doc_id, task_id) pairs are silently
 // ignored, supporting idempotent task creation (VAL-CROSS-122).
 func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error {
 	var completedAt any
 	if m.CompletedAt != nil {
 		completedAt = m.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO etext_agent_mutations (doc_id, task_id, owner_id, state, revision_id, created_at, completed_at)
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, task_id, owner_id, state, revision_id, created_at, completed_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		m.DocID,
 		m.TaskID,
@@ -921,7 +959,7 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 		completedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("insert etext agent mutation: %w", err)
+		return fmt.Errorf("insert vtext agent mutation: %w", err)
 	}
 	return nil
 }
@@ -931,9 +969,9 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 // when a retry/renewal occurs, preventing duplicate mutation submissions
 // (VAL-CROSS-122).
 func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID string) (*AgentMutation, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.vtextHandle().QueryRowContext(ctx,
 		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
-		   FROM etext_agent_mutations
+		   FROM vtext_agent_mutations
 		  WHERE doc_id = ? AND owner_id = ? AND state = 'pending'
 		  ORDER BY created_at DESC
 		  LIMIT 1`,
@@ -946,9 +984,9 @@ func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID
 // This is used during task completion to check if the revision has already
 // been created (VAL-CROSS-122: no duplicate canonical revision).
 func (s *Store) GetAgentMutationByTask(ctx context.Context, taskID string) (*AgentMutation, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.vtextHandle().QueryRowContext(ctx,
 		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
-		   FROM etext_agent_mutations
+		   FROM vtext_agent_mutations
 		  WHERE task_id = ?`,
 		taskID,
 	)
@@ -963,8 +1001,8 @@ var ErrMutationAlreadyCompleted = errors.New("agent mutation already completed")
 
 func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID string) error {
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE etext_agent_mutations
+	result, err := s.vtextHandle().ExecContext(ctx,
+		`UPDATE vtext_agent_mutations
 		    SET state = 'completed',
 		        revision_id = ?,
 		        completed_at = ?
@@ -974,7 +1012,7 @@ func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID st
 		taskID,
 	)
 	if err != nil {
-		return fmt.Errorf("complete etext agent mutation: %w", err)
+		return fmt.Errorf("complete vtext agent mutation: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -989,8 +1027,8 @@ func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID st
 // FailAgentMutation marks an agent mutation as failed.
 func (s *Store) FailAgentMutation(ctx context.Context, taskID string) error {
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE etext_agent_mutations
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`UPDATE vtext_agent_mutations
 		    SET state = 'failed',
 		        completed_at = ?
 		  WHERE task_id = ? AND state = 'pending'`,
@@ -998,7 +1036,7 @@ func (s *Store) FailAgentMutation(ctx context.Context, taskID string) error {
 		taskID,
 	)
 	if err != nil {
-		return fmt.Errorf("fail etext agent mutation: %w", err)
+		return fmt.Errorf("fail vtext agent mutation: %w", err)
 	}
 	return nil
 }
@@ -1022,7 +1060,7 @@ func scanAgentMutation(row interface{ Scan(...any) error }) (*AgentMutation, err
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // no pending mutation is not an error
 		}
-		return nil, fmt.Errorf("scan etext agent mutation: %w", err)
+		return nil, fmt.Errorf("scan vtext agent mutation: %w", err)
 	}
 
 	m.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)

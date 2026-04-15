@@ -112,7 +112,7 @@ test('VText appears as a first-class desktop app', async ({ page, authenticator 
   const vtextWindow = page.locator('[data-vtext-app]');
   await expect(vtextWindow).toBeVisible({ timeout: 5000 });
 
-  const titleText = page.locator('[data-window-titlebar] .title-text');
+  const titleText = page.locator('[data-window-titlebar] .titlvtext');
   await expect(titleText.first()).toContainText('VText');
 });
 
@@ -136,7 +136,7 @@ test('double-click icon opens single-instance window', async ({ page, authentica
   await expect(page.locator('[data-window]')).toHaveCount(1);
 
   // The window title should match
-  const titleText = page.locator('[data-window-titlebar] .title-text');
+  const titleText = page.locator('[data-window-titlebar] .titlvtext');
   await expect(titleText.first()).toContainText('Files');
 });
 

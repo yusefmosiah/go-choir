@@ -9,7 +9,7 @@
 //   - SQLite with WAL mode for concurrent read performance, matching the
 //     existing auth store pattern.
 //   - Single database file per sandbox (host-process milestone) rather than
-//     per-user Dolt databases (that comes in the e-text milestone).
+//     per-user Dolt databases (that comes in the vtext milestone).
 //   - Event sequence numbers are per-task, enabling incremental cursors for
 //     the /api/events streaming surface.
 //   - The store interface is minimal: CreateTask, GetTask, UpdateTask,
@@ -37,8 +37,10 @@ var ErrNotFound = errors.New("record not found")
 // Store wraps a SQLite database connection and provides persistence for
 // task records and event records.
 type Store struct {
-	db   *sql.DB
-	path string
+	db        *sql.DB
+	path      string
+	vtextDB   *sql.DB
+	vtextPath string
 }
 
 // schemaDDL creates the runtime tables if they do not already exist.
@@ -107,6 +109,14 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("runtime store: create directory: %w", err)
 	}
 
+	// If the runtime SQLite file has been removed, treat this as a fresh store
+	// and clear any stale sibling vtext workspace left behind by a previous run.
+	// This keeps repeat test runs isolated while preserving reopen semantics for
+	// callers that keep the runtime DB file in place.
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		_ = os.RemoveAll(deriveVTextWorkspacePath(dbPath))
+	}
+
 	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=60000")
 	if err != nil {
 		return nil, fmt.Errorf("runtime store: open %s: %w", dbPath, err)
@@ -134,11 +144,19 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("runtime store: bootstrap: %w", err)
 	}
 
-	// Also apply the e-text schema so the runtime store can serve
-	// e-text operations alongside task/event/desktop state.
-	if err := s.EnsureEtextSchema(); err != nil {
+	vtextDB, vtextPath, err := openVTextWorkspaceDB(dbPath)
+	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("runtime store: bootstrap etext: %w", err)
+		return nil, fmt.Errorf("runtime store: open vtext workspace: %w", err)
+	}
+	s.vtextDB = vtextDB
+	s.vtextPath = vtextPath
+
+	// Apply the vtext schema to the embedded Dolt workspace.
+	if err := s.EnsureVTextSchema(); err != nil {
+		_ = vtextDB.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("runtime store: bootstrap vtext: %w", err)
 	}
 
 	return s, nil
@@ -155,17 +173,28 @@ func (s *Store) bootstrap() error {
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
+	var err error
+	if s.vtextDB != nil {
+		err = s.vtextDB.Close()
+	}
 	if s.db != nil {
 		// Checkpoint WAL before closing.
 		_, _ = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-		return s.db.Close()
+		if closeErr := s.db.Close(); err == nil {
+			err = closeErr
+		}
 	}
-	return nil
+	return err
 }
 
 // Path returns the database file path.
 func (s *Store) Path() string {
 	return s.path
+}
+
+// VTextPath returns the filesystem path backing the embedded vtext workspace.
+func (s *Store) VTextPath() string {
+	return s.vtextPath
 }
 
 // CreateTask inserts a new task record.
@@ -592,7 +621,7 @@ func (s *Store) GetDesktopState(ctx context.Context, ownerID string) (types.Desk
 				OwnerID:        ownerID,
 				Windows:        []types.WindowState{},
 				ActiveWindowID: "",
-				UpdatedAt:       time.Now().UTC(),
+				UpdatedAt:      time.Now().UTC(),
 			}, nil
 		}
 		return types.DesktopState{}, fmt.Errorf("query desktop state: %w", err)

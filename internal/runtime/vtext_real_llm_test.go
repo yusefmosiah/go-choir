@@ -245,12 +245,12 @@ func resolveRealProvider(t *testing.T) (Provider, string) {
 	return nil, ""
 }
 
-// etextRealLLMSetup creates a test environment with a real LLM provider.
+// vtextRealLLMSetup creates a test environment with a real LLM provider.
 // It returns an APIHandler, store, runtime, and provider name.
-func etextRealLLMSetup(t *testing.T) (*APIHandler, *store.Store, *Runtime, string) {
+func vtextRealLLMSetup(t *testing.T) (*APIHandler, *store.Store, *Runtime, string) {
 	t.Helper()
 
-	dir := filepath.Join(os.TempDir(), "go-choir-m2-etext-real-llm-test")
+	dir := filepath.Join(os.TempDir(), "go-choir-m2-vtext-real-llm-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -267,7 +267,7 @@ func etextRealLLMSetup(t *testing.T) (*APIHandler, *store.Store, *Runtime, strin
 	realProvider, providerName := resolveRealProvider(t)
 
 	cfg := Config{
-		SandboxID:           "sandbox-etext-real-llm",
+		SandboxID:           "sandbox-vtext-real-llm",
 		StorePath:           dbPath,
 		ProviderTimeout:     60 * time.Second,
 		SupervisionInterval: 5 * time.Second,
@@ -281,8 +281,8 @@ func etextRealLLMSetup(t *testing.T) (*APIHandler, *store.Store, *Runtime, strin
 	return NewAPIHandler(rt), s, rt, providerName
 }
 
-// etextRealLLMRequest creates an HTTP request for the real LLM tests.
-func etextRealLLMRequest(t *testing.T, method, path string, body interface{}) *http.Request {
+// vtextRealLLMRequest creates an HTTP request for the real LLM tests.
+func vtextRealLLMRequest(t *testing.T, method, path string, body interface{}) *http.Request {
 	t.Helper()
 	var reqBody *bytes.Reader
 	if body != nil {
@@ -301,7 +301,7 @@ func etextRealLLMRequest(t *testing.T, method, path string, body interface{}) *h
 
 // --- Real LLM E2E Tests ---
 
-// TestEtextAgentRevisionRealLLM validates the full agent revision flow
+// TestVTextAgentRevisionRealLLM validates the full agent revision flow
 // with a real LLM provider:
 //  1. Create document
 //  2. Add user-authored revision with initial content
@@ -312,23 +312,23 @@ func etextRealLLMRequest(t *testing.T, method, path string, body interface{}) *h
 //  7. Verify history shows both user and appagent attribution
 //
 // Fulfills: VAL-LLM-013, VAL-LLM-014
-func TestEtextAgentRevisionRealLLM(t *testing.T) {
-	h, s, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLM(t *testing.T) {
+	h, s, _, providerName := vtextRealLLMSetup(t)
 	ctx := context.Background()
 
 	t.Logf("Testing with provider: %s", providerName)
 
 	// Step 1: Create a document.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Real LLM Test Document"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
+	h.HandleVTextCreateDocument(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create document: status = %d, body: %s", w.Code, w.Body.String())
 	}
 
-	var docResp etextCreateDocResponse
+	var docResp vtextCreateDocResponse
 	if err := json.NewDecoder(w.Body).Decode(&docResp); err != nil {
 		t.Fatalf("decode document response: %v", err)
 	}
@@ -336,21 +336,21 @@ func TestEtextAgentRevisionRealLLM(t *testing.T) {
 
 	// Step 2: Add initial user content.
 	initialContent := "Hey there! This is a simple test document. It has some informal language and could use improvement."
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     initialContent,
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create user revision: status = %d, body: %s", w.Code, w.Body.String())
 	}
 
-	var userRevResp etextRevisionResponse
+	var userRevResp vtextRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&userRevResp); err != nil {
 		t.Fatalf("decode revision response: %v", err)
 	}
@@ -358,17 +358,17 @@ func TestEtextAgentRevisionRealLLM(t *testing.T) {
 
 	// Step 3: Submit agent revision prompt.
 	revisionPrompt := "Rewrite this in a formal, professional tone. Keep the same meaning but use professional language."
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": revisionPrompt})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("agent revision: status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
 	}
 
-	var agentResp etextAgentRevisionResponse
+	var agentResp vtextAgentRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&agentResp); err != nil {
 		t.Fatalf("decode agent revision response: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestEtextAgentRevisionRealLLM(t *testing.T) {
 	// Step 4: Wait for the task to complete.
 	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
 	if state != types.TaskCompleted {
-		statusReq := etextRealLLMRequest(t, http.MethodGet,
+		statusReq := vtextRealLLMRequest(t, http.MethodGet,
 			"/api/agent/status?task_id="+agentResp.TaskID, nil)
 		statusW := httptest.NewRecorder()
 		h.HandleTaskStatus(statusW, statusReq)
@@ -395,7 +395,7 @@ func TestEtextAgentRevisionRealLLM(t *testing.T) {
 	}
 
 	// Get the task result.
-	statusReq := etextRealLLMRequest(t, http.MethodGet,
+	statusReq := vtextRealLLMRequest(t, http.MethodGet,
 		"/api/agent/status?task_id="+agentResp.TaskID, nil)
 	statusW := httptest.NewRecorder()
 	h.HandleTaskStatus(statusW, statusReq)
@@ -471,52 +471,52 @@ func TestEtextAgentRevisionRealLLM(t *testing.T) {
 	t.Logf("  Revised:  %q", truncate(agentRev.Content, 60))
 }
 
-// TestEtextAgentRevisionRealLLMCodeGeneration validates that requesting
+// TestVTextAgentRevisionRealLLMCodeGeneration validates that requesting
 // code generation through agent revision produces code-like output.
 //
 // Fulfills: VAL-LLM-015
-func TestEtextAgentRevisionRealLLMCodeGeneration(t *testing.T) {
-	h, s, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMCodeGeneration(t *testing.T) {
+	h, s, _, providerName := vtextRealLLMSetup(t)
 	ctx := context.Background()
 
 	t.Logf("Testing code generation with provider: %s", providerName)
 
 	// Create document.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Code Generation Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
+	h.HandleVTextCreateDocument(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create document: status = %d", w.Code)
 	}
-	var docResp etextCreateDocResponse
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// Create initial revision.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "I need a Python function to calculate fibonacci numbers.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "dev",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create revision: status = %d", w.Code)
 	}
 
 	// Submit agent revision requesting code.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Write a complete Python function that calculates fibonacci numbers. Include a docstring and handle edge cases."})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("agent revision: status = %d", w.Code)
 	}
 
-	var agentResp etextAgentRevisionResponse
+	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
 	// Wait for completion.
@@ -556,39 +556,39 @@ func TestEtextAgentRevisionRealLLMCodeGeneration(t *testing.T) {
 	t.Logf("  Generated content: %q", truncate(agentRev.Content, 100))
 }
 
-// TestEtextAgentRevisionRealLLMEventsEmitted validates that lifecycle
+// TestVTextAgentRevisionRealLLMEventsEmitted validates that lifecycle
 // events are emitted during a real LLM agent revision.
-func TestEtextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
-	h, s, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
+	h, s, _, providerName := vtextRealLLMSetup(t)
 	ctx := context.Background()
 
 	t.Logf("Testing event emission with provider: %s", providerName)
 
 	// Create document and user revision.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Event Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Some content to revise.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Submit agent revision.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Make it shorter"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var agentResp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
 	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
@@ -606,8 +606,8 @@ func TestEtextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 		types.EventTaskSubmitted:               false,
 		types.EventTaskStarted:                 false,
 		types.EventTaskCompleted:               false,
-		types.EventEtextAgentRevisionStarted:   false,
-		types.EventEtextAgentRevisionCompleted: false,
+		types.EventVTextAgentRevisionStarted:   false,
+		types.EventVTextAgentRevisionCompleted: false,
 	}
 
 	for _, ev := range evts {
@@ -624,7 +624,7 @@ func TestEtextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 
 	// Verify completed event payload.
 	for _, ev := range evts {
-		if ev.Kind == types.EventEtextAgentRevisionCompleted {
+		if ev.Kind == types.EventVTextAgentRevisionCompleted {
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
 				if payload["doc_id"] != docResp.DocID {
@@ -653,50 +653,50 @@ func TestEtextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 	t.Logf("✓ Event emission validated (%d events captured)", len(evts))
 }
 
-// TestEtextAgentRevisionRealLLMMutationIdempotency validates that
+// TestVTextAgentRevisionRealLLMMutationIdempotency validates that
 // retrying an agent revision request returns the same task ID.
-func TestEtextAgentRevisionRealLLMMutationIdempotency(t *testing.T) {
-	h, s, _, _ := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMMutationIdempotency(t *testing.T) {
+	h, s, _, _ := vtextRealLLMSetup(t)
 
 	// Create document and user revision.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Idempotency Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Content for idempotency test.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Submit agent revision.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Improve this document"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var resp1 etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var resp1 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&resp1)
 
 	// Retry — should return same task ID.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Improve this document"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
+	h.HandleVTextAgentRevision(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("retry status = %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var resp2 etextAgentRevisionResponse
+	var resp2 vtextAgentRevisionResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp2); err != nil {
 		t.Fatalf("decode retry response: %v", err)
 	}
@@ -729,39 +729,39 @@ func TestEtextAgentRevisionRealLLMMutationIdempotency(t *testing.T) {
 	t.Logf("✓ Idempotency validated: both requests returned task %s, 1 appagent revision created", resp1.TaskID)
 }
 
-// TestEtextAgentRevisionRealLLMStreamingDeltas validates that the real
+// TestVTextAgentRevisionRealLLMStreamingDeltas validates that the real
 // LLM provider emits streaming delta events.
-func TestEtextAgentRevisionRealLLMStreamingDeltas(t *testing.T) {
-	h, s, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMStreamingDeltas(t *testing.T) {
+	h, s, _, providerName := vtextRealLLMSetup(t)
 	ctx := context.Background()
 
 	t.Logf("Testing streaming deltas with provider: %s", providerName)
 
 	// Create document and user revision.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Streaming Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Short text.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Submit agent revision.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Expand this to a paragraph"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var agentResp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
 	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
@@ -796,38 +796,38 @@ func TestEtextAgentRevisionRealLLMStreamingDeltas(t *testing.T) {
 	t.Logf("✓ Streaming validated: %d delta events, total text length: %d", deltaCount, len(totalDeltaText))
 }
 
-// TestEtextAgentRevisionRealLLMProviderMetadata validates that task
+// TestVTextAgentRevisionRealLLMProviderMetadata validates that task
 // metadata captures provider information.
-func TestEtextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
-	h, _, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
+	h, _, _, providerName := vtextRealLLMSetup(t)
 
 	t.Logf("Testing provider metadata with provider: %s", providerName)
 
 	// Create document and user revision.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "Metadata Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "Some text for metadata test.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Submit agent revision.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Rewrite this concisely"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var agentResp etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
 	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
@@ -836,7 +836,7 @@ func TestEtextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
 	}
 
 	// Check metadata.
-	statusReq := etextRealLLMRequest(t, http.MethodGet,
+	statusReq := vtextRealLLMRequest(t, http.MethodGet,
 		"/api/agent/status?task_id="+agentResp.TaskID, nil)
 	statusW := httptest.NewRecorder()
 	h.HandleTaskStatus(statusW, statusReq)
@@ -847,8 +847,8 @@ func TestEtextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
 		t.Fatal("task metadata should not be nil")
 	}
 	taskType, _ := statusResp.Metadata["type"].(string)
-	if taskType != "etext_agent_revision" {
-		t.Errorf("metadata.type = %q, want %q", taskType, "etext_agent_revision")
+	if taskType != "vtext_agent_revision" {
+		t.Errorf("metadata.type = %q, want %q", taskType, "vtext_agent_revision")
 	}
 
 	metadataDocID, _ := statusResp.Metadata["doc_id"].(string)
@@ -860,40 +860,40 @@ func TestEtextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
 	t.Logf("  Task result length: %d", len(statusResp.Result))
 }
 
-// TestEtextAgentRevisionRealLLMFullHistory validates a sequence of
+// TestVTextAgentRevisionRealLLMFullHistory validates a sequence of
 // user edits and agent revisions produces correct history.
-func TestEtextAgentRevisionRealLLMFullHistory(t *testing.T) {
-	h, s, _, providerName := etextRealLLMSetup(t)
+func TestVTextAgentRevisionRealLLMFullHistory(t *testing.T) {
+	h, s, _, providerName := vtextRealLLMSetup(t)
 	ctx := context.Background()
 
 	t.Logf("Testing full history with provider: %s", providerName)
 
 	// Create document.
-	req := etextRealLLMRequest(t, http.MethodPost, "/api/etext/documents",
+	req := vtextRealLLMRequest(t, http.MethodPost, "/api/vtext/documents",
 		map[string]string{"title": "History Test"})
 	w := httptest.NewRecorder()
-	h.HandleEtextCreateDocument(w, req)
-	var docResp etextCreateDocResponse
+	h.HandleVTextCreateDocument(w, req)
+	var docResp vtextCreateDocResponse
 	_ = json.NewDecoder(w.Body).Decode(&docResp)
 
 	// User edit 1.
-	revReq := etextCreateRevisionRequest{
+	revReq := vtextCreateRevisionRequest{
 		Content:     "First draft by user.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Agent revision 1.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Make it more detailed"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var agentResp1 etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var agentResp1 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp1)
 
 	state := waitForTaskCompletion(t, h, agentResp1.TaskID, 60*time.Second)
@@ -902,23 +902,23 @@ func TestEtextAgentRevisionRealLLMFullHistory(t *testing.T) {
 	}
 
 	// User edit 2.
-	revReq = etextCreateRevisionRequest{
+	revReq = vtextCreateRevisionRequest{
 		Content:     "User adds more content after agent revision.",
 		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
 	}
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/revisions", revReq)
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/revisions", revReq)
 	w = httptest.NewRecorder()
-	h.HandleEtextRevisions(w, req)
+	h.HandleVTextRevisions(w, req)
 
 	// Agent revision 2.
-	req = etextRealLLMRequest(t, http.MethodPost,
-		"/api/etext/documents/"+docResp.DocID+"/agent-revision",
+	req = vtextRealLLMRequest(t, http.MethodPost,
+		"/api/vtext/documents/"+docResp.DocID+"/agent-revision",
 		map[string]string{"prompt": "Summarize the content"})
 	w = httptest.NewRecorder()
-	h.HandleEtextAgentRevision(w, req)
-	var agentResp2 etextAgentRevisionResponse
+	h.HandleVTextAgentRevision(w, req)
+	var agentResp2 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp2)
 
 	state = waitForTaskCompletion(t, h, agentResp2.TaskID, 60*time.Second)

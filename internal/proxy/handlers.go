@@ -42,11 +42,11 @@ type errorResponse struct {
 // reachability status, and vmctl routing status, making the
 // protected-request backend health observable for VAL-DEPLOY-008.
 type proxyHealthResponse struct {
-	Status   string `json:"status"`
-	Service  string `json:"service"`
-	Upstream string `json:"upstream"`
+	Status       string `json:"status"`
+	Service      string `json:"service"`
+	Upstream     string `json:"upstream"`
 	VMctlRouting string `json:"vmctl_routing,omitempty"`
-	VMctlURL    string `json:"vmctl_url,omitempty"`
+	VMctlURL     string `json:"vmctl_url,omitempty"`
 }
 
 // AuthResult holds the result of access JWT validation.
@@ -62,7 +62,7 @@ type Handler struct {
 	reverseProxy *httputil.ReverseProxy
 	upgrader     websocket.Upgrader
 	dialer       *websocket.Dialer
-	sandboxURL   *url.URL // parsed sandbox URL for WS dial derivation
+	sandboxURL   *url.URL      // parsed sandbox URL for WS dial derivation
 	vmctlClient  *vmctl.Client // optional vmctl client for VM-backed routing
 }
 
@@ -156,8 +156,8 @@ func NewHandler(cfg *Config, pubKey ed25519.PublicKey) (*Handler, error) {
 				return true
 			},
 		},
-		dialer:     websocket.DefaultDialer,
-		sandboxURL: sandboxURL,
+		dialer:      websocket.DefaultDialer,
+		sandboxURL:  sandboxURL,
 		vmctlClient: vmctlCli,
 	}, nil
 }
@@ -333,12 +333,10 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// restore (VAL-DESKTOP-007).
 		h.HandleProtectedAPI(w, r)
 		return
-	case strings.HasPrefix(path, "/api/etext/"), strings.HasPrefix(path, "/api/vtext/"):
+	case strings.HasPrefix(path, "/api/vtext/"):
 		// Versioned document API: auth-gated at the proxy level and
 		// forwarded to the sandbox with the authenticated user context
-		// injected. Both /api/etext/* and /api/vtext/* are supported
-		// while the rename settles, but product-facing clients should
-		// prefer /api/vtext/*.
+		// injected.
 		h.HandleProtectedAPI(w, r)
 		return
 	case strings.HasPrefix(path, "/api/files"):

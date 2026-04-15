@@ -111,13 +111,13 @@
 - No research button
 - No citations sidebar
 - No metadata panel as the primary UI
-- Current code/routes may still use `etext`; the architectural name is `vtext`
+- Current code/routes may still use `vtext`; the architectural name is `vtext`
 
 **Simple API:**
-- `GET /app/etext/api/documents` - list
-- `POST /app/etext/api/documents` - create
-- `GET /app/etext/api/documents/:id` - load
-- `PUT /app/etext/api/documents/:id` - save
+- `GET /app/vtext/api/documents` - list
+- `POST /app/vtext/api/documents` - create
+- `GET /app/vtext/api/documents/:id` - load
+- `PUT /app/vtext/api/documents/:id` - save
 
 ### 5. Conductor Integration
 **Files:** `frontend/src/lib/PromptBar.svelte`, update `App.svelte`
@@ -166,13 +166,13 @@ export const windows = writable([]); // Array of window states
 export const activeWindow = writable(null); // ID of focused window
 export const minimizedWindows = writable([]); // IDs of minimized
 export const apps = writable([ // Available apps
-  { id: 'etext', name: 'VText', icon: '📄' },
+  { id: 'vtext', name: 'VText', icon: '📄' },
   { id: 'terminal', name: 'Terminal', icon: '💻' },
   { id: 'chat', name: 'Chat', icon: '💬' },
 ]);
 ```
 
-Note: current runtime IDs still use `etext`. Product-facing naming should move toward `vtext`.
+Note: `vtext` is the active product and runtime name.
 
 ### Backend Sync
 - Window positions saved to backend periodically
@@ -200,7 +200,7 @@ Note: current runtime IDs still use `etext`. Product-facing naming should move t
 ### Delete/Deprecate:
 - Remove "bootstrap" accordion
 - Remove top app bar
-- Remove research button from etext/vtext
+- Remove research button from vtext/vtext
 - Remove citations sidebar
 - Make ordinary textual files open in `vtext` for a unified desktop/file-browser workflow
 
@@ -217,11 +217,11 @@ POST   /api/conductor/route        - Route prompt to appropriate appagent
 
 ### Transitional VText API:
 ```
-GET    /app/etext/api/documents              - List documents
-POST   /app/etext/api/documents              - Create new document
-GET    /app/etext/api/documents/:id          - Get document content
-PUT    /app/etext/api/documents/:id          - Save document content
-DELETE /app/etext/api/documents/:id          - Delete document
+GET    /app/vtext/api/documents              - List documents
+POST   /app/vtext/api/documents              - Create new document
+GET    /app/vtext/api/documents/:id          - Get document content
+PUT    /app/vtext/api/documents/:id          - Save document content
+DELETE /app/vtext/api/documents/:id          - Delete document
 ```
 
 ---

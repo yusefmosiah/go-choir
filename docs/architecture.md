@@ -25,7 +25,7 @@ Browser → Caddy (edge, TLS termination, serves Svelte static assets)
            └── /provider/*  → gateway service (Go)
 
 vmctl (Go) runs independently, manages VM lifecycle via Firecracker API socket
-sandbox (Go, inside each microVM) — conductor, scheduler, agent runtime, apps, e-text (Dolt), tools, persistence
+sandbox (Go, inside each microVM) — conductor, scheduler, agent runtime, apps, vtext (Dolt), tools, persistence
 ```
 
 ### 2.2 High-Level Component Diagram
@@ -124,7 +124,7 @@ All built from the same Go module in `go-choir`, different `cmd/` entry points:
 | `proxy` | Host | Routes authenticated API requests to the correct sandbox VM based on user session. Handles WebSocket upgrade and proxying. | HTTP (behind Caddy), vsock/virtio-net to VMs |
 | `vmctl` | Host | VM lifecycle management via firecracker-go-sdk. Boot, stop, hibernate, idle watchdog, memory pressure checks. Exposes internal API for proxy/auth to query VM status. | Internal API (not exposed to browser) |
 | `gateway` | Host | Provider gateway. Receives LLM API calls from sandboxes, injects real API keys, proxies to upstream providers (Anthropic, OpenAI, Bedrock, etc.), rate limiting per sandbox. | HTTP (called by sandboxes, not directly by browser) |
-| `sandbox` | Inside each microVM | The full product: conductor (input routing), scheduler (work registry), agent runtime, apps, appagents, workers, e-text, tools, persistence (Dolt — all sandbox state). | HTTP API on internal port (reached via proxy) |
+| `sandbox` | Inside each microVM | The full product: conductor (input routing), scheduler (work registry), agent runtime, apps, appagents, workers, vtext, tools, persistence (Dolt — all sandbox state). | HTTP API on internal port (reached via proxy) |
 
 ### 2.4 Caddy (Edge)
 
@@ -138,7 +138,7 @@ All built from the same Go module in `go-choir`, different `cmd/` entry points:
 
 - Single SPA build artifact, served by Caddy as static files
 - Handles both auth flows (talks to auth service) and desktop/app flows (talks to proxy → sandbox)
-- Pretext (`@chenglou/pretext`) used for e-text editor component
+- Pretext (`@chenglou/pretext`) used for vtext editor component
 - Window management (drag, resize, minimize, maximize, z-ordering) implemented client-side
 - Real-time: SSE for status streams, WebSocket for interactive sessions
 - Communicates exclusively via JSON API and WebSocket
@@ -153,7 +153,7 @@ All built from the same Go module in `go-choir`, different `cmd/` entry points:
 - ConductorActor (input routing) → **sandbox**: Conductor subsystem (multi-channel input gateway — §3.2)
 - ConductorActor (work tracking, dispatch) → **sandbox**: Scheduler subsystem (cross-app work registry — §3.3)
 - Sandbox (actor system, event store, agents, apps) → **sandbox** binary (agent runtime, persistence, app layer)
-- Dioxus WASM frontend → **Svelte SPA** (served by Caddy) + **Pretext** for e-text editor
+- Dioxus WASM frontend → **Svelte SPA** (served by Caddy) + **Pretext** for vtext editor
 - BAML contracts → Go-native structured output via LLM clients (copied from cogent, in sandbox)
 - ractor actor system → goroutine supervisor (in sandbox)
 - shared-types → eliminated (Go types within the sandbox binary, shared via Go module for host services)
@@ -534,7 +534,7 @@ Browser (Svelte SPA)
 **Consolidated persistence model: 1 Dolt per sandbox + 2 tiny SQLite on host = 3 databases total**
 
 **Per sandbox VM: ONE Dolt database (embedded)**
-- Everything goes in Dolt: e-text content, work graph (scheduler records, attestations, edges), app state, sessions, events (append-only table), locks, runtime state, job records, artifacts metadata, desktop state, private notes
+- Everything goes in Dolt: vtext content, work graph (scheduler records, attestations, edges), app state, sessions, events (append-only table), locks, runtime state, job records, artifacts metadata, desktop state, private notes
 - Version-controlled commits for meaningful state changes (user edits, work state transitions, etc.)
 - Operational/ephemeral state (sessions, locks, events) lives in Dolt tables but doesn't need to be committed after every write — just committed periodically or on significant state changes
 - This is simpler to manage: one database, one backup story, one replication story
@@ -548,7 +548,7 @@ Browser (Svelte SPA)
 
 | Service | Engine | Purpose | Schema Source |
 |---------|--------|---------|--------------|
-| **sandbox** (All State) | Dolt (embedded, per-user) | ALL sandbox state: e-text content, work graph, agent sessions/jobs/turns, events, desktop state, private notes, artifacts metadata | Schema adapted from cogent's 21-table schema + e-text schema (see §5) |
+| **sandbox** (All State) | Dolt (embedded, per-user) | ALL sandbox state: vtext content, work graph, agent sessions/jobs/turns, events, desktop state, private notes, artifacts metadata | Schema adapted from cogent's 21-table schema + vtext schema (see §5) |
 | **sandbox** (Filesystem) | Local disk (VM data.img) | Agent artifacts (binary files), raw outputs, native session history, config | Layout adapted from cogent's `.cogent/` directory structure |
 | **auth** (Auth DB) | SQLite | User accounts, WebAuthn credentials, session tokens | choiros hypervisor schema (users, credentials, sessions) |
 | **vmctl** (VM Registry) | SQLite | VM metadata, user→VM mappings, VM health status | New schema |
@@ -557,7 +557,7 @@ Browser (Svelte SPA)
 **Dolt tables (all in one database per sandbox):**
 
 *Versioned (committed on meaningful changes):*
-- `documents`, `content`, `citations`, `metadata` — e-text app
+- `documents`, `content`, `citations`, `metadata` — vtext app
 - `work_items`, `work_edges`, `attestation_records`, `approval_records` — scheduler/work graph
 - `doc_content`, `work_notes`, `work_proposals` — work documentation
 - App-specific tables as apps are added
@@ -578,12 +578,12 @@ Note: Dolt supports normal SQL writes without committing. You can INSERT/UPDATE 
 - **No event store actor**: The choiros-rs pattern of an `EventStoreActor` wrapping a database is unnecessary — Go's `database/sql` with proper transaction handling provides the same sequential write guarantee.
 - **Event log preserved**: Append-only `events` table in the sandbox's Dolt is the canonical audit trail. All significant state changes emit events.
 
-**Dolt schema within sandbox**: Merges the table schemas adapted from cogent (sessions, jobs, turns, events, work_items, work_edges, attestation_records, etc.) with e-text tables (documents, content, citations, metadata) and desktop state tables (windows, app registrations). The SQLite CRUD patterns from cogent are adapted to Dolt's MySQL-compatible SQL dialect (driver changes from `modernc.org/sqlite` to `dolthub/driver`). Migration: additive schema evolution (CREATE TABLE IF NOT EXISTS).
+**Dolt schema within sandbox**: Merges the table schemas adapted from cogent (sessions, jobs, turns, events, work_items, work_edges, attestation_records, etc.) with vtext tables (documents, content, citations, metadata) and desktop state tables (windows, app registrations). The SQLite CRUD patterns from cogent are adapted to Dolt's MySQL-compatible SQL dialect (driver changes from `modernc.org/sqlite` to `dolthub/driver`). Migration: additive schema evolution (CREATE TABLE IF NOT EXISTS).
 
 #### Future: Published E-Texts (not in v1 scope)
 
-The architecture supports a future publishing path for e-texts:
-- Users publish e-texts to choir-ip.com where they are viewable without login
+The architecture supports a future publishing path for vtexts:
+- Users publish vtexts to choir-ip.com where they are viewable without login
 - Publishing uses Dolt's native push/pull: the sandbox's embedded Dolt pushes a branch/snapshot to a platform-level Dolt instance on choir-ip.com
 - The platform-level Dolt serves as a read-only public database for published content
 - This is a natural fit because Dolt is literally Git-for-data — push/pull between instances is a first-class operation
@@ -667,7 +667,7 @@ rows, _ := db.QueryContext(ctx, `SELECT * FROM dolt_blame_work_items`)
 
 #### Commit strategy
 
-- **User edits** (e-text): commit immediately with user as author
+- **User edits** (vtext): commit immediately with user as author
 - **AppAgent edits**: commit immediately with agent as author
 - **Work state transitions** (claimed, completed, failed): commit on transition
 - **Operational state** (sessions, events, locks): commit periodically (every 5 minutes) or on graceful shutdown
@@ -973,19 +973,19 @@ type Child struct {
 - **Supervision tree**: Supervisors can be children of other supervisors, forming a tree. The root supervisor is the sandbox's main process.
 
 ```go
-// Example: supervisor for e-text app agents within a sandbox
+// Example: supervisor for vtext app agents within a sandbox
 func NewETextSupervisor(ctx context.Context) *Supervisor {
     sup := &Supervisor{
-        name:       "etext-supervisor",
+        name:       "vtext-supervisor",
         strategy:   RestartOne,
         healthTick: 10 * time.Second,
     }
     sup.AddChild(&Child{
-        Name:  "etext-appagent",
+        Name:  "vtext-appagent",
         Start: runETextAppAgent,
     })
     sup.AddChild(&Child{
-        Name:  "etext-worker-pool",
+        Name:  "vtext-worker-pool",
         Start: runETextWorkerPool,
     })
     return sup
@@ -1032,13 +1032,13 @@ An **app** is a named unit of functionality with an optional UI, optional appage
 ```go
 // AppDefinition is the static declaration of an app.
 type AppDefinition struct {
-    ID          string        `json:"id"`          // unique identifier, e.g., "etext"
+    ID          string        `json:"id"`          // unique identifier, e.g., "vtext"
     Name        string        `json:"name"`        // display name, e.g., "E-Text"
     Icon        string        `json:"icon"`
     Description string        `json:"description"`
     HasAgent    bool          `json:"has_agent"`   // whether this app has an appagent
     AgentConfig *AgentConfig  `json:"agent_config,omitempty"`
-    APIPrefix   string        `json:"api_prefix"`  // e.g., "/app/etext"
+    APIPrefix   string        `json:"api_prefix"`  // e.g., "/app/vtext"
 }
 
 // AppInstance is a running instance of an app for a specific user.
@@ -1060,7 +1060,7 @@ type AppInstance struct {
 
 | App ID | Name | Has Agent | Description |
 |--------|------|-----------|-------------|
-| `etext` | E-Text | Yes | Versioned document editor (reference implementation) |
+| `vtext` | E-Text | Yes | Versioned document editor (reference implementation) |
 | `terminal` | Terminal | Yes | Interactive terminal / code execution |
 | `files` | Files | No (or minimal) | File browser for sandbox filesystem |
 | `mindgraph` | Mind Graph | No | Work graph Poincaré disk visualization (from cogent) |
@@ -1111,7 +1111,7 @@ type UserAction struct {
 ```
 
 **What an appagent can do**:
-- Read and write its app's canonical state (e.g., e-text documents in Dolt) within the sandbox
+- Read and write its app's canonical state (e.g., vtext documents in Dolt) within the sandbox
 - Delegate subtasks to workers via the Scheduler (within the sandbox)
 - Spawn worker agents (goroutines within the sandbox)
 - Make LLM calls via the gateway service (sandbox → gateway over vsock/virtio-net)
@@ -1157,14 +1157,14 @@ type WorkerBudget struct {
 
 This is a core design principle. Both users and appagents are **canonical editors** — their edits have equal authority and create canonical new versions.
 
-**How it works for e-text** (the pattern all apps should follow):
+**How it works for vtext** (the pattern all apps should follow):
 
 ```
 User (via Svelte UI → Caddy → proxy → sandbox) ──┐
-                                                   ├──→ E-Text Canonical State (Dolt, in sandbox) ──→ Version N+1
+                                                   ├──→ VText Canonical State (Dolt, in sandbox) ──→ Version N+1
 AppAgent (goroutine within sandbox) ──────────────┘
 
-Workers ──→ Messages/Results ──→ AppAgent ──→ E-Text Canonical State ──→ Version N+1
+Workers ──→ Messages/Results ──→ AppAgent ──→ VText Canonical State ──→ Version N+1
 ```
 
 1. **User edits**: User may make multiple edits in the Svelte editor before explicitly prompting. That batch of changes becomes the next canonical user-authored version when the user submits.
@@ -1189,17 +1189,17 @@ Full request path: `Browser → Caddy → proxy service → sandbox → /app/{ap
 
 All endpoints return JSON. The Svelte SPA handles all rendering client-side.
 
-Example for `vtext` (current code/routes still use `etext`):
+Example for `vtext`:
 ```
-GET    /app/etext/api/documents                    → list documents (JSON)
-POST   /app/etext/api/documents                    → create document (JSON)
-GET    /app/etext/api/documents/{id}               → get document (JSON, current version)
-GET    /app/etext/api/documents/{id}?at={commit}   → get document (JSON, historical version)
-PUT    /app/etext/api/documents/{id}               → update document (user edit → Dolt commit)
-GET    /app/etext/api/documents/{id}/history       → version history (Dolt log, JSON)
-GET    /app/etext/api/documents/{id}/diff?from=&to= → diff between versions (JSON)
-POST   /app/etext/api/documents/{id}/prompt        → submit prompt to appagent
-GET    /app/etext/api/documents/{id}/blame         → blame (who edited what, JSON)
+GET    /app/vtext/api/documents                    → list documents (JSON)
+POST   /app/vtext/api/documents                    → create document (JSON)
+GET    /app/vtext/api/documents/{id}               → get document (JSON, current version)
+GET    /app/vtext/api/documents/{id}?at={commit}   → get document (JSON, historical version)
+PUT    /app/vtext/api/documents/{id}               → update document (user edit → Dolt commit)
+GET    /app/vtext/api/documents/{id}/history       → version history (Dolt log, JSON)
+GET    /app/vtext/api/documents/{id}/diff?from=&to= → diff between versions (JSON)
+POST   /app/vtext/api/documents/{id}/prompt        → submit prompt to appagent
+GET    /app/vtext/api/documents/{id}/blame         → blame (who edited what, JSON)
 ```
 
 ---
@@ -1208,7 +1208,7 @@ GET    /app/etext/api/documents/{id}/blame         → blame (who edited what, J
 
 ### 5.1 Overview
 
-The primary document app is **`vtext`** (current code still uses the historical `etext` name in routes and types). It is a version-native living document system, not a chat pane and not a sidebar-heavy editor. The core UI is one primary editable document surface. User prompts, user edits, and appagent rewrites all materialize as document versions.
+The primary document app is **`vtext`**. Historical `vtext` compatibility routes may exist temporarily during migration, but the active product, runtime, and storage direction should all converge on `vtext`. It is a version-native living document system, not a chat pane and not a sidebar-heavy editor. The core UI is one primary editable document surface. User prompts, user edits, and appagent rewrites all materialize as document versions.
 
 `vtext` demonstrates the full app model: Dolt-backed versioned storage, canonical editing by users and appagent, worker delegation through messages, and a rich JSON API. The app logic and Dolt database run **inside the sandbox binary**.
 
@@ -1224,7 +1224,7 @@ The important rule is that the document remains the primary organizing surface. 
 
 Dolt runs **in-process inside the sandbox binary** via the embedded driver. Each sandbox VM has its own Dolt database.
 
-**Storage location**: Within the sandbox VM filesystem, e.g., `/data/vtext/.dolt/` — one Dolt database per sandbox (per user). Current bootstrap code may still use `etext`-named paths; the architectural target is `vtext`.
+**Storage location**: Within the sandbox VM filesystem, e.g., `/data/vtext/.dolt/` — one Dolt database per sandbox (per user). Completing this embedded Dolt `vtext` store is an architectural prerequisite for the deeper `vmctl` / microVM lifecycle pass, because we want to validate the VM path against the real version-native sandbox state model rather than a temporary SQLite-backed document store.
 
 **Connection** (embedded mode):
 
@@ -1235,8 +1235,8 @@ import (
 )
 
 func OpenETextDB() (*sql.DB, error) {
-    dbPath := "/data/etext"
-    dsn := fmt.Sprintf("file://%s?commitname=System&commitemail=system@choiros.local&database=etext",
+    dbPath := "/data/vtext"
+    dsn := fmt.Sprintf("file://%s?commitname=System&commitemail=system@choiros.local&database=vtext",
         dbPath)
     cfg, err := embedded.ParseDSN(dsn)
     if err != nil {
@@ -1349,7 +1349,7 @@ func (s *ETextStore) SaveUserEdit(ctx context.Context, req UserEditRequest) (str
 // SaveAppAgentEdit creates a canonical version attributed to the appagent.
 func (s *ETextStore) SaveAppAgentEdit(ctx context.Context, req AgentEditRequest) (string, error) {
     // Same pattern, but author is the appagent:
-    // --author "ETextAgent <etext-agent@choiros.local>"
+    // --author "ETextAgent <vtext-agent@choiros.local>"
     // ... (analogous to SaveUserEdit)
 }
 ```
@@ -1399,7 +1399,7 @@ func (a *ETextAppAgent) handlePrompt(ctx context.Context, payload any) (ActionRe
     // 2. If research needed, submit work to Scheduler (§3.3)
     if decision.NeedsResearch {
         a.scheduler.SubmitWork(ctx, WorkRequest{
-            AppID:     "etext",
+            AppID:     "vtext",
             Objective: decision.ResearchObjective,
             Input:     []Part{{Kind: "text", Content: json.RawMessage(prompt.Text)}},
         })
@@ -1413,7 +1413,7 @@ func (a *ETextAppAgent) handlePrompt(ctx context.Context, payload any) (ActionRe
         }
         // Publish real-time update (flows through proxy to browser)
         a.eventBus.Publish(ctx, Event{
-            Kind: "etext.section.updated",
+            Kind: "vtext.section.updated",
             Data: edit,
         })
     }
@@ -1470,31 +1470,31 @@ All routes served by the sandbox, reached via Caddy → proxy:
 
 ```
 # Documents
-GET    /app/etext/api/documents                          → list all documents
-POST   /app/etext/api/documents                          → create new document
-GET    /app/etext/api/documents/{id}                     → get document with all sections
-PUT    /app/etext/api/documents/{id}                     → update document metadata
-DELETE /app/etext/api/documents/{id}                     → delete document
+GET    /app/vtext/api/documents                          → list all documents
+POST   /app/vtext/api/documents                          → create new document
+GET    /app/vtext/api/documents/{id}                     → get document with all sections
+PUT    /app/vtext/api/documents/{id}                     → update document metadata
+DELETE /app/vtext/api/documents/{id}                     → delete document
 
 # Content (sections)
-GET    /app/etext/api/documents/{id}/sections            → list sections
-PUT    /app/etext/api/documents/{id}/sections/{sid}      → update section (user edit → Dolt commit)
-POST   /app/etext/api/documents/{id}/sections            → add section
-DELETE /app/etext/api/documents/{id}/sections/{sid}      → delete section
+GET    /app/vtext/api/documents/{id}/sections            → list sections
+PUT    /app/vtext/api/documents/{id}/sections/{sid}      → update section (user edit → Dolt commit)
+POST   /app/vtext/api/documents/{id}/sections            → add section
+DELETE /app/vtext/api/documents/{id}/sections/{sid}      → delete section
 
 # Versioning
-GET    /app/etext/api/documents/{id}/history             → commit log (dolt_log)
-GET    /app/etext/api/documents/{id}/at/{commit}         → document at specific version
-GET    /app/etext/api/documents/{id}/diff?from=X&to=Y    → diff between versions
-GET    /app/etext/api/documents/{id}/blame               → blame per section
-POST   /app/etext/api/documents/{id}/revert/{commit}     → revert to specific version
+GET    /app/vtext/api/documents/{id}/history             → commit log (dolt_log)
+GET    /app/vtext/api/documents/{id}/at/{commit}         → document at specific version
+GET    /app/vtext/api/documents/{id}/diff?from=X&to=Y    → diff between versions
+GET    /app/vtext/api/documents/{id}/blame               → blame per section
+POST   /app/vtext/api/documents/{id}/revert/{commit}     → revert to specific version
 
 # Agent interaction
-POST   /app/etext/api/documents/{id}/prompt              → submit prompt to appagent
-GET    /app/etext/api/documents/{id}/proposals            → list pending worker proposals
+POST   /app/vtext/api/documents/{id}/prompt              → submit prompt to appagent
+GET    /app/vtext/api/documents/{id}/proposals            → list pending worker proposals
 
 # Real-time
-GET    /app/etext/sse/documents/{id}                     → SSE stream for document changes
+GET    /app/vtext/sse/documents/{id}                     → SSE stream for document changes
 ```
 
 ---
@@ -1508,7 +1508,7 @@ Every agent has a globally unique ID (ULID-based, same ID generation pattern as 
 ```go
 // AgentID format: "agent_" + ULID
 // Examples:
-//   agent_01HXYZ... (an e-text appagent within a sandbox)
+//   agent_01HXYZ... (an vtext appagent within a sandbox)
 //   agent_01HABC... (a research worker within a sandbox)
 
 func GenerateAgentID() string {
@@ -1716,7 +1716,7 @@ type Turn struct {
 |-------|-----------|-----------|-----------|
 | **Language** | Go 1.25+ | All 5 binaries | Whole Go rewrite |
 | **Frontend Framework** | Svelte | Svelte SPA (served by Caddy) | Reactive SPA, compiled, small runtime |
-| **Text Layout** | Pretext (`@chenglou/pretext`) | Svelte SPA (browser) | DOM-free text measurement for e-text editor |
+| **Text Layout** | Pretext (`@chenglou/pretext`) | Svelte SPA (browser) | DOM-free text measurement for vtext editor |
 | **Edge/Reverse Proxy** | Caddy | Caddy (edge) | TLS, static assets, route dispatch |
 | **Agent Comms (local)** | Go channels | sandbox | Direct, typed, zero overhead |
 | **Agent Comms (remote)** | HTTP API + vsock | proxy + sandbox | Same interface shape, serialized |
@@ -1724,7 +1724,7 @@ type Turn struct {
 | **LLM Clients** | Streaming clients (from cogent) | sandbox (→ gateway) | Hand-rolled Anthropic + OpenAI streaming |
 | **Supervision** | Custom goroutine supervisor | sandbox | Lightweight, no framework dependency |
 | **Host DB** | `modernc.org/sqlite` | auth, vmctl | Pure Go, already used by cogent. Host services only. |
-| **Sandbox DB** | Dolt embedded (`dolthub/driver`) | sandbox | In-process versioned SQL. Sole database engine inside the sandbox — all state (e-text, work graph, sessions, events, desktop state). |
+| **Sandbox DB** | Dolt embedded (`dolthub/driver`) | sandbox | In-process versioned SQL. Sole database engine inside the sandbox — all state (vtext, work graph, sessions, events, desktop state). |
 | **ID Generation** | `oklog/ulid` | sandbox | Already used by cogent |
 | **Config** | `BurntSushi/toml` | All services | Already used by cogent |
 | **MicroVM Lifecycle** | `firecracker-go-sdk` | vmctl | Direct API socket management |
@@ -1799,7 +1799,7 @@ The unified system is built in **`go-choir`** — a new repository, not an exten
 | Proxy/Routing (hypervisor routing) | New `internal/proxy` package | **proxy** | Medium |
 | VM Management (sandbox registry) | New `internal/vmctl` package using `firecracker-go-sdk` | **vmctl** | High |
 | Desktop Actor (`desktop.rs`, 2108 lines) | New `internal/desktop` package (simpler service with mutex) | **sandbox** | Medium |
-| Writer Actor → E-Text AppAgent (`writer/mod.rs`, 2477 lines) | New `internal/apps/etext` package, Dolt instead of `.qwy` | **sandbox** | High |
+| Writer Actor → E-Text AppAgent (`writer/mod.rs`, 2477 lines) | New `internal/apps/vtext` package, Dolt instead of `.qwy` | **sandbox** | High |
 | Terminal Actor (`terminal.rs`, 2361 lines) | New `internal/apps/terminal` package, Go PTY via `creack/pty` | **sandbox** | High |
 | Conductor → Conductor + Scheduler (`conductor/`, ~3000 lines) | Split: input routing → Conductor (§3.2), work tracking → Scheduler (§3.3, merged with cogent's work graph) | **sandbox** | High |
 | Event Store Actor (`event_store.rs`) | Direct Dolt access via `internal/store` | **sandbox** | Eliminated |
@@ -1845,11 +1845,11 @@ Each service can be built and tested incrementally. The real distributed archite
 **Goal**: Prove the product works end-to-end through the distributed architecture.
 
 1. Integrate Dolt embedded driver into sandbox
-2. Build e-text AppAgent (handles prompts, delegates to workers, commits to Dolt)
-3. Build e-text Svelte UI with Pretext for text measurement/layout (in browser)
+2. Build vtext AppAgent (handles prompts, delegates to workers, commits to Dolt)
+3. Build vtext Svelte UI with Pretext for text measurement/layout (in browser)
 4. Implement version history, diff, blame via Dolt system tables
 5. Worker proposal flow (within sandbox: worker → Go channel → appagent → Dolt commit)
-6. Full JSON API surface for e-text
+6. Full JSON API surface for vtext
 
 **Deliverable**: Users can create documents, edit them, prompt the agent, see version history. Full Caddy → proxy → sandbox → Dolt pipeline.
 
@@ -2015,7 +2015,7 @@ draft.choir-ip.com (OVH Node B, NixOS)
 
 5. **Dolt binary size impact**: The embedded Dolt driver pulls in the entire Dolt engine, potentially adding 100MB+ to the sandbox binary size. Now more critical since Dolt is the sole database inside the sandbox. Is this acceptable given that it only affects the sandbox binary (not host services)? Alternative: use Dolt as a sidecar process with MySQL protocol inside the VM.
 
-6. **Pretext integration depth** — just for the e-text editor, or used more broadly for text measurement across all apps in the desktop? Pretext is purpose-built for high-performance text layout without DOM reflow, which could benefit other text-heavy UI components.
+6. **Pretext integration depth** — just for the vtext editor, or used more broadly for text measurement across all apps in the desktop? Pretext is purpose-built for high-performance text layout without DOM reflow, which could benefit other text-heavy UI components.
 
 ### 10.2 Migration
 
@@ -2023,15 +2023,15 @@ draft.choir-ip.com (OVH Node B, NixOS)
 
 8. **Parallel operation period**: Can the old (choiros-rs) and new (`go-choir`) systems run side-by-side during migration? Or is it a hard cutover?
 
-9. **What's the Dolt commit strategy for operational tables?** — Versioned tables (e-text content, work graph) get committed on meaningful state changes. But operational tables (sessions, events, locks) don't need per-write commits. What triggers periodic commits? Options: periodic timer (every N minutes), on graceful shutdown, on significant state transitions, or some combination. Need to balance durability vs. commit noise in the Dolt log.
+9. **What's the Dolt commit strategy for operational tables?** — Versioned tables (vtext content, work graph) get committed on meaningful state changes. But operational tables (sessions, events, locks) don't need per-write commits. What triggers periodic commits? Options: periodic timer (every N minutes), on graceful shutdown, on significant state transitions, or some combination. Need to balance durability vs. commit noise in the Dolt log.
 
 ### 10.3 Design
 
-10. **App isolation model**: How strongly are apps isolated from each other within a sandbox? Can the e-text appagent access the terminal app's resources? The current design says "no" but this needs enforcement details.
+10. **App isolation model**: How strongly are apps isolated from each other within a sandbox? Can the vtext appagent access the terminal app's resources? The current design says "no" but this needs enforcement details.
 
 11. **Multi-user**: The system supports multiple users on one host with per-user VMs. How does the proxy handle multiple simultaneous users? (Likely: separate session tokens, separate VM lookups, no shared state.)
 
-12. **Appagent model selection**: Each appagent makes LLM calls via the gateway. Should appagents use a single model or have model rotation? The e-text appagent probably needs a strong model (Claude Opus) while research workers can use cheaper models.
+12. **Appagent model selection**: Each appagent makes LLM calls via the gateway. Should appagents use a single model or have model rotation? The vtext appagent probably needs a strong model (Claude Opus) while research workers can use cheaper models.
 
 13. **Worker lifecycle**: Are workers persistent (long-running sessions) or ephemeral (spawn per task, die after)? The sandbox should probably support both.
 
@@ -2056,7 +2056,7 @@ draft.choir-ip.com (OVH Node B, NixOS)
 |---|------|-----------|--------|------------|
 | R5 | **Session management across services** — auth issues tokens, proxy validates them, sandbox trusts them. Token revocation, expiry, and refresh across services is a known hard problem. | Medium | High | Use JWT with short expiry (15 min) + refresh tokens. Proxy caches JWT validation (no auth service call on hot path). Sandbox trusts the proxy's forwarded identity header. |
 | R6 | **Dolt embedded driver instability** — the embedded Go driver is less battle-tested than Dolt server mode. Only affects the sandbox binary. | Medium | High | Extensive integration testing. Fallback plan: Dolt as sidecar process inside the VM (MySQL protocol). Keep `database/sql` interface so the switch is easy. |
-| R7 | **Writer/E-Text complexity underestimated** — the choiros WriterActor is 2477 lines of complex state management. Reimplementing on Dolt may not be simpler. | Medium | Medium | Dolt handles versioning natively (no custom version tree). Start with minimal e-text appagent. The appagent delegation logic is the real complexity. |
+| R7 | **Writer/E-Text complexity underestimated** — the choiros WriterActor is 2477 lines of complex state management. Reimplementing on Dolt may not be simpler. | Medium | Medium | Dolt handles versioning natively (no custom version tree). Start with minimal vtext appagent. The appagent delegation logic is the real complexity. |
 | R8 | **Svelte + Pretext integration risk** — combining Svelte's reactive model with Pretext's DOM-free text measurement is a novel integration. | Medium | Medium | Prototype the Svelte + Pretext editor early (Phase 3). Start minimal. Have a fallback to a simpler editor. |
 | R9 | **Loss of battle-tested cogent code during copy/refactor** — copying internals from cogent to `go-choir` risks losing subtle behaviors, breaking edge cases, or introducing regressions in the process | Medium | High | Copy comprehensive tests alongside the code. Keep cogent repo intact as a reference. Run cogent's test suite against the copied code in `go-choir`. Systematic comparison of behavior before and after the copy. |
 | R10 | **Sandbox binary size** — Dolt engine + all Go dependencies → sandbox binary may be large. Now more critical since Dolt is THE database inside the sandbox (no SQLite fallback). Only affects the VM guest image, not the host services. | Medium | High | Monitor binary size. Host services stay small (they use SQLite). If sandbox binary exceeds targets: strip debug symbols, consider Dolt as sidecar within VM. |

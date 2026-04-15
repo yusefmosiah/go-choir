@@ -11,13 +11,13 @@ import (
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-func etextTestStore(t *testing.T) *Store {
+func vtextTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "etext-test.db")
-	s, err := OpenEtextWorkspace(dbPath)
+	dbPath := filepath.Join(dir, "vtext-test.db")
+	s, err := OpenVTextWorkspace(dbPath)
 	if err != nil {
-		t.Fatalf("open etext test store: %v", err)
+		t.Fatalf("open vtext test store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
@@ -25,14 +25,14 @@ func etextTestStore(t *testing.T) *Store {
 
 // ----- Document CRUD -----
 
-func TestEtextCreateDocument(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextCreateDocument(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Document",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Document",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -53,14 +53,14 @@ func TestEtextCreateDocument(t *testing.T) {
 	}
 }
 
-func TestEtextGetDocumentOwnerScope(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextGetDocumentOwnerScope(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Owned by user-1",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Owned by user-1",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -73,15 +73,15 @@ func TestEtextGetDocumentOwnerScope(t *testing.T) {
 	}
 }
 
-func TestEtextListDocumentsByOwner(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextListDocumentsByOwner(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
 		doc := types.Document{
-			DocID:    "doc-" + string(rune('a'+i)),
-			OwnerID:  "user-1",
-			Title:    "Doc " + string(rune('a'+i)),
+			DocID:   "doc-" + string(rune('a'+i)),
+			OwnerID: "user-1",
+			Title:   "Doc " + string(rune('a'+i)),
 		}
 		if err := s.CreateDocument(ctx, doc); err != nil {
 			t.Fatalf("CreateDocument: %v", err)
@@ -89,9 +89,9 @@ func TestEtextListDocumentsByOwner(t *testing.T) {
 	}
 	// Create a doc for another user.
 	doc := types.Document{
-		DocID:    "doc-x",
-		OwnerID:  "user-2",
-		Title:    "Other User Doc",
+		DocID:   "doc-x",
+		OwnerID: "user-2",
+		Title:   "Other User Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -106,14 +106,14 @@ func TestEtextListDocumentsByOwner(t *testing.T) {
 	}
 }
 
-func TestEtextUpdateDocument(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextUpdateDocument(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Original Title",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Original Title",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -137,14 +137,14 @@ func TestEtextUpdateDocument(t *testing.T) {
 	}
 }
 
-func TestEtextDeleteDocument(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextDeleteDocument(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "To Delete",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "To Delete",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -162,15 +162,15 @@ func TestEtextDeleteDocument(t *testing.T) {
 
 // ----- Revision CRUD -----
 
-func TestEtextCreateRevision(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextCreateRevision(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	// Create a document first.
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -182,15 +182,15 @@ func TestEtextCreateRevision(t *testing.T) {
 	metadata, _ := json.Marshal(map[string]any{"tags": []string{"draft"}})
 
 	rev := types.Revision{
-		RevisionID:   "rev-1",
-		DocID:        "doc-1",
-		OwnerID:      "user-1",
-		AuthorKind:   types.AuthorUser,
-		AuthorLabel:  "alice",
-		Content:      "Hello, world!",
-		Citations:    citations,
-		Metadata:     metadata,
-		CreatedAt:    time.Now().UTC().Truncate(time.Millisecond),
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "alice",
+		Content:     "Hello, world!",
+		Citations:   citations,
+		Metadata:    metadata,
+		CreatedAt:   time.Now().UTC().Truncate(time.Millisecond),
 	}
 	if err := s.CreateRevision(ctx, rev); err != nil {
 		t.Fatalf("CreateRevision: %v", err)
@@ -214,27 +214,27 @@ func TestEtextCreateRevision(t *testing.T) {
 	}
 }
 
-func TestEtextRevisionOwnerScope(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextRevisionOwnerScope(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Owned by user-1",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Owned by user-1",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
 
 	rev := types.Revision{
-		RevisionID: "rev-1",
-		DocID:      "doc-1",
-		OwnerID:    "user-1",
-		AuthorKind: types.AuthorUser,
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
-		Content:    "Content",
-		CreatedAt:  time.Now().UTC(),
+		Content:     "Content",
+		CreatedAt:   time.Now().UTC(),
 	}
 	if err := s.CreateRevision(ctx, rev); err != nil {
 		t.Fatalf("CreateRevision: %v", err)
@@ -247,14 +247,14 @@ func TestEtextRevisionOwnerScope(t *testing.T) {
 	}
 }
 
-func TestEtextListRevisionsByDoc(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextListRevisionsByDoc(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -305,27 +305,27 @@ func TestEtextListRevisionsByDoc(t *testing.T) {
 	}
 }
 
-func TestEtextListRevisionsByDocOwnerScope(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextListRevisionsByDocOwnerScope(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Owned by user-1",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Owned by user-1",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
 
 	rev := types.Revision{
-		RevisionID: "rev-1",
-		DocID:      "doc-1",
-		OwnerID:    "user-1",
-		AuthorKind: types.AuthorUser,
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
-		Content:    "Content",
-		CreatedAt:  time.Now().UTC(),
+		Content:     "Content",
+		CreatedAt:   time.Now().UTC(),
 	}
 	if err := s.CreateRevision(ctx, rev); err != nil {
 		t.Fatalf("CreateRevision: %v", err)
@@ -343,14 +343,14 @@ func TestEtextListRevisionsByDocOwnerScope(t *testing.T) {
 
 // ----- History -----
 
-func TestEtextGetHistory(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextGetHistory(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -360,33 +360,33 @@ func TestEtextGetHistory(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	revs := []types.Revision{
 		{
-			RevisionID: "rev-1",
-			DocID:      "doc-1",
-			OwnerID:    "user-1",
-			AuthorKind: types.AuthorUser,
+			RevisionID:  "rev-1",
+			DocID:       "doc-1",
+			OwnerID:     "user-1",
+			AuthorKind:  types.AuthorUser,
 			AuthorLabel: "alice",
-			Content:    "First draft",
-			CreatedAt:  now,
+			Content:     "First draft",
+			CreatedAt:   now,
 		},
 		{
 			RevisionID:       "rev-2",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorAppAgent,
-			AuthorLabel:     "appagent",
-			Content:         "AI-improved draft",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorAppAgent,
+			AuthorLabel:      "appagent",
+			Content:          "AI-improved draft",
 			ParentRevisionID: "rev-1",
-			CreatedAt:       now.Add(time.Second),
+			CreatedAt:        now.Add(time.Second),
 		},
 		{
 			RevisionID:       "rev-3",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorUser,
-			AuthorLabel:     "alice",
-			Content:         "User edited",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorUser,
+			AuthorLabel:      "alice",
+			Content:          "User edited",
 			ParentRevisionID: "rev-2",
-			CreatedAt:       now.Add(2 * time.Second),
+			CreatedAt:        now.Add(2 * time.Second),
 		},
 	}
 	for _, r := range revs {
@@ -422,14 +422,14 @@ func TestEtextGetHistory(t *testing.T) {
 
 // ----- Diff -----
 
-func TestEtextGetDiff(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextGetDiff(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -438,23 +438,23 @@ func TestEtextGetDiff(t *testing.T) {
 	now := time.Now().UTC()
 	revs := []types.Revision{
 		{
-			RevisionID: "rev-1",
-			DocID:      "doc-1",
-			OwnerID:    "user-1",
-			AuthorKind: types.AuthorUser,
+			RevisionID:  "rev-1",
+			DocID:       "doc-1",
+			OwnerID:     "user-1",
+			AuthorKind:  types.AuthorUser,
 			AuthorLabel: "alice",
-			Content:    "line1\nline2\nline3\n",
-			CreatedAt:  now,
+			Content:     "line1\nline2\nline3\n",
+			CreatedAt:   now,
 		},
 		{
 			RevisionID:       "rev-2",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorAppAgent,
-			AuthorLabel:     "appagent",
-			Content:         "line1\nline2-modified\nline3\nline4-added\n",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorAppAgent,
+			AuthorLabel:      "appagent",
+			Content:          "line1\nline2-modified\nline3\nline4-added\n",
 			ParentRevisionID: "rev-1",
-			CreatedAt:       now.Add(time.Second),
+			CreatedAt:        now.Add(time.Second),
 		},
 	}
 	for _, r := range revs {
@@ -484,14 +484,14 @@ func TestEtextGetDiff(t *testing.T) {
 
 // ----- Blame -----
 
-func TestEtextGetBlame(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextGetBlame(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -500,23 +500,23 @@ func TestEtextGetBlame(t *testing.T) {
 	now := time.Now().UTC()
 	revs := []types.Revision{
 		{
-			RevisionID: "rev-1",
-			DocID:      "doc-1",
-			OwnerID:    "user-1",
-			AuthorKind: types.AuthorUser,
+			RevisionID:  "rev-1",
+			DocID:       "doc-1",
+			OwnerID:     "user-1",
+			AuthorKind:  types.AuthorUser,
 			AuthorLabel: "alice",
-			Content:    "line1\nline2\nline3\n",
-			CreatedAt:  now,
+			Content:     "line1\nline2\nline3\n",
+			CreatedAt:   now,
 		},
 		{
 			RevisionID:       "rev-2",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorAppAgent,
-			AuthorLabel:     "appagent",
-			Content:         "line1\nline2-modified\nline3\n",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorAppAgent,
+			AuthorLabel:      "appagent",
+			Content:          "line1\nline2-modified\nline3\n",
 			ParentRevisionID: "rev-1",
-			CreatedAt:       now.Add(time.Second),
+			CreatedAt:        now.Add(time.Second),
 		},
 	}
 	for _, r := range revs {
@@ -557,14 +557,14 @@ func TestEtextGetBlame(t *testing.T) {
 
 // ----- Citations and Metadata persistence -----
 
-func TestEtextCitationsMetadataRoundTrip(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextCitationsMetadataRoundTrip(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Test Doc",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -581,15 +581,15 @@ func TestEtextCitationsMetadataRoundTrip(t *testing.T) {
 	})
 
 	rev := types.Revision{
-		RevisionID: "rev-1",
-		DocID:      "doc-1",
-		OwnerID:    "user-1",
-		AuthorKind: types.AuthorUser,
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
-		Content:    "Document with citations",
-		Citations:  citJSON,
-		Metadata:   metaJSON,
-		CreatedAt:  time.Now().UTC().Truncate(time.Millisecond),
+		Content:     "Document with citations",
+		Citations:   citJSON,
+		Metadata:    metaJSON,
+		CreatedAt:   time.Now().UTC().Truncate(time.Millisecond),
 	}
 	if err := s.CreateRevision(ctx, rev); err != nil {
 		t.Fatalf("CreateRevision: %v", err)
@@ -624,15 +624,15 @@ func TestEtextCitationsMetadataRoundTrip(t *testing.T) {
 
 // ----- Snapshot (open historical revision without mutating head) -----
 
-func TestEtextSnapshotDoesNotMutateHead(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextSnapshotDoesNotMutateHead(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:              "doc-1",
-		OwnerID:            "user-1",
-		Title:              "Test Doc",
-		CurrentRevisionID:  "rev-2",
+		DocID:             "doc-1",
+		OwnerID:           "user-1",
+		Title:             "Test Doc",
+		CurrentRevisionID: "rev-2",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -641,23 +641,23 @@ func TestEtextSnapshotDoesNotMutateHead(t *testing.T) {
 	now := time.Now().UTC()
 	revs := []types.Revision{
 		{
-			RevisionID: "rev-1",
-			DocID:      "doc-1",
-			OwnerID:    "user-1",
-			AuthorKind: types.AuthorUser,
+			RevisionID:  "rev-1",
+			DocID:       "doc-1",
+			OwnerID:     "user-1",
+			AuthorKind:  types.AuthorUser,
 			AuthorLabel: "alice",
-			Content:    "Old content",
-			CreatedAt:  now,
+			Content:     "Old content",
+			CreatedAt:   now,
 		},
 		{
 			RevisionID:       "rev-2",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorUser,
-			AuthorLabel:     "alice",
-			Content:         "New content",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorUser,
+			AuthorLabel:      "alice",
+			Content:          "New content",
 			ParentRevisionID: "rev-1",
-			CreatedAt:       now.Add(time.Second),
+			CreatedAt:        now.Add(time.Second),
 		},
 	}
 	for _, r := range revs {
@@ -687,23 +687,23 @@ func TestEtextSnapshotDoesNotMutateHead(t *testing.T) {
 
 // ----- Workspace setup -----
 
-func TestEtextInitWorkspace(t *testing.T) {
+func TestVTextInitWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	wsPath := filepath.Join(dir, "workspace.db")
 
-	s, err := OpenEtextWorkspace(wsPath)
+	s, err := OpenVTextWorkspace(wsPath)
 	if err != nil {
-		t.Fatalf("OpenEtextWorkspace: %v", err)
+		t.Fatalf("OpenVTextWorkspace: %v", err)
 	}
 	defer func() { _ = s.Close() }()
 
 	ctx := context.Background()
 
-	// Verify the e-text schema is applied by creating a document.
+	// Verify the vtext schema is applied by creating a document.
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Workspace Test",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Workspace Test",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument in workspace: %v", err)
@@ -717,22 +717,22 @@ func TestEtextInitWorkspace(t *testing.T) {
 		t.Errorf("DocID = %q, want %q", got.DocID, "doc-1")
 	}
 
-	// Verify the workspace file exists.
-	if _, err := os.Stat(wsPath); os.IsNotExist(err) {
-		t.Error("workspace database file was not created")
+	// Verify the workspace directory exists.
+	if _, err := os.Stat(s.VTextPath()); os.IsNotExist(err) {
+		t.Errorf("workspace directory %q was not created", s.VTextPath())
 	}
 }
 
 // ----- Diff owner scope -----
 
-func TestEtextDiffOwnerScope(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextDiffOwnerScope(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Owned by user-1",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Owned by user-1",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -741,23 +741,23 @@ func TestEtextDiffOwnerScope(t *testing.T) {
 	now := time.Now().UTC()
 	revs := []types.Revision{
 		{
-			RevisionID: "rev-1",
-			DocID:      "doc-1",
-			OwnerID:    "user-1",
-			AuthorKind: types.AuthorUser,
+			RevisionID:  "rev-1",
+			DocID:       "doc-1",
+			OwnerID:     "user-1",
+			AuthorKind:  types.AuthorUser,
 			AuthorLabel: "alice",
-			Content:    "Content A",
-			CreatedAt:  now,
+			Content:     "Content A",
+			CreatedAt:   now,
 		},
 		{
 			RevisionID:       "rev-2",
-			DocID:           "doc-1",
-			OwnerID:         "user-1",
-			AuthorKind:      types.AuthorAppAgent,
-			AuthorLabel:     "appagent",
-			Content:         "Content B",
+			DocID:            "doc-1",
+			OwnerID:          "user-1",
+			AuthorKind:       types.AuthorAppAgent,
+			AuthorLabel:      "appagent",
+			Content:          "Content B",
 			ParentRevisionID: "rev-1",
-			CreatedAt:       now.Add(time.Second),
+			CreatedAt:        now.Add(time.Second),
 		},
 	}
 	for _, r := range revs {
@@ -775,27 +775,27 @@ func TestEtextDiffOwnerScope(t *testing.T) {
 
 // ----- Blame owner scope -----
 
-func TestEtextBlameOwnerScope(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextBlameOwnerScope(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:    "doc-1",
-		OwnerID:  "user-1",
-		Title:    "Owned by user-1",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Owned by user-1",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
 
 	rev := types.Revision{
-		RevisionID: "rev-1",
-		DocID:      "doc-1",
-		OwnerID:    "user-1",
-		AuthorKind: types.AuthorUser,
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
 		AuthorLabel: "alice",
-		Content:    "Content",
-		CreatedAt:  time.Now().UTC(),
+		Content:     "Content",
+		CreatedAt:   time.Now().UTC(),
 	}
 	if err := s.CreateRevision(ctx, rev); err != nil {
 		t.Fatalf("CreateRevision: %v", err)
@@ -810,8 +810,8 @@ func TestEtextBlameOwnerScope(t *testing.T) {
 
 // ----- Agent mutation tracking tests -----
 
-func TestEtextAgentMutationCreateAndGet(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationCreateAndGet(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -840,8 +840,8 @@ func TestEtextAgentMutationCreateAndGet(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationByTask(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationByTask(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -867,8 +867,8 @@ func TestEtextAgentMutationByTask(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationComplete(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationComplete(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -912,8 +912,8 @@ func TestEtextAgentMutationComplete(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -945,8 +945,8 @@ func TestEtextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationIdempotentCreation(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationIdempotentCreation(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -966,8 +966,8 @@ func TestEtextAgentMutationIdempotentCreation(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationFail(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationFail(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{
@@ -991,8 +991,8 @@ func TestEtextAgentMutationFail(t *testing.T) {
 	}
 }
 
-func TestEtextAgentMutationNoCrossUserAccess(t *testing.T) {
-	s := etextTestStore(t)
+func TestVTextAgentMutationNoCrossUserAccess(t *testing.T) {
+	s := vtextTestStore(t)
 	ctx := context.Background()
 
 	m := AgentMutation{

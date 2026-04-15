@@ -1,7 +1,7 @@
-// Package types defines the e-text domain types for the go-choir document
+// Package types defines the vtext domain types for the go-choir document
 // editing system.
 //
-// These types represent the core vocabulary for the e-text feature: documents,
+// These types represent the core vocabulary for the vtext feature: documents,
 // revisions, citations, metadata, authorship, and the data structures needed
 // for history/snapshot/diff/blame APIs.
 //
@@ -52,7 +52,7 @@ func (a AuthorKind) Valid() bool {
 	}
 }
 
-// Document represents an e-text document with identity, title, current
+// Document represents an vtext document with identity, title, current
 // content head, and metadata. The document record points to the latest
 // revision but retains all historical revisions for history/snapshot/diff/blame.
 type Document struct {

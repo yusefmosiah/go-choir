@@ -238,7 +238,7 @@
     data-window-titlebar
     on:pointerdown={handleDragStart}
   >
-    <span class="title-text">{title}</span>
+    <span class="titlvtext">{title}</span>
     <div class="window-controls">
       <button
         class="ctrl-btn minimize-btn"
@@ -315,7 +315,7 @@
     touch-action: none;
   }
 
-  .title-text {
+  .titlvtext {
     font-size: 0.8rem;
     font-weight: 600;
     color: #c0c0d0;

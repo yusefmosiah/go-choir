@@ -94,7 +94,7 @@ test('file browser launches from left rail', async ({ page, authenticator }) => 
   await expect(fileList).toBeVisible();
 
   // The window title should be "Files"
-  const title = page.locator('[data-window] [data-window-titlebar] .title-text');
+  const title = page.locator('[data-window] [data-window-titlebar] .titlvtext');
   await expect(title).toContainText('Files');
 });
 

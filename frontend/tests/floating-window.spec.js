@@ -60,7 +60,7 @@ test('floating window open and render', async ({ page, authenticator }) => {
   const titlebar = windowEl.locator('[data-window-titlebar]');
   await expect(titlebar).toBeVisible();
 
-  const titleText = titlebar.locator('.title-text');
+  const titleText = titlebar.locator('.titlvtext');
   await expect(titleText).toContainText('Files');
 
   // Control buttons present

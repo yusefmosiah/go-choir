@@ -49,10 +49,6 @@ function generateWindowId() {
   return `win-${Date.now()}-${windowCounter}`;
 }
 
-function normalizeAppId(appId) {
-  return appId === 'etext' ? 'vtext' : appId;
-}
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -195,10 +191,9 @@ export const visibleWindows = derived(windows, ($windows) =>
  * prompt/file opens create fresh windows.
  */
 export function openApp(appId, appName, icon, appContext = {}) {
-  const normalizedAppId = normalizeAppId(appId);
   windows.update(($windows) => {
-    const allowMultiple = appContext.allowMultiple === true || normalizedAppId === 'vtext';
-    const existing = !allowMultiple ? $windows.find((w) => w.appId === normalizedAppId && w.mode !== 'closed') : null;
+    const allowMultiple = appContext.allowMultiple === true || appId === 'vtext';
+    const existing = !allowMultiple ? $windows.find((w) => w.appId === appId && w.mode !== 'closed') : null;
     if (existing) {
       // Focus existing window
       activeWindowId.set(existing.windowId);
@@ -224,7 +219,7 @@ export function openApp(appId, appName, icon, appContext = {}) {
     const geometry = getNewWindowGeometry(openCount);
     const newWindow = {
       windowId,
-      appId: normalizedAppId,
+      appId,
       title: appContext.windowTitle || appName || appId,
       icon: icon || '📱',
       x: geometry.x,
