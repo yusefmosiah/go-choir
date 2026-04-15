@@ -27,6 +27,7 @@
   import FloatingDesktopIcons from './FloatingDesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
   import FloatingWindow from './FloatingWindow.svelte';
+  import TraceApp from './TraceApp.svelte';
   import VTextEditor from './VTextEditor.svelte';
   import FileBrowser from './FileBrowser.svelte';
   import BrowserApp from './BrowserApp.svelte';
@@ -122,6 +123,7 @@
       terminal: '💻',
       settings: '⚙️',
       vtext: '📝',
+      trace: '🔎',
     };
     return icons[appId] || '📱';
   }
@@ -487,6 +489,10 @@
             {:else if win.appId === 'vtext'}
               <div class="app-content vtext-content" data-vtext-app>
                 <VTextEditor {currentUser} appContext={win.appContext} on:authexpired={() => dispatch('authexpired')} />
+              </div>
+            {:else if win.appId === 'trace'}
+              <div class="app-content trace-content" data-trace-window>
+                <TraceApp on:authexpired={() => dispatch('authexpired')} />
               </div>
             {:else}
               <div class="app-content">

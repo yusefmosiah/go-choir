@@ -26,11 +26,12 @@ export const APP_REGISTRY = [
   { id: 'terminal', name: 'Terminal', icon: '💻', description: 'Terminal' },
   { id: 'settings', name: 'Settings', icon: '⚙️', description: 'Settings' },
   { id: 'vtext', name: 'VText', icon: '📝', description: 'Versioned document editor' },
+  { id: 'trace', name: 'Trace', icon: '🔎', description: 'Multiagent trace viewer' },
 ];
 
 /** The main apps shown as floating desktop icons */
 export const DESKTOP_ICON_APPS = APP_REGISTRY.filter((app) =>
-  ['files', 'browser', 'terminal', 'settings', 'vtext'].includes(app.id)
+  ['files', 'browser', 'terminal', 'settings', 'vtext', 'trace'].includes(app.id)
 );
 
 // ---- Window counter ----

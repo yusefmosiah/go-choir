@@ -157,8 +157,18 @@
     }
 
     parts.push(
-      'Revise the current document into the next complete version. Treat the latest document text as canonical. Incorporate any inline instructions, corrections, TODOs, edits, or meta-prompts that the user has added. Output only the complete revised document.'
+      'Treat the latest document text as canonical. Incorporate any inline instructions, corrections, TODOs, edits, or meta-prompts that the user has added into the next document version.'
     );
+
+    parts.push(
+      'If the request depends on up-to-date facts, external sources, or research, spawn one or more researcher agents first, collect their findings over the shared work channel, and only then rewrite the document.'
+    );
+
+    parts.push(
+      'You are the canonical writer. Workers can read the document and send findings, but they must not directly author the canonical text.'
+    );
+
+    parts.push('Output only the complete next document version.');
 
     return parts.join('\n\n');
   }

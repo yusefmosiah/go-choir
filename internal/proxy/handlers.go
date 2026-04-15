@@ -318,7 +318,7 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/terminal/ws":
 		h.HandleTerminalWS(w, r)
 		return
-	case path == "/api/agent/task" || path == "/api/agent/status" || path == "/api/events":
+	case strings.HasPrefix(path, "/api/agent/") || path == "/api/events":
 		// Runtime API routes: auth-gated at the proxy level and forwarded
 		// to the sandbox with the authenticated user context injected.
 		// The sandbox runtime handlers also verify X-Authenticated-User

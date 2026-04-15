@@ -83,6 +83,20 @@ type taskStatusResponse struct {
 	Metadata   map[string]any  `json:"metadata,omitempty"`
 }
 
+// taskListResponse is the JSON response for GET /api/agent/tasks.
+// It returns recent tasks owned by the authenticated user so debugging
+// surfaces can group live events into runs and child delegations.
+type taskListResponse struct {
+	Tasks []taskStatusResponse `json:"tasks"`
+}
+
+// eventListResponse is the JSON response for GET /api/agent/events.
+// It returns historical runtime events either for a specific task or for
+// the authenticated owner across recent tasks.
+type eventListResponse struct {
+	Events []types.EventRecord `json:"events"`
+}
+
 // runtimeHealthResponse is the JSON structure returned by GET /health.
 // It reports runtime readiness for real task handling, and surfaces
 // degraded state rather than hiding it behind a generic healthy response
@@ -339,6 +353,109 @@ func (h *APIHandler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleTaskList handles GET /api/agent/tasks.
+// It returns recent owner-scoped tasks in reverse chronological order so
+// debugging and orchestration surfaces can inspect current work and task
+// families without polling individual IDs one by one.
+func (h *APIHandler) HandleTaskList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+
+	tasks, err := h.rt.ListTasksByOwner(r.Context(), ownerID, limit)
+	if err != nil {
+		log.Printf("runtime api: list tasks: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list tasks"})
+		return
+	}
+
+	resp := taskListResponse{Tasks: make([]taskStatusResponse, 0, len(tasks))}
+	for _, rec := range tasks {
+		var finishedAt *string
+		if rec.FinishedAt != nil {
+			s := rec.FinishedAt.Format("2006-01-02T15:04:05.000Z")
+			finishedAt = &s
+		}
+		resp.Tasks = append(resp.Tasks, taskStatusResponse{
+			TaskID:     rec.TaskID,
+			OwnerID:    rec.OwnerID,
+			SandboxID:  rec.SandboxID,
+			State:      rec.State,
+			Prompt:     rec.Prompt,
+			Result:     rec.Result,
+			Error:      rec.Error,
+			CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+			UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
+			FinishedAt: finishedAt,
+			Metadata:   rec.Metadata,
+		})
+	}
+
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+// HandleEventList handles GET /api/agent/events.
+// When task_id is present, it returns historical events for that specific
+// task after verifying owner access. Otherwise it returns recent owner-scoped
+// events across tasks. This complements the live /api/events SSE feed.
+func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
+	if taskID != "" {
+		if _, err := h.rt.GetTask(r.Context(), taskID, ownerID); err != nil {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+			return
+		}
+		events, err := h.rt.Store().ListEvents(r.Context(), taskID, limit)
+		if err != nil {
+			log.Printf("runtime api: list task events: %v", err)
+			writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list task events"})
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
+		return
+	}
+
+	events, err := h.rt.Store().ListEventsByOwner(r.Context(), ownerID, limit)
+	if err != nil {
+		log.Printf("runtime api: list owner events: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list events"})
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
+}
+
 // HandleTaskStatusByID handles GET /api/agent/{id}/status.
 // It returns the full task record for the task identified by the URL path
 // parameter {id}. The response includes state, result (if complete), error
@@ -561,6 +678,8 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
+	s.HandleFunc("/api/agent/tasks", h.HandleTaskList)
+	s.HandleFunc("/api/agent/events", h.HandleEventList)
 	s.HandleFunc("/api/agent/topology", h.HandleTopology)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/cancel", h.HandleCancel)

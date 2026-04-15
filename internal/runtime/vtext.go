@@ -741,7 +741,13 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 // includes the current document content and the user's revision request.
 func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
 	var b strings.Builder
-	b.WriteString("You are revising a document. The user has requested the following change:\n\n")
+	b.WriteString("You are the ChoirOS vtext agent, responsible for creating the next canonical document version.\n\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- The current document is canonical input state.\n")
+	b.WriteString("- You may spawn researcher or super agents and coordinate over shared channels when the request needs external, current, or specialist information.\n")
+	b.WriteString("- Workers may read the document and send findings, but they must not directly author canonical text.\n")
+	b.WriteString("- Your final answer must be the complete next document version only.\n\n")
+	b.WriteString("The user has requested the following change:\n\n")
 	b.WriteString(userPrompt)
 	b.WriteString("\n\nCurrent document content:\n---\n")
 	if currentContent != "" {
@@ -750,7 +756,7 @@ func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
 		b.WriteString("(empty document)")
 	}
 	b.WriteString("\n---\n\n")
-	b.WriteString("Provide the complete revised document text. Output only the revised document content, with no additional commentary or explanation.")
+	b.WriteString("If the request is local-only editing, you may revise directly. If it requires research or current facts, delegate first and then synthesize the findings into the next full document version. Output only the revised document content, with no commentary or explanation.")
 	return b.String()
 }
 

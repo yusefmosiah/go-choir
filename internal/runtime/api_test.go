@@ -142,6 +142,107 @@ func TestHandleTaskSubmissionPreservesMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleTaskListOwnerScoped(t *testing.T) {
+	rt, handler := testAPISetup(t)
+
+	alice, err := rt.SubmitTaskWithMetadata(context.Background(), "trace alice root", "user-alice", map[string]any{
+		"agent_profile": "conductor",
+		"agent_role":    "conductor",
+	})
+	if err != nil {
+		t.Fatalf("submit alice task: %v", err)
+	}
+	if _, err := rt.SubmitTask(context.Background(), "trace bob root", "user-bob"); err != nil {
+		t.Fatalf("submit bob task: %v", err)
+	}
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/tasks?limit=20", "", "user-alice")
+	w := httptest.NewRecorder()
+	handler.HandleTaskList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp taskListResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(resp.Tasks) == 0 {
+		t.Fatal("expected at least one task")
+	}
+	for _, task := range resp.Tasks {
+		if task.OwnerID != "user-alice" {
+			t.Fatalf("unexpected owner in task list: %q", task.OwnerID)
+		}
+	}
+	if resp.Tasks[0].TaskID != alice.TaskID {
+		t.Errorf("first task id: got %q, want %q", resp.Tasks[0].TaskID, alice.TaskID)
+	}
+	if profile, _ := resp.Tasks[0].Metadata["agent_profile"].(string); profile != "conductor" {
+		t.Errorf("metadata.agent_profile: got %q, want %q", profile, "conductor")
+	}
+}
+
+func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.SubmitTaskWithMetadata(context.Background(), "trace selected task", "user-alice", map[string]any{
+		"agent_profile": "vtext",
+		"agent_role":    "vtext",
+	})
+	if err != nil {
+		t.Fatalf("submit task: %v", err)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+
+	ownerReq := authenticatedRequest(http.MethodGet, "/api/agent/events?limit=50", "", "user-alice")
+	ownerW := httptest.NewRecorder()
+	handler.HandleEventList(ownerW, ownerReq)
+
+	if ownerW.Code != http.StatusOK {
+		t.Fatalf("owner events status: got %d, want %d", ownerW.Code, http.StatusOK)
+	}
+
+	var ownerResp eventListResponse
+	if err := json.NewDecoder(ownerW.Body).Decode(&ownerResp); err != nil {
+		t.Fatalf("decode owner events: %v", err)
+	}
+	if len(ownerResp.Events) == 0 {
+		t.Fatal("expected owner events")
+	}
+
+	taskReq := authenticatedRequest(http.MethodGet, "/api/agent/events?task_id="+rec.TaskID+"&limit=50", "", "user-alice")
+	taskW := httptest.NewRecorder()
+	handler.HandleEventList(taskW, taskReq)
+
+	if taskW.Code != http.StatusOK {
+		t.Fatalf("task events status: got %d, want %d", taskW.Code, http.StatusOK)
+	}
+
+	var taskResp eventListResponse
+	if err := json.NewDecoder(taskW.Body).Decode(&taskResp); err != nil {
+		t.Fatalf("decode task events: %v", err)
+	}
+	if len(taskResp.Events) == 0 {
+		t.Fatal("expected task events")
+	}
+	for _, event := range taskResp.Events {
+		if event.TaskID != rec.TaskID {
+			t.Fatalf("unexpected task_id in task-scoped events: %q", event.TaskID)
+		}
+	}
+
+	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/events?task_id="+rec.TaskID, "", "user-bob")
+	otherW := httptest.NewRecorder()
+	handler.HandleEventList(otherW, otherReq)
+	if otherW.Code != http.StatusNotFound {
+		t.Fatalf("cross-owner task events status: got %d, want %d", otherW.Code, http.StatusNotFound)
+	}
+}
+
 func TestHandleTaskSubmissionAuthGated(t *testing.T) {
 	// VAL-RUNTIME-002: task submission is auth-gated.
 	_, handler := testAPISetup(t)

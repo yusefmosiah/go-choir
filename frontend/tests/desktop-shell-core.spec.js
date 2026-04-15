@@ -77,9 +77,9 @@ test('floating desktop icons render with emoji and labels', async ({ page, authe
   const surface = page.locator('[data-desktop-surface]');
   await expect(surface).toBeVisible();
 
-  // Should have exactly 5 desktop icons (Files, Browser, Terminal, Settings, VText)
+  // Should have exactly 6 desktop icons (Files, Browser, Terminal, Settings, VText, Trace)
   const icons = surface.locator('[data-desktop-icon]');
-  await expect(icons).toHaveCount(5);
+  await expect(icons).toHaveCount(6);
 
   // Verify each app icon is present
   await expect(surface.locator('[data-desktop-icon-id="files"]')).toBeVisible();
@@ -87,6 +87,7 @@ test('floating desktop icons render with emoji and labels', async ({ page, authe
   await expect(surface.locator('[data-desktop-icon-id="terminal"]')).toBeVisible();
   await expect(surface.locator('[data-desktop-icon-id="settings"]')).toBeVisible();
   await expect(surface.locator('[data-desktop-icon-id="vtext"]')).toBeVisible();
+  await expect(surface.locator('[data-desktop-icon-id="trace"]')).toBeVisible();
 
   // Each icon should have an emoji and a label
   const filesEmoji = surface.locator('[data-desktop-icon-id="files"] [data-desktop-icon-emoji]');
@@ -114,6 +115,24 @@ test('VText appears as a first-class desktop app', async ({ page, authenticator 
 
   const titleText = page.locator('[data-window-titlebar] .titlvtext');
   await expect(titleText.first()).toContainText('VText');
+});
+
+// ---------------------------------------------------------------
+// Test: Trace appears as a debugging desktop app
+// ---------------------------------------------------------------
+test('Trace appears as a debugging desktop app', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const traceIcon = page.locator('[data-desktop-icon-id="trace"]');
+  await expect(traceIcon).toBeVisible();
+  await expect(traceIcon).toContainText('Trace');
+
+  await traceIcon.dblclick();
+
+  const traceWindow = page.locator('[data-trace-window]');
+  await expect(traceWindow).toBeVisible({ timeout: 5000 });
+  await expect(traceWindow.locator('[data-trace-app]')).toBeVisible();
 });
 
 // ---------------------------------------------------------------
