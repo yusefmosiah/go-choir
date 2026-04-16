@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
-  import { submitConductorPrompt } from './conductor.js';
+  import { submitConductorPrompt, waitForConductorDecision } from './conductor.js';
   import { fetchDesktopState, saveDesktopState } from './desktop.js';
   import FloatingDesktopIcons from './FloatingDesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
@@ -330,37 +330,41 @@
     const text = (event.detail?.text || '').trim();
     if (!text) return;
 
-    if (isTrivialPrompt(text)) {
-      showToast(text === 'hi' ? 'Hello.' : `Prompt noted: ${text}`);
-      return;
-    }
-
-    const windowTitle = text.length > 28 ? `${text.slice(0, 28)}…` : text;
-    let conductorTaskId = '';
+    const fallbackWindowTitle = text.length > 28 ? `${text.slice(0, 28)}…` : text;
 
     try {
       const task = await submitConductorPrompt(text, {
         inputSource: 'prompt_bar',
         requestedApp: 'vtext',
-        initialDocumentTitle: windowTitle,
+        initialDocumentTitle: fallbackWindowTitle,
       });
-      conductorTaskId = task.task_id || '';
+      const conductorTaskId = task.task_id || '';
+      const decision = await waitForConductorDecision(conductorTaskId);
+
+      if (decision.action === 'toast') {
+        showToast(decision.message || 'Conductor acknowledged the request');
+        return;
+      }
+
+      if (decision.action !== 'open_app' || decision.app !== 'vtext') {
+        showToast('Conductor returned an unsupported route');
+        return;
+      }
+
+      openApp('vtext', 'VText', '📝', {
+        windowTitle: decision.title || fallbackWindowTitle,
+        seedPrompt: decision.seed_prompt || text,
+        initialContent: decision.initial_content || decision.seed_prompt || text,
+        createInitialVersion: decision.create_initial_version !== false,
+        conductorTaskId,
+      });
     } catch (err) {
       if (err instanceof AuthRequiredError) {
         dispatch('authexpired');
         return;
       }
-      showToast('Conductor unavailable; opening VText directly');
+      showToast(err.message || 'Conductor submission failed');
     }
-
-    openApp('vtext', 'VText', '📝', {
-      windowTitle,
-      seedPrompt: text,
-      initialContent: text,
-      createInitialVersion: true,
-      conductorTaskId,
-    });
-    showToast(`Opened VText for: ${text}`);
   }
 
   async function handleOpenTextFile(event) {
@@ -405,11 +409,6 @@
     setTimeout(() => {
       toasts = toasts.filter((toast) => toast.id !== id);
     }, 2400);
-  }
-
-  function isTrivialPrompt(text) {
-    const normalized = text.toLowerCase();
-    return /^(hi|hey|hello|yo|sup|ok|okay|thanks|thank you)$/.test(normalized);
   }
 
   // ---- Lifecycle ----

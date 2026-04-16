@@ -1112,12 +1112,9 @@ func TestHandleTopologyReportsOrchestrationShape(t *testing.T) {
 	if resp.ChannelCount != 2 {
 		t.Errorf("channel_count: got %d, want 2", resp.ChannelCount)
 	}
-	if resp.SupervisionInterval != "1h0m0s" {
-		t.Errorf("supervision_interval: got %q, want 1h0m0s", resp.SupervisionInterval)
-	}
 }
 
-func TestHandleVTextDocumentsRootAliasesEtext(t *testing.T) {
+func TestHandleVTextDocumentsRootUsesVTextRoutes(t *testing.T) {
 	_, handler := testAPISetup(t)
 
 	createReqBody := `{"title":"vtext alias doc","content":"hello"}`

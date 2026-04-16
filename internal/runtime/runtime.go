@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 // Runtime is the core runtime engine that manages task lifecycle, event
-// emission, supervision, and health state. It persists all state through
+// emission, and health state. It persists all state through
 // the store so that task handles and events survive sandbox process restarts
 // (VAL-RUNTIME-010).
 type Runtime struct {
@@ -29,7 +30,6 @@ type Runtime struct {
 	health  types.RuntimeHealthState
 	running map[string]context.CancelFunc // task_id → cancel function
 
-	super        *Super
 	wg           sync.WaitGroup
 	toolRegistry *ToolRegistry
 	toolProfiles map[string]*ToolRegistry
@@ -53,7 +53,6 @@ func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, op
 	for _, opt := range opts {
 		opt(rt)
 	}
-	rt.super = NewSuper(rt, cfg.SupervisionInterval)
 	return rt
 }
 
@@ -77,19 +76,16 @@ func WithChannelManager(mgr *ChannelManager) RuntimeOption {
 	}
 }
 
-// Start begins the supervisor loop and recovers tasks that were interrupted
-// by a previous sandbox process exit.
+// Start begins runtime recovery and resumes tasks that were interrupted by a
+// previous sandbox process exit.
 func (rt *Runtime) Start(ctx context.Context) {
 	rt.recoverInterruptedTasks(ctx)
-	rt.super.Start(ctx)
 	log.Printf("runtime: started (sandbox=%s)", rt.cfg.SandboxID)
 }
 
-// Stop gracefully shuts down the runtime, cancelling all in-flight tasks
-// and stopping the supervisor. It is safe to call Stop multiple times.
+// Stop gracefully shuts down the runtime, cancelling all in-flight tasks.
+// It is safe to call Stop multiple times.
 func (rt *Runtime) Stop() {
-	rt.super.Stop()
-
 	rt.mu.Lock()
 	for taskID, cancel := range rt.running {
 		cancel()
@@ -546,6 +542,8 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
 
+	rt.normalizeCompletedTaskResult(rec)
+
 	// Store token usage in metadata.
 	if rec.Metadata == nil {
 		rec.Metadata = make(map[string]any)
@@ -605,6 +603,8 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
 
+	rt.normalizeCompletedTaskResult(rec)
+
 	// For vtext agent revision tasks, create the canonical revision and emit the
 	// vtext completion event before the task is surfaced as completed. This keeps
 	// task completion aligned with document-version availability.
@@ -628,6 +628,102 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(persistCtx, rec)
 
+}
+
+func (rt *Runtime) normalizeCompletedTaskResult(rec *types.TaskRecord) {
+	if rec == nil {
+		return
+	}
+	if agentProfileForTask(rec) != AgentProfileConductor {
+		return
+	}
+	rec.Result = normalizeConductorDecision(rec)
+}
+
+func normalizeConductorDecision(rec *types.TaskRecord) string {
+	if rec == nil {
+		return `{"action":"open_app","app":"vtext","title":"VText","seed_prompt":"","initial_content":"","create_initial_version":true}`
+	}
+
+	type conductorDecision struct {
+		Action               string `json:"action"`
+		App                  string `json:"app,omitempty"`
+		Title                string `json:"title,omitempty"`
+		SeedPrompt           string `json:"seed_prompt,omitempty"`
+		InitialContent       string `json:"initial_content,omitempty"`
+		CreateInitialVersion *bool  `json:"create_initial_version,omitempty"`
+		Message              string `json:"message,omitempty"`
+	}
+
+	seedPrompt, _ := rec.Metadata["seed_prompt"].(string)
+	if strings.TrimSpace(seedPrompt) == "" {
+		seedPrompt = strings.TrimSpace(rec.Prompt)
+	}
+
+	requestedApp, _ := rec.Metadata["requested_app"].(string)
+	if strings.TrimSpace(requestedApp) == "" {
+		requestedApp = AgentProfileVText
+	}
+
+	title, _ := rec.Metadata["initial_document_title"].(string)
+	if strings.TrimSpace(title) == "" {
+		title = strings.TrimSpace(seedPrompt)
+	}
+	if title == "" {
+		title = "VText"
+	}
+
+	defaultDecision := conductorDecision{
+		Action:               "open_app",
+		App:                  requestedApp,
+		Title:                title,
+		SeedPrompt:           seedPrompt,
+		InitialContent:       seedPrompt,
+		CreateInitialVersion: ptrBool(true),
+	}
+
+	if raw := strings.TrimSpace(rec.Result); raw != "" {
+		var parsed conductorDecision
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil && strings.TrimSpace(parsed.Action) != "" {
+			switch strings.TrimSpace(parsed.Action) {
+			case "toast":
+				if strings.TrimSpace(parsed.Message) == "" {
+					parsed.Message = "Conductor acknowledged the request."
+				}
+			case "open_app":
+				if strings.TrimSpace(parsed.App) == "" {
+					parsed.App = requestedApp
+				}
+				if strings.TrimSpace(parsed.Title) == "" {
+					parsed.Title = title
+				}
+				if strings.TrimSpace(parsed.SeedPrompt) == "" {
+					parsed.SeedPrompt = seedPrompt
+				}
+				if strings.TrimSpace(parsed.InitialContent) == "" {
+					parsed.InitialContent = seedPrompt
+				}
+				if parsed.CreateInitialVersion == nil {
+					parsed.CreateInitialVersion = ptrBool(true)
+				}
+			default:
+				parsed = defaultDecision
+			}
+			if out, err := json.Marshal(parsed); err == nil {
+				return string(out)
+			}
+		}
+	}
+
+	out, err := json.Marshal(defaultDecision)
+	if err != nil {
+		return `{"action":"open_app","app":"vtext","title":"VText","seed_prompt":"","initial_content":"","create_initial_version":true}`
+	}
+	return string(out)
+}
+
+func ptrBool(v bool) *bool {
+	return &v
 }
 
 // handleTaskCompletion processes feature-specific side effects after a task

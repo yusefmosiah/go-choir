@@ -20,12 +20,12 @@ import (
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-// --- Real LLM E2E Test for Etext Agent Revision ---
+// --- Real LLM E2E Test for VText Agent Revision ---
 //
 // These tests validate the full agent revision flow with real LLM providers
 // (Z.AI or Fireworks). They fulfill validation assertions:
-//   - VAL-LLM-013: Etext Agent Revision with Fireworks produces content changes
-//   - VAL-LLM-014: Etext Agent Revision with Z.AI produces content changes
+//   - VAL-LLM-013: VText Agent Revision with Fireworks produces content changes
+//   - VAL-LLM-014: VText Agent Revision with Z.AI produces content changes
 //   - VAL-LLM-015: Agent Revision with code request produces valid code
 //   - VAL-LLM-016: Failed LLM call shows graceful error in UI
 //

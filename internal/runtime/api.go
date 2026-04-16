@@ -117,13 +117,12 @@ type runtimeHealthResponse struct {
 // can see how many researchers the microVM expects and what the current runtime
 // fan-out looks like.
 type runtimeTopologyResponse struct {
-	SandboxID           string `json:"sandbox_id"`
-	ResearcherCount     int    `json:"researcher_count"`
-	RunningTasks        int    `json:"running_tasks"`
-	ChannelCount        int    `json:"channel_count"`
-	SupervisionInterval string `json:"supervision_interval"`
-	RuntimeHealth       string `json:"runtime_health"`
-	ActiveProvider      string `json:"active_provider"`
+	SandboxID       string `json:"sandbox_id"`
+	ResearcherCount int    `json:"researcher_count"`
+	RunningTasks    int    `json:"running_tasks"`
+	ChannelCount    int    `json:"channel_count"`
+	RuntimeHealth   string `json:"runtime_health"`
+	ActiveProvider  string `json:"active_provider"`
 }
 
 // APIHandler provides HTTP handlers for the runtime API endpoints.
@@ -522,8 +521,8 @@ func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request
 
 // HandleTopology handles GET /api/agent/topology.
 // It exposes the runtime's orchestration shape for operator/UI inspection:
-// researcher count, supervision interval, current running task count, and
-// the number of active coordination channels.
+// researcher count, current running task count, and the number of active
+// coordination channels.
 func (h *APIHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
@@ -533,13 +532,12 @@ func (h *APIHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(runtimeTopologyResponse{
-		SandboxID:           h.rt.cfg.SandboxID,
-		ResearcherCount:     h.rt.cfg.ResearcherCount,
-		RunningTasks:        h.rt.RunningCount(),
-		ChannelCount:        len(h.rt.ChannelManager().ListChannels()),
-		SupervisionInterval: h.rt.cfg.SupervisionInterval.String(),
-		RuntimeHealth:       string(h.rt.HealthState()),
-		ActiveProvider:      h.rt.provider.ProviderName(),
+		SandboxID:       h.rt.cfg.SandboxID,
+		ResearcherCount: h.rt.cfg.ResearcherCount,
+		RunningTasks:    h.rt.RunningCount(),
+		ChannelCount:    len(h.rt.ChannelManager().ListChannels()),
+		RuntimeHealth:   string(h.rt.HealthState()),
+		ActiveProvider:  h.rt.provider.ProviderName(),
 	})
 }
 

@@ -241,17 +241,17 @@ func (h *APIHandler) HandleVTextDocument(w http.ResponseWriter, r *http.Request)
 
 	switch r.Method {
 	case http.MethodGet:
-		h.handleEtextGetDocument(w, r, docID)
+		h.handleVTextGetDocument(w, r, docID)
 	case http.MethodPut:
-		h.handleEtextUpdateDocument(w, r, docID)
+		h.handleVTextUpdateDocument(w, r, docID)
 	case http.MethodDelete:
-		h.handleEtextDeleteDocument(w, r, docID)
+		h.handleVTextDeleteDocument(w, r, docID)
 	default:
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 	}
 }
 
-func (h *APIHandler) handleEtextGetDocument(w http.ResponseWriter, r *http.Request, docID string) {
+func (h *APIHandler) handleVTextGetDocument(w http.ResponseWriter, r *http.Request, docID string) {
 	ownerID, err := authenticateUser(r)
 	if err != nil {
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
@@ -274,7 +274,7 @@ func (h *APIHandler) handleEtextGetDocument(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (h *APIHandler) handleEtextUpdateDocument(w http.ResponseWriter, r *http.Request, docID string) {
+func (h *APIHandler) handleVTextUpdateDocument(w http.ResponseWriter, r *http.Request, docID string) {
 	ownerID, err := authenticateUser(r)
 	if err != nil {
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
@@ -312,7 +312,7 @@ func (h *APIHandler) handleEtextUpdateDocument(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (h *APIHandler) handleEtextDeleteDocument(w http.ResponseWriter, r *http.Request, docID string) {
+func (h *APIHandler) handleVTextDeleteDocument(w http.ResponseWriter, r *http.Request, docID string) {
 	ownerID, err := authenticateUser(r)
 	if err != nil {
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
@@ -338,15 +338,15 @@ func (h *APIHandler) HandleVTextRevisions(w http.ResponseWriter, r *http.Request
 
 	switch r.Method {
 	case http.MethodPost:
-		h.handleEtextCreateRevision(w, r, docID)
+		h.handleVTextCreateRevision(w, r, docID)
 	case http.MethodGet:
-		h.handleEtextListRevisions(w, r, docID)
+		h.handleVTextListRevisions(w, r, docID)
 	default:
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 	}
 }
 
-func (h *APIHandler) handleEtextCreateRevision(w http.ResponseWriter, r *http.Request, docID string) {
+func (h *APIHandler) handleVTextCreateRevision(w http.ResponseWriter, r *http.Request, docID string) {
 	ownerID, err := authenticateUser(r)
 	if err != nil {
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
@@ -422,7 +422,7 @@ func (h *APIHandler) handleEtextCreateRevision(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (h *APIHandler) handleEtextListRevisions(w http.ResponseWriter, r *http.Request, docID string) {
+func (h *APIHandler) handleVTextListRevisions(w http.ResponseWriter, r *http.Request, docID string) {
 	ownerID, err := authenticateUser(r)
 	if err != nil {
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})

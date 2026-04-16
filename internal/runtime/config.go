@@ -1,6 +1,6 @@
 // Package runtime provides the host-process runtime engine for the go-choir
-// sandbox. It manages task lifecycle, event emission, supervision, health
-// state, and the HTTP API surface consumed through the authenticated proxy.
+// sandbox. It manages task lifecycle, event emission, health state, and the
+// HTTP API surface consumed through the authenticated proxy.
 //
 // Design decisions:
 //   - Tasks execute as direct goroutines, not subprocess CLI loops or
@@ -26,7 +26,8 @@ const (
 	// DefaultProviderTimeout is how long the stub provider simulates work.
 	DefaultProviderTimeout = 2 * time.Second
 
-	// DefaultSupervisionInterval is how often the supervisor checks health.
+	// DefaultSupervisionInterval is a legacy reserved setting kept only to avoid
+	// churning tests and config plumbing during the runtime cleanup.
 	DefaultSupervisionInterval = 5 * time.Second
 
 	// DefaultResearcherCount is the default number of researcher workers
@@ -45,7 +46,8 @@ type Config struct {
 	// ProviderTimeout is the simulated work duration for the stub provider.
 	ProviderTimeout time.Duration
 
-	// SupervisionInterval is how often the supervisor checks runtime health.
+	// SupervisionInterval is legacy reserved configuration. The old polling
+	// supervisor has been deleted and this value is currently unused.
 	SupervisionInterval time.Duration
 
 	// ResearcherCount is the configured researcher worker count for this VM.

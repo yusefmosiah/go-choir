@@ -128,6 +128,38 @@
 
 ---
 
+### `work`
+
+**Definition:** A unit of agentic effort or causal activity inside Choir.
+
+**What it does:**
+- gives us a way to talk about what agents are advancing
+- may happen sequentially or concurrently with other work
+- should preserve causal relationships without forcing a rigid workflow graph
+
+**Important rule:** prefer modeling generic work plus messages, timestamps, actors, and causes over inventing overly specific workflow tables too early.
+
+**Prior / nearby names:**
+- task
+- subtask
+- job
+- delegation
+
+---
+
+### `task`
+
+**Definition:** A runtime execution handle or persisted record for some work, not the primary product concept.
+
+**Important rule:** when we are talking about user-facing behavior or MAS semantics, prefer `work`, `run`, `delegation`, `agent`, or `version` unless we specifically mean the runtime record.
+
+**Prior / nearby names:**
+- runtime task
+- task record
+- execution handle
+
+---
+
 ### `version`
 
 **Definition:** A canonical document state in `vtext`.
@@ -142,7 +174,7 @@
 
 ### `user-authored version`
 
-**Definition:** A version created from a batch of user edits when the user hits Prompt.
+**Definition:** A version created from a batch of user edits when the user hits Revise.
 
 **Prior / nearby names:**
 - edit batch
@@ -209,6 +241,26 @@
 - channel
 - work channel
 - shared channel
+
+---
+
+### `dumb data, smart models`
+
+**Definition:** A core modeling principle for Choir.
+
+**What it means:**
+- keep stored data structures generic and legible
+- store facts, versions, timestamps, actors, messages, and causal relationships
+- avoid baking brittle algorithms or overfit workflow logic into the schema
+- let models process the data intelligently, with the policy expressible in prompts
+
+**Important implication:**
+- we should not feel pressure to encode concepts like `work_edges` just because relationships exist conceptually
+- we should still preserve enough information to reconstruct sequential and concurrent causality between pieces of work
+
+**Prior / nearby names:**
+- dumb data smart models
+- generic data, prompted policy
 
 ---
 
@@ -304,6 +356,8 @@
 - embedded Dolt = per-user runtime storage
 - platform/server Dolt = possible later shared/published storage
 
+**Important rule:** even when a `vtext` lives canonically in Dolt, it should also have a filesystem manifestation or shortcut so it appears naturally in the file browser and opens into a new `vtext` window.
+
 ---
 
 ### transclusion
@@ -358,4 +412,4 @@ If we need the shortest consistent language:
 - `vtext` spawns workers like `researcher` or `super` as needed
 - workers send messages back over coagent tools
 - the `vtext` agent writes new canonical versions
-- users can always edit and hit Prompt to create a new user-authored version
+- users can always edit and hit Revise to create a new user-authored version

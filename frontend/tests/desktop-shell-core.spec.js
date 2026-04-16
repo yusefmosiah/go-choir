@@ -256,17 +256,30 @@ test('prompt bar routes normal input through conductor and opens vtext', async (
   await expect(vtextWindow.locator('[data-vtext-editor-area]')).toHaveValue('Draft a project outline');
 });
 
-test('prompt bar keeps trivial greetings out of document flow', async ({ page, authenticator }) => {
+test('prompt bar sends greetings through conductor instead of frontend pattern matching', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
 
   const promptInput = page.locator('[data-prompt-input]');
-  const initialVTextCount = await page.locator('[data-vtext-app]').count();
+  const responsePromise = page.waitForResponse((response) =>
+    response.url().includes('/api/agent/task') && response.request().method() === 'POST'
+  );
   await promptInput.fill('hi');
   await promptInput.press('Enter');
 
-  await expect(page.locator('.toast')).toContainText('Hello.');
-  await expect(page.locator('[data-vtext-app]')).toHaveCount(initialVTextCount);
+  const response = await responsePromise;
+  expect(response.status()).toBe(202);
+
+  const payload = response.request().postDataJSON();
+  expect(payload.prompt).toBe('hi');
+  expect(payload.metadata.agent_profile).toBe('conductor');
+  expect(payload.metadata.agent_role).toBe('conductor');
+  expect(payload.metadata.input_source).toBe('prompt_bar');
+  expect(payload.metadata.requested_app).toBe('vtext');
+
+  const vtextWindow = page.locator('[data-vtext-app]').last();
+  await expect(vtextWindow).toBeVisible({ timeout: 5000 });
+  await expect(vtextWindow.locator('[data-vtext-editor-area]')).toHaveValue('hi');
 });
 
 // ---------------------------------------------------------------

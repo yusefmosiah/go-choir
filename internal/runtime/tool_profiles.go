@@ -111,6 +111,27 @@ func systemPromptForTask(rec *types.TaskRecord) string {
 
 	var b strings.Builder
 	b.WriteString(base)
+	if profile == AgentProfileConductor {
+		requestedApp, _ := rec.Metadata["requested_app"].(string)
+		seedPrompt, _ := rec.Metadata["seed_prompt"].(string)
+		if requestedApp == "" {
+			requestedApp = AgentProfileVText
+		}
+		b.WriteString("\n\nReturn only a single JSON object with one of these shapes:")
+		b.WriteString(` {"action":"open_app","app":"vtext","title":"...","seed_prompt":"...","initial_content":"...","create_initial_version":true}`)
+		b.WriteString(` or {"action":"toast","message":"..."}.`)
+		b.WriteString("\nDefault to opening vtext unless there is a strong reason to do otherwise.")
+		if requestedApp != "" {
+			b.WriteString("\nRequested default app: ")
+			b.WriteString(requestedApp)
+			b.WriteString(".")
+		}
+		if strings.TrimSpace(seedPrompt) != "" {
+			b.WriteString("\nSeed prompt: ")
+			b.WriteString(strings.TrimSpace(seedPrompt))
+			b.WriteString(".")
+		}
+	}
 	if workID != "" {
 		b.WriteString("\n\nCurrent shared work channel: ")
 		b.WriteString(workID)

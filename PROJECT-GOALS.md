@@ -14,6 +14,7 @@ That means:
 - `conductor` becomes the real routing authority
 - `vtext` becomes the primary user-facing work surface
 - `vtext` versions become the canonical state of work
+- generic work state stays simple and legible under a `dumb data, smart models` principle
 - workers and `super` become visibly real and debuggable
 - Trace becomes understandable enough to debug runs, then evolves into a real appagent
 - prompts become easy to inspect and edit inside Choir as per-user sandbox state
@@ -93,6 +94,11 @@ flowchart TD
 - minimal floating controls only
 - a natural place for users to steer and refine work
 
+`vtext` should also:
+- live canonically in embedded Dolt
+- have a natural file manifestation or shortcut in the filesystem
+- open from the file browser into a new `vtext` window even when the source of truth is the database
+
 ### Conductor
 
 `conductor` is:
@@ -115,6 +121,22 @@ That means:
 - `super` should actually appear for execution-oriented work
 - messages between `vtext`, `researcher`, and `super` should be visible in Trace
 - the system should not merely “hint” at delegation in prompts while behaving like a single-shot rewrite
+
+### Data Modeling
+
+We should follow a `dumb data, smart models` principle.
+
+That means:
+- keep stored work data generic and inspectable
+- preserve actors, timestamps, messages, versions, and causal relationships
+- preserve whether work happened sequentially or concurrently
+- avoid over-encoding workflow algorithms into specialized schema prematurely
+- let models interpret and process the data, with policy expressed in prompts
+
+In practice:
+- do not feel obliged to build tables like `work_edges` just because the relationships are graph-like
+- do preserve enough information to reconstruct what caused what
+- treat runtime execution records as implementation details around a broader concept of work
 
 ---
 
@@ -156,7 +178,14 @@ These are the real next tasks, in order.
 - Both should be able to message `vtext` and each other through coagent tools.
 - The user should be able to tell whether delegation actually happened.
 
-### 5. Improve Trace
+### 5. Delete the fake polling `Super`
+
+- Remove the current polling health-checker named `Super`.
+- Do not keep papering over the naming conflict.
+- Rebuild `super` the right way as a real agent role in the MAS rather than a ticker-driven runtime monitor.
+- If we still need runtime health monitoring, give it a narrow and honestly named implementation later.
+
+### 6. Improve Trace
 
 - Make Trace readable enough to debug runs quickly.
 - Show:
@@ -177,7 +206,7 @@ These are the real next tasks, in order.
 - Make it easy to query, filter, and inspect runs agentically.
 - After we find the right visualization, Trace should become a real appagent rather than just a passive debug surface.
 
-### 6. Add prompt management
+### 7. Add prompt management
 
 - Prompts should be easy to inspect and edit inside Choir.
 - Prompt configuration is a per-user concern and should live inside the sandbox.
@@ -185,17 +214,18 @@ These are the real next tasks, in order.
   - conductor prompting
   - `vtext` prompting
   - worker-role prompting
-  - later, app-specific prompts and policies
+- later, app-specific prompts and policies
 - Prompt management should become an app in the desktop, but it should rely on the same per-user sandbox state model as the rest of the system.
 
-### 7. Stabilize embedded Dolt
+### 8. Stabilize embedded Dolt
 
 - Embedded Dolt should be the real sandbox storage model.
 - `vtext` versions should feel native to that model.
 - Work/version state should be aligned with the document-centered product.
+- `vtext` should have a filesystem manifestation or shortcut model that makes sense in the file browser.
 - Keep host-side SQLite where it makes sense, but stop treating SQLite as the sandbox document truth.
 
-### 8. Then return to `vmctl`
+### 9. Then return to `vmctl`
 
 - Review `go-choir` `vmctl` + `vmmanager` + `microvm.nix`.
 - Review `choiros-rs` user-VM / worker-VM lifecycle patterns.
@@ -214,6 +244,8 @@ These are the real next tasks, in order.
 - Trace is still too raw and too hard to read.
 - `vtext` orchestration is too prompt-fragile.
 - The system can delegate in principle, but the product does not yet make that trustworthy.
+- The current runtime vocabulary still overweights `task` records relative to the broader concept of work.
+- The fake polling `Super` muddies the intended `super` role.
 
 ### Naming / Conceptual Debt
 

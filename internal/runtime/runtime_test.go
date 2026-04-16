@@ -107,6 +107,60 @@ func TestSubmitTaskPersistsToStore(t *testing.T) {
 	}
 }
 
+func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
+	rt, s := testRuntime(t)
+	ctx := context.Background()
+
+	rec, err := rt.SubmitTaskWithMetadata(ctx, "hi", "user-alice", map[string]any{
+		taskMetadataAgentProfile: "conductor",
+		taskMetadataAgentRole:    "conductor",
+		"input_source":          "prompt_bar",
+		"requested_app":         "vtext",
+		"seed_prompt":           "hi",
+		"initial_document_title": "hi",
+	})
+	if err != nil {
+		t.Fatalf("submit conductor task: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	stored, err := s.GetTask(ctx, rec.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.State != types.TaskCompleted {
+		t.Fatalf("state: got %q, want %q", stored.State, types.TaskCompleted)
+	}
+
+	var result struct {
+		Action               string `json:"action"`
+		App                  string `json:"app"`
+		Title                string `json:"title"`
+		SeedPrompt           string `json:"seed_prompt"`
+		InitialContent       string `json:"initial_content"`
+		CreateInitialVersion bool   `json:"create_initial_version"`
+	}
+	if err := json.Unmarshal([]byte(stored.Result), &result); err != nil {
+		t.Fatalf("decode result json: %v\nraw=%q", err, stored.Result)
+	}
+	if result.Action != "open_app" {
+		t.Fatalf("action: got %q, want open_app", result.Action)
+	}
+	if result.App != AgentProfileVText {
+		t.Fatalf("app: got %q, want %q", result.App, AgentProfileVText)
+	}
+	if result.SeedPrompt != "hi" {
+		t.Fatalf("seed_prompt: got %q, want hi", result.SeedPrompt)
+	}
+	if result.InitialContent != "hi" {
+		t.Fatalf("initial_content: got %q, want hi", result.InitialContent)
+	}
+	if !result.CreateInitialVersion {
+		t.Fatal("create_initial_version: got false, want true")
+	}
+}
+
 func TestGetTaskCallerScoped(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
