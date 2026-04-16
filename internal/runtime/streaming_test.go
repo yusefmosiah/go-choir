@@ -98,6 +98,30 @@ func testStreamingRuntime(t *testing.T, provider Provider) (*Runtime, *store.Sto
 	return rt, s
 }
 
+func waitForStreamingRunState(t *testing.T, rt *Runtime, runID, ownerID string, timeout time.Duration) types.RunRecord {
+	t.Helper()
+
+	ctx := context.Background()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		rec, err := rt.GetRun(ctx, runID, ownerID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if rec.State.Terminal() {
+			return *rec
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	rec, err := rt.GetRun(ctx, runID, ownerID)
+	if err != nil {
+		t.Fatalf("get task after timeout: %v", err)
+	}
+	t.Fatalf("timeout waiting for task %s (state=%s)", runID[:8], rec.State)
+	return types.RunRecord{}
+}
+
 // --- Streaming Tests ---
 
 // TestStreamingProviderEmitsMultipleDeltas verifies that a streaming provider
@@ -486,12 +510,7 @@ func TestStreamingLargePayload(t *testing.T) {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
-	stored, err := rt.GetRun(ctx, rec.RunID, "user-large")
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
+	stored := waitForStreamingRunState(t, rt, rec.RunID, "user-large", 5*time.Second)
 	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}

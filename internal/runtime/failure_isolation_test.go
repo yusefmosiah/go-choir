@@ -265,28 +265,25 @@ func TestFailureIsolation_ParentCanSpawnReplacementWorker(t *testing.T) {
 		t.Error("replacement child should have a result")
 	}
 
-	// Verify both child notifications in parent channel.
-	msgs, _, err := rt.ChannelRead(parentID, 0)
+	// Wait for the replacement result notification instead of assuming it is
+	// already visible the moment the child state flips to completed.
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resultMsgs, _, err := rt.WaitForChildResult(waitCtx, parentID, child2.RunID, "result")
 	if err != nil {
-		t.Fatalf("parent channel read: %v", err)
+		t.Fatalf("wait for replacement result: %v", err)
+	}
+	if len(resultMsgs) == 0 {
+		t.Fatal("parent should have received result from replacement child")
 	}
 
-	errorFound := false
-	resultFound := false
-	for _, msg := range msgs {
-		if msg.From == child1.RunID && msg.Role == "error" {
-			errorFound = true
-		}
-		if msg.From == child2.RunID && msg.Role == "result" {
-			resultFound = true
-		}
+	// The failure notification should also be present for the first child.
+	errorMsgs, _, err := rt.WaitForChildResult(ctx, parentID, child1.RunID, "error")
+	if err != nil {
+		t.Fatalf("wait for first child error: %v", err)
 	}
-
-	if !errorFound {
-		t.Error("parent should have received error from first child")
-	}
-	if !resultFound {
-		t.Error("parent should have received result from replacement child")
+	if len(errorMsgs) == 0 {
+		t.Fatal("parent should have received error from first child")
 	}
 }
 
@@ -918,7 +915,7 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 
 	// Create a parent task in running state (simulating interrupted).
 	parent := types.RunRecord{
-		RunID:    "parent-recovery-test",
+		RunID:     "parent-recovery-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-test",
 		State:     types.RunRunning,
@@ -932,7 +929,7 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 
 	// Create a child task in running state (simulating interrupted).
 	child := types.RunRecord{
-		RunID:    "child-recovery-test",
+		RunID:     "child-recovery-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-test",
 		State:     types.RunRunning,
@@ -1013,7 +1010,7 @@ func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 
 	now := time.Now().UTC()
 	task := types.RunRecord{
-		RunID:    "recovery-event-test",
+		RunID:     "recovery-event-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-events",
 		State:     types.RunRunning,
@@ -1086,7 +1083,7 @@ func TestRecovery_RuntimeAcceptsNewTasksAfterRecovery(t *testing.T) {
 
 	now := time.Now().UTC()
 	task := types.RunRecord{
-		RunID:    "old-interrupted-task",
+		RunID:     "old-interrupted-task",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-accept",
 		State:     types.RunRunning,
