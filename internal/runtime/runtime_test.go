@@ -258,8 +258,8 @@ func TestSystemPromptForVTextDefaultsToResearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("systemPromptForRun: %v", err)
 	}
-	if !strings.Contains(prompt, "Research is the default.") {
-		t.Fatalf("vtext system prompt should default to research, got %q", prompt)
+	if !strings.Contains(prompt, "Open researcher work first") {
+		t.Fatalf("vtext system prompt should bias toward spawning researchers first, got %q", prompt)
 	}
 	if !strings.Contains(prompt, "Current shared channel: doc-1.") {
 		t.Fatalf("vtext system prompt should include shared channel, got %q", prompt)

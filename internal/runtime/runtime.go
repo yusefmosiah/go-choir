@@ -203,6 +203,7 @@ func (rt *Runtime) StartRunWithMetadata(ctx context.Context, prompt, ownerID str
 	if strings.TrimSpace(agentRec.ChannelID) == "" {
 		agentRec.ChannelID = runID
 	}
+	metadata = ensureTrajectoryID(metadata, nil, runID)
 	agentRec.CreatedAt = now
 	agentRec.UpdatedAt = now
 	if err := rt.store.UpsertAgent(ctx, agentRec); err != nil {
@@ -291,6 +292,7 @@ func (rt *Runtime) StartChildRun(ctx context.Context, parentID, objective, owner
 	if strings.TrimSpace(agentRec.ChannelID) == "" {
 		agentRec.ChannelID = runID
 	}
+	metadata = ensureTrajectoryID(metadata, &parentRec, runID)
 	agentRec.CreatedAt = now
 	agentRec.UpdatedAt = now
 	if err := rt.store.UpsertAgent(ctx, agentRec); err != nil {
@@ -957,9 +959,22 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	}
 
 	ownerID := rec.OwnerID
-	content := rec.Result
-	if content == "" {
-		content = "(agent revision produced no content)"
+	content := strings.TrimSpace(rec.Result)
+	if isPlaceholderVTextContent(content) {
+		// The provider returned nothing substantive — most commonly because the
+		// vtext agent delegated work and then ran out of tool-loop budget
+		// without composing a revision. Fail the mutation instead of
+		// materialising "Run completed." or an empty body as the canonical v1.
+		log.Printf("runtime: vtext agent revision run %s: placeholder/empty content (%q), failing mutation", rec.RunID, content)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
+		failPayload, _ := json.Marshal(map[string]string{
+			"doc_id": docID,
+			"run_id": rec.RunID,
+			"error":  "vtext agent produced no content",
+		})
+		rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
+			events.CauseProviderFailure, failPayload)
+		return fmt.Errorf("vtext agent revision run %s produced no content", rec.RunID)
 	}
 
 	// Get the current document state for the parent revision ID.
@@ -1227,12 +1242,64 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.RunRecor
 	}
 }
 
-// providerResult returns the result text from the provider, if available.
+// providerResult returns fallback result text when a completed provider
+// execution did not populate rec.Result directly. For the stub provider we
+// use its preset result; for real providers we return a short human-readable
+// marker. For vtext agent revisions, handleRunCompletion rejects this marker
+// so it never lands as canonical document content — see
+// isPlaceholderVTextContent.
 func (rt *Runtime) providerResult() string {
 	if sp, ok := rt.provider.(*StubProvider); ok {
 		return sp.Result
 	}
 	return "Run completed."
+}
+
+// isPlaceholderVTextContent reports whether the provider output is an empty
+// or boilerplate string that must not be written as a canonical vtext
+// document version.
+func isPlaceholderVTextContent(content string) bool {
+	s := strings.TrimSpace(content)
+	if s == "" {
+		return true
+	}
+	switch strings.ToLower(s) {
+	case "run completed.", "run completed", "(agent revision produced no content)":
+		return true
+	}
+	return false
+}
+
+const runMetadataTrajectoryID = "trajectory_id"
+
+// ensureTrajectoryID guarantees that metadata carries a trajectory_id, falling
+// back to parent metadata (or parent RunID) when inherited. The trajectory_id
+// is the unit that spans prompt-bar → conductor → vtext → workers → further
+// revisions; Trace groups workflows by it so the whole chain renders as one
+// run.
+func ensureTrajectoryID(metadata map[string]any, parent *types.RunRecord, selfRunID string) map[string]any {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if existing, _ := metadata[runMetadataTrajectoryID].(string); strings.TrimSpace(existing) != "" {
+		return metadata
+	}
+	if parent != nil {
+		if parent.Metadata != nil {
+			if inherited, _ := parent.Metadata[runMetadataTrajectoryID].(string); strings.TrimSpace(inherited) != "" {
+				metadata[runMetadataTrajectoryID] = inherited
+				return metadata
+			}
+		}
+		if strings.TrimSpace(parent.RunID) != "" {
+			metadata[runMetadataTrajectoryID] = parent.RunID
+			return metadata
+		}
+	}
+	if strings.TrimSpace(selfRunID) != "" {
+		metadata[runMetadataTrajectoryID] = selfRunID
+	}
+	return metadata
 }
 
 // emitEvent creates and persists an event record, then publishes it on the

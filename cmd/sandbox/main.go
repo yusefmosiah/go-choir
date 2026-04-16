@@ -102,7 +102,11 @@ func main() {
 	var rtOpts []runtime.RuntimeOption
 
 	rt := runtime.New(rtCfg, db, bus, rtProvider, rtOpts...)
-	if os.Getenv("RUNTIME_ENABLE_TOOLS") != "" {
+	// Default-on: install the full per-profile tool registry. Set
+	// RUNTIME_DISABLE_TOOLS=1 to opt out (for stub-only tests where no tools
+	// should run). RUNTIME_ENABLE_TOOLS is still honored for back-compat but
+	// is no longer required.
+	if os.Getenv("RUNTIME_DISABLE_TOOLS") == "" {
 		toolCWD := os.Getenv("RUNTIME_TOOL_CWD")
 		if err := rt.InstallDefaultAgentTools(toolCWD); err != nil {
 			log.Fatalf("sandbox: install default agent tools: %v", err)
@@ -117,6 +121,8 @@ func main() {
 			sizeOfRegistry(rt.ToolRegistryForProfile(runtime.AgentProfileResearcher)),
 			sizeOfRegistry(rt.ToolRegistryForProfile(runtime.AgentProfileVText)),
 		)
+	} else {
+		log.Printf("sandbox: tool profiles DISABLED via RUNTIME_DISABLE_TOOLS (stub-only mode)")
 	}
 
 	// Register runtime API routes (overrides default /health).

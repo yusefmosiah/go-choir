@@ -61,8 +61,25 @@
     return run?.parent_run_id || run?.metadata?.parent_id || '';
   }
 
-  function workflowChannelId(run) {
+  function workflowTrajectoryId(run) {
+    return (
+      run?.metadata?.trajectory_id ||
+      run?.trajectory_id ||
+      run?.channel_id ||
+      run?.metadata?.channel_id ||
+      run?.run_id ||
+      ''
+    );
+  }
+
+  function workflowDetailChannelId(run) {
     return run?.channel_id || run?.metadata?.channel_id || run?.run_id || '';
+  }
+
+  // Back-compat alias: anything still calling workflowChannelId gets the
+  // trajectory grouping key so the sidebar renders one tile per trajectory.
+  function workflowChannelId(run) {
+    return workflowTrajectoryId(run);
   }
 
   function excerpt(text, max = 72) {
@@ -106,17 +123,30 @@
   function buildWorkflowIndex(runItems) {
     const grouped = new Map();
     for (const run of sortRunsNewestFirst(runItems)) {
-      const channelId = workflowChannelId(run);
-      if (!channelId) continue;
-      if (!grouped.has(channelId)) {
-        grouped.set(channelId, {
-          channelId,
+      const trajectoryId = workflowTrajectoryId(run);
+      if (!trajectoryId) continue;
+      if (!grouped.has(trajectoryId)) {
+        grouped.set(trajectoryId, {
+          channelId: trajectoryId,
+          trajectoryId,
+          detailChannelId: workflowDetailChannelId(run),
           latestRun: run,
           latestAt: parseDate(run.updated_at || run.created_at),
           runs: [],
         });
+      } else {
+        // Prefer the latest run's channel for detail fetches so users see the
+        // most recent worker/vtext activity when a trajectory spans multiple
+        // channels.
+        const existing = grouped.get(trajectoryId);
+        const runAt = parseDate(run.updated_at || run.created_at);
+        if (runAt > existing.latestAt) {
+          existing.latestAt = runAt;
+          existing.latestRun = run;
+          existing.detailChannelId = workflowDetailChannelId(run);
+        }
       }
-      grouped.get(channelId).runs.push(run);
+      grouped.get(trajectoryId).runs.push(run);
     }
     return [...grouped.values()].sort((left, right) => right.latestAt - left.latestAt);
   }
@@ -185,8 +215,8 @@
     }
   }
 
-  async function refreshSelectedWorkflow(channelId = selectedChannelId) {
-    if (!channelId) {
+  async function refreshSelectedWorkflow(trajectoryId = selectedChannelId) {
+    if (!trajectoryId) {
       workflowRuns = [];
       workflowEvents = [];
       workflowMessages = [];
@@ -194,14 +224,35 @@
     }
     detailLoading = true;
     try {
-      const [runResp, eventResp, messageResp] = await Promise.all([
-        listAgentRuns(200, { channelId }),
-        listAgentEvents({ limit: 400, channelId }),
-        listChannelMessages({ channelId, limit: 200 }),
-      ]);
-      workflowRuns = sortRunsOldestFirst(runResp.runs || []);
-      workflowEvents = sortEventsAscending(eventResp.events || []);
-      workflowMessages = sortMessagesAscending(messageResp.messages || []);
+      // A trajectory may span multiple channels (conductor.channel = run_id,
+      // vtext.channel = doc_id, researcher channel = inherited). Filter the
+      // locally-known owner runs by trajectory_id, then fan-out event and
+      // message queries over each distinct channel in the trajectory. This
+      // stitches prompt-bar → conductor → vtext → workers into one workflow
+      // without a backend trajectory-aware endpoint.
+      const trajectoryRuns = (ownerRuns || []).filter(
+        (run) => workflowTrajectoryId(run) === trajectoryId,
+      );
+      const channels = new Set();
+      for (const run of trajectoryRuns) {
+        const ch = workflowDetailChannelId(run);
+        if (ch) channels.add(ch);
+      }
+      if (channels.size === 0) channels.add(trajectoryId);
+
+      const eventResponses = await Promise.all(
+        [...channels].map((channelId) => listAgentEvents({ limit: 400, channelId })),
+      );
+      const messageResponses = await Promise.all(
+        [...channels].map((channelId) => listChannelMessages({ channelId, limit: 200 })),
+      );
+
+      const allEvents = eventResponses.flatMap((resp) => resp.events || []);
+      const allMessages = messageResponses.flatMap((resp) => resp.messages || []);
+
+      workflowRuns = sortRunsOldestFirst(trajectoryRuns);
+      workflowEvents = sortEventsAscending(allEvents);
+      workflowMessages = sortMessagesAscending(allMessages);
     } finally {
       detailLoading = false;
     }
