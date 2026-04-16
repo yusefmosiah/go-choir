@@ -16,6 +16,13 @@
   let selectedRole = 'conductor';
   let draft = '';
 
+  function formatJSON(value) {
+    if (!value || (typeof value === 'object' && Object.keys(value).length === 0)) {
+      return '{}';
+    }
+    return JSON.stringify(value, null, 2);
+  }
+
   function sortedPrompts(items) {
     return [...items].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
   }
@@ -109,7 +116,7 @@
         on:click={() => handleSelect(prompt.role)}
       >
         <span>{prompt.role}</span>
-        <span class="source">{prompt.source}</span>
+        <span class="source">{prompt.source === 'user' ? 'override' : 'seeded'}</span>
       </button>
     {/each}
   </div>
@@ -118,7 +125,9 @@
     <div class="editor-header">
       <div>
         <h2>{selectedRole}</h2>
-        <div class="editor-subtitle">Effective source: {activePrompt?.source || 'default'}</div>
+        <div class="editor-subtitle">
+          Source: {activePrompt?.source_label || 'Seeded default file'}
+        </div>
       </div>
       <div class="actions">
         <button class="secondary" on:click={handleReset} disabled={saving || loading}>Reset</button>
@@ -131,12 +140,81 @@
     {#if loading}
       <div class="state">Loading prompts…</div>
     {:else}
-      <textarea
-        bind:value={draft}
-        class="editor"
-        spellcheck="false"
-        disabled={saving}
-      ></textarea>
+      <div class="explainer">
+        This textarea edits the role prompt text only. The read-only sections below show the effective system prompt, tool definitions, and provider/model policy actually in force.
+      </div>
+
+      <div class="section">
+        <div class="section-title">Editable role prompt</div>
+        <textarea
+          bind:value={draft}
+          class="editor"
+          spellcheck="false"
+          disabled={saving}
+        ></textarea>
+      </div>
+
+      <div class="details-grid">
+        <section class="detail-card">
+          <div class="section-title">Effective system prompt</div>
+          <div class="section-subtitle">
+            Role prompt + runtime-added policy + tool catalog.
+          </div>
+          <textarea
+            class="readonly-editor"
+            spellcheck="false"
+            readonly
+            value={activePrompt?.effective_system_prompt || ''}
+          ></textarea>
+        </section>
+
+        <section class="detail-card">
+          <div class="section-title">Role policy</div>
+          <div class="policy-list">
+            <div><strong>Profile</strong> {activePrompt?.role_policy?.profile || selectedRole}</div>
+            <div><strong>Delegates to</strong> {activePrompt?.role_policy?.allowed_delegate_targets?.length ? activePrompt.role_policy.allowed_delegate_targets.join(', ') : 'none'}</div>
+            <div><strong>Read-only files</strong> {activePrompt?.role_policy?.allow_read_only_files ? 'yes' : 'no'}</div>
+            <div><strong>Writable files</strong> {activePrompt?.role_policy?.allow_writable_files ? 'yes' : 'no'}</div>
+            <div><strong>Research tools</strong> {activePrompt?.role_policy?.allow_research_tools ? 'yes' : 'no'}</div>
+            <div><strong>Evidence tools</strong> {activePrompt?.role_policy?.allow_evidence_tools ? 'yes' : 'no'}</div>
+            <div><strong>Coding tools</strong> {activePrompt?.role_policy?.allow_coding_tools ? 'yes' : 'no'}</div>
+            <div><strong>Co-agent tools</strong> {activePrompt?.role_policy?.allow_coagent_tools ? 'yes' : 'no'}</div>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="section-title">Provider and model policy</div>
+          <div class="policy-list">
+            <div><strong>Active provider</strong> {activePrompt?.provider_policy?.active_provider || 'unknown'}</div>
+            <div><strong>Default model</strong> {activePrompt?.provider_policy?.default_model || 'provider default / not exposed'}</div>
+            <div><strong>Selection policy</strong> {activePrompt?.provider_policy?.model_selection || 'unknown'}</div>
+            <div><strong>Per-run model override</strong> {activePrompt?.provider_policy?.supports_per_run_model_override ? 'supported' : 'not supported'}</div>
+          </div>
+          {#if activePrompt?.provider_policy?.notes?.length}
+            <div class="policy-notes">
+              {#each activePrompt.provider_policy.notes as note}
+                <div class="policy-note">{note}</div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        <section class="detail-card tools-card">
+          <div class="section-title">Tool definitions</div>
+          <div class="section-subtitle">
+            Read-only. Edit tool behavior in code, not here.
+          </div>
+          <div class="tool-list">
+            {#each activePrompt?.tools || [] as tool}
+              <div class="tool-card">
+                <div class="tool-name">{tool.name}</div>
+                <div class="tool-description">{tool.description || 'No description.'}</div>
+                <pre class="tool-schema">{formatJSON(tool.parameters)}</pre>
+              </div>
+            {/each}
+          </div>
+        </section>
+      </div>
     {/if}
 
     {#if error}
@@ -206,6 +284,8 @@
     flex-direction: column;
     min-height: 0;
     gap: 0.75rem;
+    overflow: auto;
+    padding-right: 0.25rem;
   }
 
   .editor-header {
@@ -224,6 +304,26 @@
   .editor-subtitle {
     color: #9aa4b2;
     font-size: 0.82rem;
+  }
+
+  .explainer,
+  .section-subtitle {
+    color: #9aa4b2;
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 0;
+  }
+
+  .section-title {
+    color: #f3f4f6;
+    font-size: 0.9rem;
+    font-weight: 700;
   }
 
   .actions {
@@ -251,8 +351,7 @@
   }
 
   .editor {
-    flex: 1;
-    min-height: 320px;
+    min-height: 260px;
     width: 100%;
     resize: none;
     padding: 1rem;
@@ -261,6 +360,101 @@
     background: #111827;
     color: #f9fafb;
     font: 0.95rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .details-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .detail-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.9rem;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    min-height: 0;
+  }
+
+  .readonly-editor,
+  .tool-schema {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0f172a;
+    color: #e5e7eb;
+    font: 0.8rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .readonly-editor {
+    min-height: 260px;
+    padding: 0.85rem;
+    resize: vertical;
+  }
+
+  .policy-list {
+    display: grid;
+    gap: 0.38rem;
+    color: #d1d5db;
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+
+  .policy-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .policy-note {
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  .tools-card {
+    grid-column: 1 / -1;
+  }
+
+  .tool-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .tool-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.8rem;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(15, 23, 42, 0.72);
+  }
+
+  .tool-name {
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: #f9fafb;
+  }
+
+  .tool-description {
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  .tool-schema {
+    margin: 0;
+    padding: 0.7rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+    min-height: 96px;
   }
 
   .state,
@@ -280,6 +474,14 @@
   @media (max-width: 900px) {
     .prompt-manager {
       grid-template-columns: 1fr;
+    }
+
+    .details-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .tools-card {
+      grid-column: auto;
     }
   }
 </style>

@@ -13,6 +13,16 @@ import (
 // lifecycle updates before the task completes.
 type EventEmitFunc func(kind types.EventKind, phase string, payload json.RawMessage)
 
+// ProviderPolicy describes the runtime-visible provider/model policy shown in
+// Settings. It is read-only observability metadata, not a mutable config API.
+type ProviderPolicy struct {
+	ActiveProvider              string   `json:"active_provider"`
+	DefaultModel                string   `json:"default_model,omitempty"`
+	ModelSelection              string   `json:"model_selection"`
+	SupportsPerRunModelOverride bool     `json:"supports_per_run_model_override"`
+	Notes                       []string `json:"notes,omitempty"`
+}
+
 // Provider is the interface for executing a runtime task. The stub provider
 // simulates execution; the real Bedrock/Z.AI bridge (via the provider package's
 // BridgeProvider) implements this interface for real upstream calls.
@@ -56,6 +66,19 @@ func NewStubProvider(delay time.Duration) *StubProvider {
 // ProviderName returns "stub" for the stub provider.
 func (p *StubProvider) ProviderName() string { return "stub" }
 
+// RuntimeProviderPolicy returns the effective provider/model policy for the
+// stub provider.
+func (p *StubProvider) RuntimeProviderPolicy() ProviderPolicy {
+	return ProviderPolicy{
+		ActiveProvider:              "stub",
+		ModelSelection:              "No real upstream model is configured. The sandbox is returning stub responses.",
+		SupportsPerRunModelOverride: false,
+		Notes: []string{
+			"Use a real provider or gateway-backed sandbox to exercise actual model/tool behavior.",
+		},
+	}
+}
+
 // Execute simulates task execution by sleeping for the configured delay,
 // emitting progress events, and returning the configured result or error.
 func (p *StubProvider) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
@@ -87,4 +110,29 @@ done:
 		json.RawMessage(`{"text":"`+p.Result+`","provider":"stub"}`))
 
 	return nil
+}
+
+func providerPolicyForRuntime(provider Provider) ProviderPolicy {
+	if provider == nil {
+		return ProviderPolicy{
+			ActiveProvider:              "none",
+			ModelSelection:              "No provider is configured.",
+			SupportsPerRunModelOverride: false,
+		}
+	}
+	if reporter, ok := provider.(interface{ RuntimeProviderPolicy() ProviderPolicy }); ok {
+		policy := reporter.RuntimeProviderPolicy()
+		if policy.ActiveProvider == "" {
+			policy.ActiveProvider = provider.ProviderName()
+		}
+		if policy.ModelSelection == "" {
+			policy.ModelSelection = "Provider chooses its default model unless a run explicitly requests a model override."
+		}
+		return policy
+	}
+	return ProviderPolicy{
+		ActiveProvider:              provider.ProviderName(),
+		ModelSelection:              "Provider chooses its default model unless a run explicitly requests a model override.",
+		SupportsPerRunModelOverride: true,
+	}
 }

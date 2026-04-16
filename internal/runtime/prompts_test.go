@@ -4,12 +4,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
 
+func testPromptAPISetup(t *testing.T) (*Runtime, *APIHandler) {
+	t.Helper()
+	rt, handler := testAPISetup(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+	return rt, handler
+}
+
 func TestHandlePromptListReturnsEffectivePrompts(t *testing.T) {
-	_, handler := testAPISetup(t)
+	_, handler := testPromptAPISetup(t)
 
 	req := authenticatedRequest(http.MethodGet, "/api/prompts", "", "user-alice")
 	w := httptest.NewRecorder()
@@ -26,10 +40,24 @@ func TestHandlePromptListReturnsEffectivePrompts(t *testing.T) {
 	if len(resp.Prompts) != len(promptRoles()) {
 		t.Fatalf("prompt count = %d, want %d", len(resp.Prompts), len(promptRoles()))
 	}
+	for _, prompt := range resp.Prompts {
+		if strings.TrimSpace(prompt.SourceLabel) == "" {
+			t.Fatalf("prompt %s missing source label", prompt.Role)
+		}
+		if strings.TrimSpace(prompt.EffectiveSystemPrompt) == "" {
+			t.Fatalf("prompt %s missing effective system prompt", prompt.Role)
+		}
+		if len(prompt.Tools) == 0 {
+			t.Fatalf("prompt %s missing tool metadata", prompt.Role)
+		}
+		if strings.TrimSpace(prompt.ProviderPolicy.ActiveProvider) == "" {
+			t.Fatalf("prompt %s missing provider policy", prompt.Role)
+		}
+	}
 }
 
 func TestHandlePromptRoleSupportsSaveAndReset(t *testing.T) {
-	_, handler := testAPISetup(t)
+	_, handler := testPromptAPISetup(t)
 
 	putReq := authenticatedRequest(http.MethodPut, "/api/prompts/vtext", `{"content":"Custom prompt"}`, "user-alice")
 	putW := httptest.NewRecorder()
@@ -59,6 +87,15 @@ func TestHandlePromptRoleSupportsSaveAndReset(t *testing.T) {
 	}
 	if getResp.Content != "Custom prompt" {
 		t.Fatalf("get content = %q, want custom override", getResp.Content)
+	}
+	if !strings.Contains(getResp.EffectiveSystemPrompt, "Available tools:") {
+		t.Fatalf("effective system prompt should include tool catalog, got %q", getResp.EffectiveSystemPrompt)
+	}
+	if len(getResp.Tools) == 0 {
+		t.Fatal("expected tools in prompt response")
+	}
+	if getResp.RolePolicy.Profile != AgentProfileVText {
+		t.Fatalf("role policy profile = %q, want %q", getResp.RolePolicy.Profile, AgentProfileVText)
 	}
 
 	deleteReq := authenticatedRequest(http.MethodDelete, "/api/prompts/vtext", "", "user-alice")

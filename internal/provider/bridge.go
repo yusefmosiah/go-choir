@@ -45,6 +45,41 @@ func (b *BridgeProvider) Inner() Provider { return b.inner }
 // ProviderName returns the underlying LLM provider's name for observability.
 func (b *BridgeProvider) ProviderName() string { return b.inner.Name() }
 
+// RuntimeProviderPolicy returns the effective provider/model policy for a
+// direct real-provider bridge.
+func (b *BridgeProvider) RuntimeProviderPolicy() runtime.ProviderPolicy {
+	policy := runtime.ProviderPolicy{
+		ActiveProvider:             b.inner.Name(),
+		ModelSelection:             "The active provider uses its configured default model unless a child run explicitly requests a model override.",
+		SupportsPerRunModelOverride: true,
+	}
+	switch inner := b.inner.(type) {
+	case *BedrockProvider:
+		policy.DefaultModel = inner.modelID
+		policy.Notes = []string{
+			"Direct sandbox mode using AWS Bedrock credentials in the sandbox process.",
+			"Bedrock is selected first when credentials are present and a model list is configured.",
+		}
+	case *ZAIProvider:
+		policy.DefaultModel = inner.modelID
+		policy.Notes = []string{
+			"Direct sandbox mode using Z.AI credentials in the sandbox process.",
+			"Z.AI is used when Bedrock is unavailable and Z.AI credentials are configured.",
+		}
+	case *FireworksProvider:
+		policy.DefaultModel = inner.modelID
+		policy.Notes = []string{
+			"Direct sandbox mode using Fireworks credentials in the sandbox process.",
+			"Fireworks is used when Bedrock and Z.AI are unavailable and Fireworks credentials are configured.",
+		}
+	default:
+		policy.Notes = []string{
+			"Direct sandbox mode using a real provider bridge.",
+		}
+	}
+	return policy
+}
+
 // Execute implements the runtime.Provider interface. It translates the
 // task prompt into an LLM request, calls the real provider with streaming
 // enabled, emits incremental delta events for each text chunk, and returns
@@ -342,6 +377,20 @@ func NewGatewayBridgeProvider(client GatewayCaller) *GatewayBridgeProvider {
 
 // ProviderName returns the underlying gateway client name for observability.
 func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
+
+// RuntimeProviderPolicy returns the effective provider/model policy for a
+// gateway-routed sandbox.
+func (g *GatewayBridgeProvider) RuntimeProviderPolicy() runtime.ProviderPolicy {
+	return runtime.ProviderPolicy{
+		ActiveProvider:             g.client.Name(),
+		ModelSelection:             "The sandbox routes through the host gateway. The gateway chooses the backing provider/model unless a run explicitly requests a model override.",
+		SupportsPerRunModelOverride: true,
+		Notes: []string{
+			"Gateway-routed mode keeps provider credentials on the host side.",
+			"Role prompts live in the sandbox, but provider/model selection is host-routed policy.",
+		},
+	}
+}
 
 // Execute implements the runtime.Provider interface. It translates the
 // task prompt into an LLM request and routes it through the gateway with
