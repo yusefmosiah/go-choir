@@ -292,19 +292,25 @@ func (r *OwnershipRegistry) issueGatewayToken(sandboxID string) string {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Printf("vmctl: gateway token issue returned %d for %s", resp.StatusCode, sandboxID)
 		return ""
 	}
 
 	var result struct {
-		SandboxID string `json:"sandbox_id"`
-		RawToken  string `json:"raw_token"`
-		ExpiresAt string `json:"expires_at"`
+		SandboxID       string `json:"sandbox_id"`
+		SandboxIDCompat string `json:"SandboxID"`
+		RawToken        string `json:"raw_token"`
+		RawTokenCompat  string `json:"RawToken"`
+		ExpiresAt       string `json:"expires_at"`
+		ExpiresAtCompat string `json:"ExpiresAt"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("vmctl: gateway token response decode failed: %v", err)
 		return ""
+	}
+	if result.RawToken == "" {
+		result.RawToken = result.RawTokenCompat
 	}
 
 	return result.RawToken
@@ -383,13 +389,13 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 	epoch := r.nextEpoch()
 
 	own := &VMOwnership{
-		VMID:        vmID,
-		UserID:      userID,
-		SandboxURL:  r.sandboxURLForVM(vmID),
-		State:       VMStateBooting,
-		CreatedAt:   time.Now(),
+		VMID:         vmID,
+		UserID:       userID,
+		SandboxURL:   r.sandboxURLForVM(vmID),
+		State:        VMStateBooting,
+		CreatedAt:    time.Now(),
 		LastActiveAt: time.Now(),
-		Epoch:       epoch,
+		Epoch:        epoch,
 	}
 
 	// Register pending waiters map before unlocking so other callers can find it.

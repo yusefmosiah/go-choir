@@ -1391,18 +1391,18 @@ func TestHandler_LifecycleEndpointsDenyExternalCallers(t *testing.T) {
 // It records lifecycle calls so tests can verify that the OwnershipRegistry
 // properly delegates to the VM manager when one is configured.
 type mockVMManager struct {
-	boots     []VMManagerConfig
-	stops     []string
+	boots      []VMManagerConfig
+	stops      []string
 	hibernates []string
-	resumes   []string
-	recovers  []string
+	resumes    []string
+	recovers   []string
 	// Configurable responses
-	bootResponse *VMInstanceInfo
-	bootError    error
-	resumeResponse *VMInstanceInfo
-	resumeError  error
+	bootResponse    *VMInstanceInfo
+	bootError       error
+	resumeResponse  *VMInstanceInfo
+	resumeError     error
 	recoverResponse *VMInstanceInfo
-	recoverError error
+	recoverError    error
 }
 
 func (m *mockVMManager) BootVM(cfg VMManagerConfig) (*VMInstanceInfo, error) {
@@ -1713,9 +1713,33 @@ func TestIssueGatewayToken_Success(t *testing.T) {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		// Mirror the gateway credential issuance response structure.
+		w.WriteHeader(http.StatusCreated)
+		// Mirror the real gateway CredentialResult JSON shape.
 		resp := map[string]string{
-			"sandbox_id": "vm-test-123",
+			"SandboxID": "vm-test-123",
+			"RawToken":  credValue,
+			"ExpiresAt": "2025-01-01T00:00:00Z",
+		}
+		jsonData, _ := json.Marshal(resp)
+		w.Write(jsonData)
+	}))
+	defer gateway.Close()
+
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	reg.SetGatewayURL(gateway.URL)
+
+	token := reg.issueGatewayToken("vm-test-123")
+	if token != credValue {
+		t.Errorf("expected credential value %q, got %q", credValue, token)
+	}
+}
+
+func TestIssueGatewayToken_LegacyJSONShapeStillWorks(t *testing.T) {
+	credValue := "vm-test-legacy:changedplaceholder"
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]string{
+			"sandbox_id": "vm-test-legacy",
 			"raw_token":  credValue,
 			"expires_at": "2025-01-01T00:00:00Z",
 		}
@@ -1727,7 +1751,7 @@ func TestIssueGatewayToken_Success(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 	reg.SetGatewayURL(gateway.URL)
 
-	token := reg.issueGatewayToken("vm-test-123")
+	token := reg.issueGatewayToken("vm-test-legacy")
 	if token != credValue {
 		t.Errorf("expected credential value %q, got %q", credValue, token)
 	}

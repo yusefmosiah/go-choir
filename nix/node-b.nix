@@ -279,6 +279,10 @@ in
       ReadWritePaths = [ "/var/lib/go-choir" ];
       Environment = [
         "GATEWAY_PORT=8084"
+        # Tokens are currently issued at sandbox/VM bootstrap and not
+        # proactively rotated. Use a longer TTL in staging to avoid
+        # authentication lapses during normal multi-hour sessions.
+        "GATEWAY_SANDBOX_TOKEN_TTL=720h"
       ];
     };
   };
