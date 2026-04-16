@@ -720,7 +720,22 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 		}
 	}
 
-	agentPrompt := buildAgentRevisionRequest(currentRevision, previousRevision, metadata, req, diffSummary)
+	hasGroundedHistory, historyErr := rt.channelHasGroundedHistory(ctx, ownerID, doc.DocID, time.Time{})
+	if historyErr != nil {
+		log.Printf("vtext api: check grounded history: %v", historyErr)
+		hasGroundedHistory = false
+	}
+
+	recentWorkerMessages, workerErr := rt.recentWorkerMessages(ctx, ownerID, doc.DocID, 12)
+	if workerErr != nil {
+		log.Printf("vtext api: recent worker messages: %v", workerErr)
+	}
+	userRevisionDiffs, userDiffErr := rt.userRevisionDiffSummaries(ctx, ownerID, doc.DocID, 200)
+	if userDiffErr != nil {
+		log.Printf("vtext api: user revision diffs: %v", userDiffErr)
+	}
+
+	agentPrompt := buildAgentRevisionRequest(currentRevision, previousRevision, metadata, req, diffSummary, hasGroundedHistory, recentWorkerMessages, userRevisionDiffs)
 
 	// Create the runtime run with vtext agent revision metadata.
 	// Carry forward durable context keys from the current head revision
@@ -779,7 +794,7 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 
 // buildAgentRevisionRequest constructs the backend-owned vtext revision
 // request sent as the user turn for the vtext appagent.
-func buildAgentRevisionRequest(current types.Revision, previous *types.Revision, metadata map[string]any, req vtextAgentRevisionRequest, diffSummary string) string {
+func buildAgentRevisionRequest(current types.Revision, previous *types.Revision, metadata map[string]any, req vtextAgentRevisionRequest, diffSummary string, hasGroundedHistory bool, recentWorkerMessages []ChannelMessage, userRevisionDiffs []string) string {
 	var b strings.Builder
 	b.WriteString("A revise event was triggered for the current vtext document.")
 
@@ -827,6 +842,38 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 		b.WriteString("\n\nLatest revision diff/context:\n")
 		b.WriteString(diffSummary)
 	}
+	if len(recentWorkerMessages) > 0 {
+		b.WriteString("\n\nRecent worker messages on the shared channel:\n")
+		for _, message := range recentWorkerMessages {
+			b.WriteString("- [")
+			if !message.Timestamp.IsZero() {
+				b.WriteString(message.Timestamp.UTC().Format(time.RFC3339))
+			} else {
+				b.WriteString("unknown-time")
+			}
+			b.WriteString("] ")
+			if role := strings.TrimSpace(message.Role); role != "" {
+				b.WriteString(role)
+			} else {
+				b.WriteString("worker")
+			}
+			if from := strings.TrimSpace(message.From); from != "" {
+				b.WriteString(" ")
+				b.WriteString(from)
+			}
+			b.WriteString(": ")
+			b.WriteString(truncatePromptSnippet(message.Content, 800))
+			b.WriteString("\n")
+		}
+	}
+	if len(userRevisionDiffs) > 0 {
+		b.WriteString("\nUser-authored revision diffs (oldest to newest):\n")
+		for _, summary := range userRevisionDiffs {
+			b.WriteString("- ")
+			b.WriteString(summary)
+			b.WriteString("\n")
+		}
+	}
 
 	b.WriteString("\n\nCurrent canonical document content:\n---\n")
 	if current.Content != "" {
@@ -838,10 +885,87 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 	if current.AuthorKind == types.AuthorUser {
 		b.WriteString("\nTreat this latest user-authored revision as the canonical input for the next version.")
 	}
-	b.WriteString("\nDefault to opening researcher work for substantive requests, even when you can already produce a useful first version from the current document and your own priors.")
-	b.WriteString("\nTreat that first version as provisional and keep grounding later versions with outside evidence and worker messages.")
+	if hasGroundedHistory {
+		b.WriteString("\nThis document already has grounded workflow history on the shared channel.")
+		b.WriteString("\nReuse the informed context already present in the current document and prior worker messages.")
+		b.WriteString("\nOpen new researcher or super work when this follow-up needs facts, evidence, or validation beyond what the workflow has already grounded.")
+	} else {
+		b.WriteString("\nThis document does not yet have grounded workflow history.")
+		b.WriteString("\nIf you can already produce a useful next version from the current material and your priors, do it promptly.")
+		b.WriteString("\nStart researcher or super work early when the request needs outside facts, validation, or deeper investigation so later versions can integrate grounded findings.")
+	}
+	b.WriteString("\nTreat this run as one step in an ongoing document loop.")
+	b.WriteString("\nWorker messages can wake later vtext runs and trigger the next revision.")
+	b.WriteString("\nBuild from the current canonical document, recent worker messages, recent change context, and user-authored diffs.")
+	b.WriteString("\nIntermediate appagent revisions are compactable context, not the source of truth.")
+	b.WriteString("\nDo not claim to be researching unless you actually open worker runs and incorporate their messages.")
 	b.WriteString("\nProduce the next canonical document version.")
 	return b.String()
+}
+
+func (rt *Runtime) recentWorkerMessages(ctx context.Context, ownerID, channelID string, limit int) ([]ChannelMessage, error) {
+	if limit <= 0 {
+		limit = 12
+	}
+	messages, err := rt.Store().ListChannelMessages(ctx, ownerID, channelID, 0, 200)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := rt.Store().ListRunsByChannel(ctx, ownerID, channelID, 200)
+	if err != nil {
+		return nil, err
+	}
+	runProfiles := make(map[string]string, len(runs))
+	for _, run := range runs {
+		runProfiles[run.RunID] = agentProfileForRun(&run)
+	}
+	filtered := make([]ChannelMessage, 0, len(messages))
+	for _, message := range messages {
+		switch runProfiles[strings.TrimSpace(message.FromRunID)] {
+		case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
+			filtered = append(filtered, message)
+		}
+	}
+	if len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+	return filtered, nil
+}
+
+func (rt *Runtime) userRevisionDiffSummaries(ctx context.Context, ownerID, docID string, limit int) ([]string, error) {
+	revs, err := rt.Store().ListRevisionsByDoc(ctx, docID, ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]string, 0, len(revs))
+	for i := len(revs) - 1; i >= 0; i-- {
+		rev := revs[i]
+		if rev.AuthorKind != types.AuthorUser {
+			continue
+		}
+		label := rev.CreatedAt.UTC().Format(time.RFC3339)
+		if rev.ParentRevisionID == "" {
+			summaries = append(summaries, fmt.Sprintf("%s %s: initial user-authored draft", rev.RevisionID, label))
+			continue
+		}
+		diff, err := rt.Store().GetDiff(ctx, rev.ParentRevisionID, rev.RevisionID, ownerID)
+		if err != nil {
+			continue
+		}
+		summaries = append(summaries, fmt.Sprintf("%s %s: %s", rev.RevisionID, label, summarizeDiffResult(diff)))
+	}
+	return summaries, nil
+}
+
+func truncatePromptSnippet(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
 
 func decodeRevisionMetadata(raw json.RawMessage) map[string]any {

@@ -247,6 +247,72 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 	}
 }
 
+func TestHandleChannelMessageListOwnerScoped(t *testing.T) {
+	rt, handler := testAPISetup(t)
+
+	rec, err := rt.StartRunWithMetadata(context.Background(), "trace shared workflow", "user-alice", map[string]any{
+		"agent_profile": "researcher",
+		"agent_role":    "researcher",
+		"channel_id":    "doc-123",
+	})
+	if err != nil {
+		t.Fatalf("submit run: %v", err)
+	}
+	if _, err := rt.ChannelPost(WithToolExecutionContext(context.Background(), rec), "doc-123", "researcher-1", "researcher", "grounded finding"); err != nil {
+		t.Fatalf("channel post: %v", err)
+	}
+	if _, err := rt.ChannelPost(WithToolExecutionContext(context.Background(), rec), "doc-123", "researcher-1", "researcher", "second grounded finding"); err != nil {
+		t.Fatalf("channel post: %v", err)
+	}
+
+	req := authenticatedRequest(http.MethodGet, "/api/agent/channel-messages?channel_id=doc-123&limit=20", "", "user-alice")
+	w := httptest.NewRecorder()
+	handler.HandleChannelMessageList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp channelMessageListResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Messages) != 2 {
+		t.Fatalf("messages: got %d, want 2", len(resp.Messages))
+	}
+	if resp.Messages[0].Content != "grounded finding" {
+		t.Fatalf("first message content: got %q", resp.Messages[0].Content)
+	}
+
+	afterReq := authenticatedRequest(http.MethodGet, "/api/agent/channel-messages?channel_id=doc-123&after_seq=1&limit=20", "", "user-alice")
+	afterW := httptest.NewRecorder()
+	handler.HandleChannelMessageList(afterW, afterReq)
+	if afterW.Code != http.StatusOK {
+		t.Fatalf("after status: got %d, want %d", afterW.Code, http.StatusOK)
+	}
+	var afterResp channelMessageListResponse
+	if err := json.NewDecoder(afterW.Body).Decode(&afterResp); err != nil {
+		t.Fatalf("decode after response: %v", err)
+	}
+	if len(afterResp.Messages) != 1 || afterResp.Messages[0].Content != "second grounded finding" {
+		t.Fatalf("after_seq messages: %+v", afterResp.Messages)
+	}
+
+	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/channel-messages?channel_id=doc-123&limit=20", "", "user-bob")
+	otherW := httptest.NewRecorder()
+	handler.HandleChannelMessageList(otherW, otherReq)
+	if otherW.Code != http.StatusOK {
+		t.Fatalf("cross-owner status: got %d, want %d", otherW.Code, http.StatusOK)
+	}
+	var otherResp channelMessageListResponse
+	if err := json.NewDecoder(otherW.Body).Decode(&otherResp); err != nil {
+		t.Fatalf("decode cross-owner response: %v", err)
+	}
+	if len(otherResp.Messages) != 0 {
+		t.Fatalf("cross-owner messages: got %d, want 0", len(otherResp.Messages))
+	}
+}
+
 func TestHandleRunSubmissionAuthGated(t *testing.T) {
 	// VAL-RUNTIME-002: task submission is auth-gated.
 	_, handler := testAPISetup(t)

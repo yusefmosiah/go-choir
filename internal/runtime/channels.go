@@ -298,13 +298,13 @@ func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, conte
 		return 0, err
 	}
 	message := ChannelMessage{
-		ChannelID: channelID,
+		ChannelID:   channelID,
 		FromAgentID: stringFromToolContext(ctx, toolCtxAgentID),
-		FromRunID: stringFromToolContext(ctx, toolCtxRunID),
-		From:      from,
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now().UTC(),
+		FromRunID:   stringFromToolContext(ctx, toolCtxRunID),
+		From:        from,
+		Role:        role,
+		Content:     content,
+		Timestamp:   time.Now().UTC(),
 	}
 	ownerID := stringFromToolContext(ctx, toolCtxOwnerID)
 	if ownerID == "" && message.FromRunID != "" {
@@ -319,10 +319,10 @@ func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, conte
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		evRec := &types.EventRecord{
 			EventID:   uuid.New().String(),
-			RunID:    message.FromRunID,
-			AgentID:  message.FromAgentID,
+			RunID:     message.FromRunID,
+			AgentID:   message.FromAgentID,
 			ChannelID: channelID,
-			OwnerID:  ownerID,
+			OwnerID:   ownerID,
 			Timestamp: time.Now().UTC(),
 			Kind:      kind,
 			Payload:   payload,
@@ -347,6 +347,7 @@ func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, conte
 		"content_len": len(message.Content),
 	})
 	emit(types.EventChannelMessage, "channel", payload)
+	rt.maybeWakeVTextOnWorkerMessage(context.Background(), ownerID, message)
 	return uint64(message.Seq), nil
 }
 

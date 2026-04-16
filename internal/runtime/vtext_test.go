@@ -617,9 +617,7 @@ func TestVTextAPICitationsMetadataRoundTrip(t *testing.T) {
 
 // ----- Agent revision tests -----
 
-// vtextAPISetupWithRuntime creates a test setup with a started runtime
-// so that runs actually execute and complete.
-func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime) {
+func vtextAPISetupWithProvider(t *testing.T, provider Provider, installTools bool) (*APIHandler, *store.Store, *Runtime) {
 	t.Helper()
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-vtext-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -648,9 +646,16 @@ func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime
 	}
 
 	bus := events.NewEventBus()
-	// Use a short-delay stub provider so runs complete quickly in tests.
-	provider := NewStubProvider(50 * time.Millisecond)
 	rt := New(cfg, s, bus, provider)
+	if installTools {
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("get working directory: %v", err)
+		}
+		if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+			t.Fatalf("install default agent tools: %v", err)
+		}
+	}
 
 	// Start the runtime so runs execute.
 	ctx := context.Background()
@@ -658,6 +663,13 @@ func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime
 	t.Cleanup(func() { rt.Stop() })
 
 	return NewAPIHandler(rt), s, rt
+}
+
+// vtextAPISetupWithRuntime creates a test setup with a started runtime
+// so that runs actually execute and complete.
+func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime) {
+	t.Helper()
+	return vtextAPISetupWithProvider(t, NewStubProvider(50*time.Millisecond), false)
 }
 
 // createDocWithUserRevision is a test helper that creates a document and
@@ -715,6 +727,21 @@ func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout t
 	}
 	t.Fatalf("task %s did not complete within %v", taskID, timeout)
 	return ""
+}
+
+func waitForRevisionCount(t *testing.T, s *store.Store, docID, ownerID string, want int, timeout time.Duration) []types.Revision {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		revs, err := s.ListRevisionsByDoc(context.Background(), docID, ownerID, 20)
+		if err == nil && len(revs) >= want {
+			return revs
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	revs, _ := s.ListRevisionsByDoc(context.Background(), docID, ownerID, 20)
+	t.Fatalf("document %s did not reach %d revisions within %v; got %d", docID, want, timeout, len(revs))
+	return nil
 }
 
 // TestVTextAgentRevisionCreatesCanonicalRevision verifies that submitting
@@ -788,6 +815,151 @@ func TestVTextAgentRevisionCreatesCanonicalRevision(t *testing.T) {
 	}
 	if doc.CurrentRevisionID != agentRev.RevisionID {
 		t.Errorf("document head = %q, want appagent revision %q", doc.CurrentRevisionID, agentRev.RevisionID)
+	}
+}
+
+func TestVTextSystemPromptSharesChoirCoreContext(t *testing.T) {
+	rt, _ := testRuntime(t)
+
+	rec := &types.RunRecord{
+		RunID:        "run-vtext-shared-prompt",
+		AgentID:      "vtext:doc-1",
+		ChannelID:    "doc-1",
+		OwnerID:      "user-alice",
+		AgentProfile: AgentProfileVText,
+		AgentRole:    AgentProfileVText,
+		Prompt:       "What's the latest with AI?",
+	}
+
+	prompt, err := rt.systemPromptForRun(rec)
+	if err != nil {
+		t.Fatalf("systemPromptForRun: %v", err)
+	}
+	if !strings.Contains(prompt, "You are one agent inside Choir, a multiagent writing, research, and execution system.") {
+		t.Fatalf("system prompt missing shared Choir context: %q", prompt)
+	}
+	if !strings.Contains(prompt, "VText is a durable document owner, not a one-shot answerer.") {
+		t.Fatalf("system prompt missing vtext wake semantics: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Current shared channel: doc-1.") {
+		t.Fatalf("system prompt missing shared channel: %q", prompt)
+	}
+}
+
+func TestVTextAgentRevisionAllowsPriorsFirstDraft(t *testing.T) {
+	provider := newMockToolLoopProvider(&ToolLoopResponse{
+		StopReason: "end_turn",
+		Text:       "Here is a polished answer from priors alone.",
+		Model:      "test-model",
+	})
+	provider.Provider = NewStubProvider(1 * time.Millisecond)
+
+	h, s, _ := vtextAPISetupWithProvider(t, provider, true)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
+		map[string]string{"prompt": "What's the latest with AI?"})
+	w := httptest.NewRecorder()
+	h.HandleVTextAgentRevision(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("agent revision: status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var resp vtextAgentRevisionResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("run state = %q, want %q", state, types.RunCompleted)
+	}
+
+	revs, err := s.ListRevisionsByDoc(context.Background(), docID, "user-1", 10)
+	if err != nil {
+		t.Fatalf("list revisions: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("revision count = %d, want 2", len(revs))
+	}
+	foundAppAgent := false
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "priors alone") {
+			foundAppAgent = true
+			break
+		}
+	}
+	if !foundAppAgent {
+		t.Fatalf("expected priors draft appagent revision, got %+v", revs)
+	}
+}
+
+func TestVTextWorkerMessageAutoWakeCreatesFollowUpRevision(t *testing.T) {
+	provider := NewStubProvider(1 * time.Millisecond)
+	provider.Result = "Integrated grounded findings into the next revision."
+
+	h, s, rt := vtextAPISetupWithProvider(t, provider, false)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	userRevReq := vtextCreateRevisionRequest{
+		Content:     "Original draft.\n\nAdd a short section about recent model releases.",
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "user",
+	}
+	userRevReqBody := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", userRevReq)
+	userRevW := httptest.NewRecorder()
+	h.HandleVTextRevisions(userRevW, userRevReqBody)
+	if userRevW.Code != http.StatusCreated {
+		t.Fatalf("second user revision: status = %d, want %d; body: %s", userRevW.Code, http.StatusCreated, userRevW.Body.String())
+	}
+
+	researchRun, err := rt.StartRunWithMetadata(context.Background(), "Ground the recent release claims", "user-1", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    docID,
+	})
+	if err != nil {
+		t.Fatalf("start research run: %v", err)
+	}
+	if _, err := rt.ChannelPost(WithToolExecutionContext(context.Background(), researchRun), docID, "researcher-1", "researcher", "Evidence: the latest public model releases shipped this week with stronger reasoning and tool use."); err != nil {
+		t.Fatalf("post worker message: %v", err)
+	}
+
+	revs := waitForRevisionCount(t, s, docID, "user-1", 3, 5*time.Second)
+	foundAppAgent := false
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "Integrated grounded findings") {
+			foundAppAgent = true
+			break
+		}
+	}
+	if !foundAppAgent {
+		t.Fatalf("expected wake-driven appagent revision, got %+v", revs)
+	}
+
+	runs, err := rt.Store().ListRunsByChannel(context.Background(), "user-1", docID, 20)
+	if err != nil {
+		t.Fatalf("list channel runs: %v", err)
+	}
+	var wakeRun *types.RunRecord
+	for i := range runs {
+		if agentProfileForRun(&runs[i]) == AgentProfileVText && runs[i].ParentRunID == researchRun.RunID {
+			wakeRun = &runs[i]
+			break
+		}
+	}
+	if wakeRun == nil {
+		t.Fatalf("expected wake-driven vtext run on channel %s, got %+v", docID, runs)
+	}
+	if !strings.Contains(wakeRun.Prompt, "Recent worker messages on the shared channel") {
+		t.Fatalf("wake run prompt missing worker message context: %q", wakeRun.Prompt)
+	}
+	if !strings.Contains(wakeRun.Prompt, "Evidence: the latest public model releases") {
+		t.Fatalf("wake run prompt missing worker message content: %q", wakeRun.Prompt)
+	}
+	if !strings.Contains(wakeRun.Prompt, "User-authored revision diffs (oldest to newest)") {
+		t.Fatalf("wake run prompt missing user diff compaction context: %q", wakeRun.Prompt)
 	}
 }
 
@@ -1001,7 +1173,7 @@ func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 	// Create an agent mutation record.
 	mutation := store.AgentMutation{
 		DocID:     "doc-mutation-test",
-		RunID:    "task-mutation-test",
+		RunID:     "task-mutation-test",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1012,7 +1184,7 @@ func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 
 	// Create a completed task record with vtext agent revision metadata.
 	taskRec := &types.RunRecord{
-		RunID:    "task-mutation-test",
+		RunID:     "task-mutation-test",
 		OwnerID:   "user-1",
 		SandboxID: "sandbox-vtext-test",
 		State:     types.RunCompleted,

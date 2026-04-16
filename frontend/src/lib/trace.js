@@ -41,6 +41,26 @@ export async function listAgentEvents({ runId = '', channelId = '', limit = 200 
   return res.json();
 }
 
+export async function listChannelMessages({ channelId = '', afterSeq = 0, limit = 200 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (channelId) {
+    params.set('channel_id', channelId);
+  }
+  if (afterSeq > 0) {
+    params.set('after_seq', String(afterSeq));
+  }
+
+  const res = await fetchWithRenewal(`/api/agent/channel-messages?${params.toString()}`, {
+    method: 'GET',
+  });
+
+  if (!res.ok) {
+    await decodeError(res, `Channel message fetch failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function getAgentTopology() {
   const res = await fetchWithRenewal('/api/agent/topology', {
     method: 'GET',

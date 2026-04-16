@@ -36,13 +36,13 @@ type spawnRequest struct {
 // spawnResponse is the JSON response for POST /api/agent/spawn.
 // It returns the child run handle with the parent linkage.
 type spawnResponse struct {
-	AgentID   string          `json:"agent_id"`
-	RunID     string          `json:"run_id"`
-	ChannelID string          `json:"channel_id,omitempty"`
-	ParentID  string          `json:"parent_id"`
+	AgentID   string         `json:"agent_id"`
+	RunID     string         `json:"run_id"`
+	ChannelID string         `json:"channel_id,omitempty"`
+	ParentID  string         `json:"parent_id"`
 	State     types.RunState `json:"state"`
-	OwnerID   string          `json:"owner_id"`
-	CreatedAt string          `json:"created_at"`
+	OwnerID   string         `json:"owner_id"`
+	CreatedAt string         `json:"created_at"`
 }
 
 // cancelRequest is the JSON payload for POST /api/agent/cancel.
@@ -53,42 +53,42 @@ type cancelRequest struct {
 
 // cancelResponse is the JSON response for POST /api/agent/cancel.
 type cancelResponse struct {
-	RunID string          `json:"run_id"`
-	State  types.RunState `json:"state"`
+	RunID string         `json:"run_id"`
+	State types.RunState `json:"state"`
 }
 
 // runSubmitResponse is the JSON response for POST /api/agent/run.
 // It returns the stable run handle and initial lifecycle state
 // (VAL-RUNTIME-003).
 type runSubmitResponse struct {
-	AgentID     string          `json:"agent_id"`
-	RunID       string          `json:"run_id"`
-	ChannelID   string          `json:"channel_id,omitempty"`
-	State       types.RunState `json:"state"`
-	OwnerID     string          `json:"owner_id"`
-	CreatedAt   string          `json:"created_at"`
+	AgentID   string         `json:"agent_id"`
+	RunID     string         `json:"run_id"`
+	ChannelID string         `json:"channel_id,omitempty"`
+	State     types.RunState `json:"state"`
+	OwnerID   string         `json:"owner_id"`
+	CreatedAt string         `json:"created_at"`
 }
 
 // runStatusResponse is the JSON response for GET /api/agent/status.
 // It returns the full run record correlated to the submitted handle
 // (VAL-RUNTIME-004).
 type runStatusResponse struct {
-	AgentID      string          `json:"agent_id"`
-	RunID        string          `json:"run_id"`
-	ChannelID    string          `json:"channel_id,omitempty"`
-	ParentRunID  string          `json:"parent_run_id,omitempty"`
-	AgentProfile string          `json:"agent_profile,omitempty"`
-	AgentRole    string          `json:"agent_role,omitempty"`
-	OwnerID      string          `json:"owner_id"`
-	SandboxID    string          `json:"sandbox_id"`
+	AgentID      string         `json:"agent_id"`
+	RunID        string         `json:"run_id"`
+	ChannelID    string         `json:"channel_id,omitempty"`
+	ParentRunID  string         `json:"parent_run_id,omitempty"`
+	AgentProfile string         `json:"agent_profile,omitempty"`
+	AgentRole    string         `json:"agent_role,omitempty"`
+	OwnerID      string         `json:"owner_id"`
+	SandboxID    string         `json:"sandbox_id"`
 	State        types.RunState `json:"state"`
-	Prompt       string          `json:"prompt"`
-	Result       string          `json:"result,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
-	FinishedAt   *string         `json:"finished_at,omitempty"`
-	Metadata     map[string]any  `json:"metadata,omitempty"`
+	Prompt       string         `json:"prompt"`
+	Result       string         `json:"result,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+	FinishedAt   *string        `json:"finished_at,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // runListResponse is the JSON response for GET /api/agent/runs.
@@ -103,6 +103,12 @@ type runListResponse struct {
 // the authenticated owner across recent runs.
 type eventListResponse struct {
 	Events []types.EventRecord `json:"events"`
+}
+
+// channelMessageListResponse is the JSON response for GET /api/agent/channel-messages.
+// It returns durable channel message bodies for a specific shared channel.
+type channelMessageListResponse struct {
+	Messages []types.ChannelMessage `json:"messages"`
 }
 
 // runtimeHealthResponse is the JSON structure returned by GET /health.
@@ -306,7 +312,7 @@ func (h *APIHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 
 	writeAPIJSON(w, http.StatusOK, cancelResponse{
 		RunID: req.RunID,
-		State:  types.RunCancelled,
+		State: types.RunCancelled,
 	})
 }
 
@@ -490,6 +496,50 @@ func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
+}
+
+// HandleChannelMessageList handles GET /api/agent/channel-messages.
+// It returns persisted message bodies for a specific owner-scoped shared channel.
+func (h *APIHandler) HandleChannelMessageList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	if channelID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "channel_id is required"})
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	afterSeq := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 0 {
+			afterSeq = n
+		}
+	}
+
+	messages, err := h.rt.Store().ListChannelMessages(r.Context(), ownerID, channelID, afterSeq, limit)
+	if err != nil {
+		log.Printf("runtime api: list channel messages: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list channel messages"})
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, channelMessageListResponse{Messages: messages})
 }
 
 // HandleRunStatusByID handles GET /api/agent/{id}/status.
@@ -720,6 +770,7 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/agent/run", h.HandleRunSubmission)
 	s.HandleFunc("/api/agent/runs", h.HandleRunList)
 	s.HandleFunc("/api/agent/events", h.HandleEventList)
+	s.HandleFunc("/api/agent/channel-messages", h.HandleChannelMessageList)
 	s.HandleFunc("/api/agent/topology", h.HandleTopology)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/cancel", h.HandleCancel)

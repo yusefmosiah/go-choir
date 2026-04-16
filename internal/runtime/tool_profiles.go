@@ -29,14 +29,26 @@ const (
 	runMetadataModel        = "model"
 )
 
+const choirCoreSystemPrompt = `You are one agent inside Choir, a multiagent writing, research, and execution system.
+
+All Choir agents share one user-facing product, one runtime, and one standard of truth. You are not an isolated chatbot. You are one participant in an ongoing workflow with durable documents, durable agents, shared channels, event history, and revision history.
+
+The user cares about getting informed work, not performative agent chatter. Prefer useful progress over narration. Do not bluff about research, evidence, or execution. If outside facts, validation, or real system work are needed, use the right tools or delegate to the right agent role.
+
+Shared channels are the coordination fabric. Read them for context, post concise updates when they unblock another agent, and treat worker messages as causal inputs to the workflow.
+
+Conductor routes top-level intent. VText owns canonical document versions. Researcher gathers evidence and grounded findings. Super handles execution-heavy work. Co-super is Super's supervised helper.
+
+Protect the user's trust. Keep claims calibrated, preserve provenance, and optimize for the next useful step in the shared workflow.`
+
 type toolContextKey string
 
 const (
-	toolCtxRunID    toolContextKey = "run_id"
-	toolCtxAgentID  toolContextKey = "agent_id"
-	toolCtxOwnerID  toolContextKey = "owner_id"
-	toolCtxProfile  toolContextKey = "agent_profile"
-	toolCtxRole     toolContextKey = "agent_role"
+	toolCtxRunID     toolContextKey = "run_id"
+	toolCtxAgentID   toolContextKey = "agent_id"
+	toolCtxOwnerID   toolContextKey = "owner_id"
+	toolCtxProfile   toolContextKey = "agent_profile"
+	toolCtxRole      toolContextKey = "agent_role"
 	toolCtxChannelID toolContextKey = "channel_id"
 	toolCtxSandboxID toolContextKey = "sandbox_id"
 )
@@ -204,19 +216,23 @@ func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
 	if rec != nil {
 		ownerID = rec.OwnerID
 	}
-	base := "You are a helpful assistant running inside the Choir sandbox runtime."
+	rolePrompt := fmt.Sprintf("You are Choir %s.", profile)
 	if rt != nil && rt.promptStore != nil {
 		prompt, err := rt.promptStore.Load(ownerID, profile)
 		if err != nil {
 			return "", err
 		}
 		if strings.TrimSpace(prompt.Content) != "" {
-			base = prompt.Content
+			rolePrompt = prompt.Content
 		}
 	}
 
 	var b strings.Builder
-	b.WriteString(base)
+	b.WriteString(choirCoreSystemPrompt)
+	if strings.TrimSpace(rolePrompt) != "" {
+		b.WriteString("\n\nRole-specific instructions:\n")
+		b.WriteString(rolePrompt)
+	}
 	if profile == AgentProfileConductor {
 		requestedApp, _ := rec.Metadata["requested_app"].(string)
 		seedPrompt, _ := rec.Metadata["seed_prompt"].(string)
@@ -237,6 +253,13 @@ func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
 			b.WriteString(strings.TrimSpace(seedPrompt))
 			b.WriteString(".")
 		}
+	}
+	if profile == AgentProfileVText {
+		b.WriteString("\n\nVText is a durable document owner, not a one-shot answerer.")
+		b.WriteString("\nWrite the best current version promptly from the canonical document, current context, and your priors.")
+		b.WriteString("\nLater worker messages on the shared channel can wake the next VText run and trigger another revision.")
+		b.WriteString("\nBuild each revision from the current canonical version, recent worker messages, recent change context, and user-authored diffs.")
+		b.WriteString("\nIntermediate appagent revisions are compactable working memory. Keep the current canonical document and user-authored changes authoritative.")
 	}
 	if channelID != "" {
 		b.WriteString("\n\nCurrent shared channel: ")

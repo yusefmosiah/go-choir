@@ -214,13 +214,13 @@ func (rt *Runtime) StartRunWithMetadata(ctx context.Context, prompt, ownerID str
 		ChannelID:    agentRec.ChannelID,
 		AgentProfile: agentRec.Profile,
 		AgentRole:    agentRec.Role,
-		OwnerID:   ownerID,
-		SandboxID: rt.cfg.SandboxID,
-		State:     types.RunPending,
-		Prompt:    prompt,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Metadata:  metadata,
+		OwnerID:      ownerID,
+		SandboxID:    rt.cfg.SandboxID,
+		State:        types.RunPending,
+		Prompt:       prompt,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Metadata:     metadata,
 	}
 
 	if err := rt.store.CreateRun(ctx, *rec); err != nil {
@@ -305,13 +305,13 @@ func (rt *Runtime) StartChildRun(ctx context.Context, parentID, objective, owner
 		ParentRunID:  parentID,
 		AgentProfile: agentRec.Profile,
 		AgentRole:    agentRec.Role,
-		OwnerID:   ownerID,
-		SandboxID: rt.cfg.SandboxID,
-		State:     types.RunPending,
-		Prompt:    objective,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Metadata:  metadata,
+		OwnerID:      ownerID,
+		SandboxID:    rt.cfg.SandboxID,
+		State:        types.RunPending,
+		Prompt:       objective,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Metadata:     metadata,
 	}
 
 	if err := rt.store.CreateRun(ctx, *rec); err != nil {
@@ -569,9 +569,9 @@ func (rt *Runtime) executeRun(ctx context.Context, rec *types.RunRecord) {
 			if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 				if kind == types.EventRunProgress {
 					progressPayload, _ := json.Marshal(map[string]string{
-						"doc_id":  docID,
+						"doc_id": docID,
 						"run_id": rec.RunID,
-						"phase":   phase,
+						"phase":  phase,
 					})
 					rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionProgress,
 						events.CauseProviderProgress, progressPayload)
@@ -645,7 +645,10 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.RunRecord
 	// For vtext agent revision runs, create the canonical revision and emit the
 	// vtext completion event before the run is surfaced as completed. This keeps
 	// run completion aligned with document-version availability.
-	rt.handleRunCompletion(ctx, rec)
+	if err := rt.handleRunCompletion(ctx, rec); err != nil {
+		rt.handleExecutionError(ctx, rec, err)
+		return
+	}
 
 	// Use a background context for post-provider persistence so that a fast
 	// shutdown or cancellation after the provider returns cannot drop the
@@ -704,7 +707,10 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.RunRecord
 	// For vtext agent revision runs, create the canonical revision and emit the
 	// vtext completion event before the run is surfaced as completed. This keeps
 	// run completion aligned with document-version availability.
-	rt.handleRunCompletion(ctx, rec)
+	if err := rt.handleRunCompletion(ctx, rec); err != nil {
+		rt.handleExecutionError(ctx, rec, err)
+		return
+	}
 
 	// Use a background context for post-provider persistence so that a fast
 	// shutdown or cancellation after the provider returns cannot drop the
@@ -743,7 +749,7 @@ type conductorDecision struct {
 	Message              string `json:"message,omitempty"`
 	DocID                string `json:"doc_id,omitempty"`
 	InitialRevisionID    string `json:"initial_revision_id,omitempty"`
-	InitialRunID        string `json:"initial_run_id,omitempty"`
+	InitialRunID         string `json:"initial_run_id,omitempty"`
 }
 
 func normalizeConductorDecision(rec *types.RunRecord) string {
@@ -858,9 +864,9 @@ func (rt *Runtime) materializeConductorDecision(rec *types.RunRecord) {
 	}
 
 	revMeta, _ := json.Marshal(map[string]any{
-		"seed_prompt":       decision.SeedPrompt,
+		"seed_prompt":      decision.SeedPrompt,
 		"conductor_run_id": rec.RunID,
-		"created_from":      "conductor",
+		"created_from":     "conductor",
 	})
 	rev := types.Revision{
 		RevisionID:  uuid.New().String(),
@@ -911,15 +917,15 @@ func (rt *Runtime) materializeConductorDecision(rec *types.RunRecord) {
 // is created per mutation, even if the completion is processed multiple times
 // (e.g., after crash recovery). This prevents duplicate canonical revisions
 // (VAL-CROSS-122).
-func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord) {
+func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord) error {
 	if agentProfileForRun(rec) == AgentProfileConductor {
 		rt.materializeConductorDecision(rec)
-		return
+		return nil
 	}
 
 	taskType, _ := rec.Metadata["type"].(string)
 	if taskType != "vtext_agent_revision" {
-		return
+		return nil
 	}
 
 	// Use a background context for post-completion persistence so the canonical
@@ -930,7 +936,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	docID, _ := rec.Metadata["doc_id"].(string)
 	if docID == "" {
 		log.Printf("runtime: vtext agent revision run %s: missing doc_id in metadata", rec.RunID)
-		return
+		return nil
 	}
 
 	// Check the agent mutation record to ensure we don't create a duplicate
@@ -938,16 +944,16 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	mutation, err := rt.store.GetAgentMutationByRun(persistCtx, rec.RunID)
 	if err != nil {
 		log.Printf("runtime: vtext agent revision run %s: get mutation: %v", rec.RunID, err)
-		return
+		return nil
 	}
 	if mutation == nil {
 		log.Printf("runtime: vtext agent revision run %s: no mutation record found", rec.RunID)
-		return
+		return nil
 	}
 	if mutation.State == "completed" {
 		// Already created the revision — idempotent skip.
 		log.Printf("runtime: vtext agent revision run %s: mutation already completed, skipping", rec.RunID)
-		return
+		return nil
 	}
 
 	ownerID := rec.OwnerID
@@ -961,7 +967,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	if err != nil {
 		log.Printf("runtime: vtext agent revision run %s: get document: %v", rec.RunID, err)
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
-		return
+		return nil
 	}
 
 	parentID := doc.CurrentRevisionID
@@ -997,7 +1003,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	if err := rt.store.CreateRevision(persistCtx, rev); err != nil {
 		log.Printf("runtime: vtext agent revision run %s: create revision: %v", rec.RunID, err)
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
-		return
+		return nil
 	}
 
 	// Mark the mutation as completed. If this fails because it's already
@@ -1017,12 +1023,98 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	completedPayload, _ := json.Marshal(map[string]string{
 		"doc_id":      docID,
 		"revision_id": rev.RevisionID,
-		"run_id":     rec.RunID,
+		"run_id":      rec.RunID,
 	})
 	rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionCompleted,
 		events.CauseTaskLifecycle, completedPayload)
 
 	log.Printf("runtime: vtext agent revision run %s: created canonical revision %s for doc %s", rec.RunID, rev.RevisionID, docID)
+	return nil
+}
+
+func (rt *Runtime) channelHasGroundedHistory(ctx context.Context, ownerID, channelID string, before time.Time) (bool, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return false, nil
+	}
+	runs, err := rt.store.ListRunsByChannel(ctx, ownerID, channelID, 500)
+	if err != nil {
+		return false, err
+	}
+	groundedRunIDs := make(map[string]struct{})
+	for _, run := range runs {
+		if !before.IsZero() && !run.CreatedAt.Before(before) {
+			continue
+		}
+		switch agentProfileForRun(&run) {
+		case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
+			groundedRunIDs[run.RunID] = struct{}{}
+		}
+	}
+	if len(groundedRunIDs) == 0 {
+		return false, nil
+	}
+	messages, err := rt.store.ListChannelMessages(ctx, ownerID, channelID, 0, 500)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if !before.IsZero() && !message.Timestamp.Before(before) {
+			continue
+		}
+		if _, ok := groundedRunIDs[strings.TrimSpace(message.FromRunID)]; ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID string, message ChannelMessage) {
+	channelID := strings.TrimSpace(message.ChannelID)
+	fromRunID := strings.TrimSpace(message.FromRunID)
+	if strings.TrimSpace(ownerID) == "" || channelID == "" || fromRunID == "" {
+		return
+	}
+
+	doc, err := rt.store.GetDocument(ctx, channelID, ownerID)
+	if err != nil {
+		if err != store.ErrNotFound {
+			log.Printf("runtime: wake vtext for channel %s: get document: %v", channelID, err)
+		}
+		return
+	}
+
+	sourceRun, err := rt.store.GetRun(ctx, fromRunID)
+	if err != nil {
+		log.Printf("runtime: wake vtext for doc %s: get source run %s: %v", doc.DocID, fromRunID, err)
+		return
+	}
+	switch agentProfileForRun(&sourceRun) {
+	case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
+	default:
+		return
+	}
+
+	agentID := "vtext:" + doc.DocID
+	if _, err := rt.store.GetLatestActiveRunByAgent(ctx, ownerID, agentID); err == nil {
+		return
+	} else if err != store.ErrNotFound {
+		log.Printf("runtime: wake vtext for doc %s: check active run: %v", doc.DocID, err)
+		return
+	}
+
+	req := vtextAgentRevisionRequest{
+		Intent: "integrate_worker_message",
+		Prompt: strings.TrimSpace(fmt.Sprintf(
+			"A worker sent a new message on the shared document channel. Wake now, integrate any new evidence, findings, notes, or questions into the next version, and write the next canonical revision if the message materially changes the document.\n\nLatest worker message from %s (%s):\n%s",
+			strings.TrimSpace(message.From),
+			agentProfileForRun(&sourceRun),
+			strings.TrimSpace(message.Content),
+		)),
+	}
+	if _, err := rt.submitVTextAgentRevisionRun(ctx, doc, ownerID, req, sourceRun.RunID); err != nil {
+		log.Printf("runtime: wake vtext for doc %s from worker message %s: %v", doc.DocID, fromRunID, err)
+	}
 }
 
 // durableMetadataKeys lists the revision metadata keys that must survive
@@ -1039,7 +1131,7 @@ var durableMetadataKeys = []string{
 // from the parent revision so they remain available on the next revise.
 func buildAppagentRevisionMetadata(rec *types.RunRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
 	meta := map[string]any{
-		"source":  "agent_revision",
+		"source": "agent_revision",
 		"run_id": rec.RunID,
 	}
 
@@ -1118,9 +1210,9 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.RunRecor
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
-				"doc_id":  docID,
+				"doc_id": docID,
 				"run_id": rec.RunID,
-				"error":   err.Error(),
+				"error":  err.Error(),
 			})
 			rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
 				events.CauseProviderFailure, failPayload)
@@ -1148,8 +1240,8 @@ func (rt *Runtime) providerResult() string {
 func (rt *Runtime) emitEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
 	evRec := &types.EventRecord{
 		EventID:   uuid.New().String(),
-		RunID:    rec.RunID,
-		AgentID:  rec.AgentID,
+		RunID:     rec.RunID,
+		AgentID:   rec.AgentID,
 		ChannelID: rec.ChannelID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),
@@ -1173,8 +1265,8 @@ func (rt *Runtime) emitEvent(ctx context.Context, rec *types.RunRecord, kind typ
 func (rt *Runtime) persistEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, payload json.RawMessage) error {
 	evRec := &types.EventRecord{
 		EventID:   uuid.New().String(),
-		RunID:    rec.RunID,
-		AgentID:  rec.AgentID,
+		RunID:     rec.RunID,
+		AgentID:   rec.AgentID,
 		ChannelID: rec.ChannelID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),

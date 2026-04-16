@@ -201,6 +201,7 @@ System prompt = vtext.md (user override or embedded default)
               + "\nCurrent shared channel: <doc_id>"
 User prompt   = buildAgentRevisionRequest():
   seed_prompt + current_doc_content + diff_summary + revision metadata
+  + awareness of whether this document/channel already has grounded worker history
 
 Agent tool loop (up to N turns):
   spawn_agent({ role: "researcher", channel_id: doc_id, ... })
@@ -211,8 +212,11 @@ Agent tool loop (up to N turns):
 Agent final answer = complete next document version (plain text)
 
 -> handleRunCompletion() vtext side effect:
+     If the document has no prior grounded worker history, require actual
+     child-worker activity on the shared channel before accepting the answer
+     as canonical. Follow-up transforms may reuse prior grounded history.
      CreateRevision(content, author_type="agent",
-       metadata={ source:"agent_revision", run_id, seed_prompt, ... })
+        metadata={ source:"agent_revision", run_id, seed_prompt, ... })
      UpdateDocument(head_revision_id = new_revision_id)
      CompleteVTextAgentMutation(run_id)
 -> Emits vtext.agent_revision.completed
