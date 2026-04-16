@@ -610,10 +610,10 @@ type vtextAgentRevisionRequest struct {
 // submission. It returns the stable task handle so the client can track
 // progress through the event stream (VAL-ETEXT-004).
 type vtextAgentRevisionResponse struct {
-	RunID    string          `json:"run_id"`
-	DocID     string          `json:"doc_id"`
+	RunID     string         `json:"run_id"`
+	DocID     string         `json:"doc_id"`
 	State     types.RunState `json:"state"`
-	CreatedAt string          `json:"created_at"`
+	CreatedAt string         `json:"created_at"`
 }
 
 // HandleVTextAgentRevision handles POST
@@ -670,7 +670,7 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 	} else if existing != nil {
 		// Return the existing run — idempotent response.
 		writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
-			RunID:    existing.RunID,
+			RunID:     existing.RunID,
 			DocID:     docID,
 			State:     types.RunPending,
 			CreatedAt: existing.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -686,7 +686,7 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 	}
 
 	writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
-		RunID:    rec.RunID,
+		RunID:     rec.RunID,
 		DocID:     docID,
 		State:     rec.State,
 		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -758,7 +758,7 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 	// Record the agent mutation for idempotency tracking (VAL-CROSS-122).
 	if err := rt.Store().CreateAgentMutation(ctx, store.AgentMutation{
 		DocID:     doc.DocID,
-		RunID:    rec.RunID,
+		RunID:     rec.RunID,
 		OwnerID:   ownerID,
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -768,7 +768,7 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 
 	// Emit the vtext-specific agent revision started event.
 	startedPayload, _ := json.Marshal(map[string]string{
-		"doc_id":  doc.DocID,
+		"doc_id": doc.DocID,
 		"run_id": rec.RunID,
 	})
 	rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionStarted,
@@ -838,6 +838,8 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 	if current.AuthorKind == types.AuthorUser {
 		b.WriteString("\nTreat this latest user-authored revision as the canonical input for the next version.")
 	}
+	b.WriteString("\nDefault to opening researcher work for substantive requests, even when you can already produce a useful first version from the current document and your own priors.")
+	b.WriteString("\nTreat that first version as provisional and keep grounding later versions with outside evidence and worker messages.")
 	b.WriteString("\nProduce the next canonical document version.")
 	return b.String()
 }
@@ -910,7 +912,7 @@ func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.RunRecord
 	rt.bus.Publish(events.RuntimeEvent{
 		Record: types.EventRecord{
 			EventID:   uuid.New().String(),
-			RunID:    rec.RunID,
+			RunID:     rec.RunID,
 			OwnerID:   rec.OwnerID,
 			Timestamp: time.Now().UTC(),
 			Kind:      kind,
@@ -923,7 +925,7 @@ func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.RunRecord
 	// Also persist for catch-up.
 	if err := rt.store.AppendEvent(ctx, &types.EventRecord{
 		EventID:   uuid.New().String(),
-		RunID:    rec.RunID,
+		RunID:     rec.RunID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),
 		Kind:      kind,

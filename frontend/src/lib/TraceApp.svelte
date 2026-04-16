@@ -141,15 +141,15 @@
   }
 
   function runProfile(run) {
-    return run?.metadata?.agent_profile || run?.metadata?.type || 'run';
+    return run?.agent_profile || run?.metadata?.agent_profile || run?.metadata?.type || 'run';
   }
 
   function runRole(run) {
-    return run?.metadata?.agent_role || runProfile(run);
+    return run?.agent_role || run?.metadata?.agent_role || runProfile(run);
   }
 
   function runParentId(run) {
-    return run?.metadata?.parent_id || '';
+    return run?.parent_run_id || run?.metadata?.parent_id || '';
   }
 
   function taskStateTone(state) {
@@ -218,6 +218,10 @@
     }
   }
 
+  function eventIsVisible(eventRecord) {
+    return eventRecord?.kind !== 'run.delta';
+  }
+
   function collectFamilyIds(rootId) {
     const ids = new Set();
     if (!rootId) return ids;
@@ -239,11 +243,13 @@
   $: selectedFamilyIds = collectFamilyIds(selectedRunId);
   $: familyTasks = sortRunsNewestFirst(runs.filter((run) => selectedFamilyIds.has(run.run_id))).reverse();
   $: familyEvents = sortEventsAscending(ownerEvents.filter((eventRecord) => selectedFamilyIds.has(eventRecord.run_id)));
+  $: visibleFamilyEvents = familyEvents.filter(eventIsVisible);
   $: childTasks = familyTasks.filter((task) => task.run_id !== selectedRunId);
   $: familyToolCount = familyEvents.filter((eventRecord) => eventRecord.kind === 'tool.invoked').length;
   $: familyChannelCount = familyEvents.filter((eventRecord) => eventRecord.kind === 'channel.message').length;
   $: familyResearcherCount = childTasks.filter((task) => runProfile(task) === 'researcher').length;
   $: familySuperCount = childTasks.filter((task) => runProfile(task) === 'super').length;
+  $: hiddenDeltaCount = familyEvents.length - visibleFamilyEvents.length;
 
   onMount(() => {
     loadTraceState();
@@ -328,7 +334,7 @@
       </section>
 
       <section class="graph-panel" data-trace-family>
-        <h3>Task Family</h3>
+        <h3>Run Family</h3>
         <div class="family-grid">
           {#each familyTasks as task (task.run_id)}
             <div class={`family-card ${taskStateTone(task.state)}`}>
@@ -337,7 +343,15 @@
                 <span>{task.state}</span>
               </div>
               <div class="family-card-body">{excerpt(task.prompt, 68)}</div>
-              <div class="family-card-meta">{task.run_id}</div>
+              <div class="family-card-meta">
+                <span>{task.run_id}</span>
+                {#if runParentId(task)}
+                  <span>parent {runParentId(task).slice(0, 8)}</span>
+                {/if}
+                {#if task.channel_id}
+                  <span>channel {task.channel_id}</span>
+                {/if}
+              </div>
             </div>
           {/each}
         </div>
@@ -345,11 +359,14 @@
 
       <section class="timeline-panel">
         <h3>Event Timeline</h3>
-        {#if familyEvents.length === 0}
+        {#if hiddenDeltaCount > 0}
+          <div class="timeline-note">Hiding {hiddenDeltaCount} raw `run.delta` events so the causal steps stay readable.</div>
+        {/if}
+        {#if visibleFamilyEvents.length === 0}
           <div class="empty-state">No family events captured yet for this run.</div>
         {:else}
           <div class="event-list" data-trace-event-list>
-            {#each familyEvents as eventRecord (eventRecord.event_id)}
+            {#each visibleFamilyEvents as eventRecord (eventRecord.event_id)}
               <div class="event-row" data-trace-event>
                 <div class="event-time">{new Date(eventRecord.ts).toLocaleTimeString()}</div>
                 <div class="event-kind">{eventRecord.kind}</div>
@@ -588,6 +605,7 @@
   }
 
   .empty-state,
+  .timeline-note,
   .error-banner {
     padding: 0.9rem;
     border-radius: 12px;
@@ -598,6 +616,14 @@
     color: #94a3b8;
     background: rgba(15, 23, 42, 0.34);
     border: 1px dashed rgba(71, 85, 105, 0.28);
+  }
+
+  .timeline-note {
+    margin-top: 0.8rem;
+    color: #bfdbfe;
+    background: rgba(15, 23, 42, 0.42);
+    border: 1px solid rgba(96, 165, 250, 0.18);
+    font-size: 0.8rem;
   }
 
   .error-banner {

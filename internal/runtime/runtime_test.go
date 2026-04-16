@@ -117,8 +117,8 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 	ctx := context.Background()
 
 	rec, err := rt.StartRunWithMetadata(ctx, "hi", "user-alice", map[string]any{
-		runMetadataAgentProfile: "conductor",
-		runMetadataAgentRole:    "conductor",
+		runMetadataAgentProfile:  "conductor",
+		runMetadataAgentRole:     "conductor",
 		"input_source":           "prompt_bar",
 		"requested_app":          "vtext",
 		"seed_prompt":            "hi",
@@ -147,7 +147,7 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		CreateInitialVersion bool   `json:"create_initial_version"`
 		DocID                string `json:"doc_id"`
 		InitialRevisionID    string `json:"initial_revision_id"`
-		InitialRunID        string `json:"initial_run_id"`
+		InitialRunID         string `json:"initial_run_id"`
 	}
 	if err := json.Unmarshal([]byte(stored.Result), &result); err != nil {
 		t.Fatalf("decode result json: %v\nraw=%q", err, stored.Result)
@@ -225,7 +225,7 @@ func TestProviderPromptUsesPromptOverride(t *testing.T) {
 	}
 
 	rec := &types.RunRecord{
-		RunID:   "task-1",
+		RunID:    "task-1",
 		OwnerID:  "user-alice",
 		Prompt:   "route this request",
 		Metadata: map[string]any{runMetadataAgentProfile: AgentProfileConductor},
@@ -239,6 +239,30 @@ func TestProviderPromptUsesPromptOverride(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "route this request") {
 		t.Fatalf("provider prompt should include task prompt, got %q", prompt)
+	}
+}
+
+func TestSystemPromptForVTextDefaultsToResearch(t *testing.T) {
+	rt, _ := testRuntime(t)
+
+	rec := &types.RunRecord{
+		RunID:        "run-vtext-1",
+		AgentID:      "vtext:doc-1",
+		ChannelID:    "doc-1",
+		OwnerID:      "user-alice",
+		AgentProfile: AgentProfileVText,
+		Prompt:       "what's the latest with ai",
+	}
+
+	prompt, err := rt.systemPromptForRun(rec)
+	if err != nil {
+		t.Fatalf("systemPromptForRun: %v", err)
+	}
+	if !strings.Contains(prompt, "Research is the default.") {
+		t.Fatalf("vtext system prompt should default to research, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "Current shared channel: doc-1.") {
+		t.Fatalf("vtext system prompt should include shared channel, got %q", prompt)
 	}
 }
 
@@ -552,7 +576,7 @@ func TestInterruptedRunningTasksRecoveredOnStart(t *testing.T) {
 
 	now := time.Now().UTC()
 	interruptedTask := types.RunRecord{
-		RunID:    "interrupted-task-001",
+		RunID:     "interrupted-task-001",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-test",
 		State:     types.RunRunning, // was running when process exited
@@ -1016,8 +1040,8 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	}
 
 	parentMeta, _ := json.Marshal(map[string]any{
-		"seed_prompt":       "write a haiku about cats",
-		"source_path":       "/notes/cats.md",
+		"seed_prompt":      "write a haiku about cats",
+		"source_path":      "/notes/cats.md",
 		"conductor_run_id": "task-original-conductor",
 	})
 	parentRev := types.Revision{
@@ -1039,7 +1063,7 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 
 	// Build appagent metadata with a task record that has no durable keys.
 	rec := &types.RunRecord{
-		RunID:   "task-agent-1",
+		RunID:    "task-agent-1",
 		Metadata: map[string]any{"type": "vtext_agent_revision"},
 	}
 
