@@ -92,8 +92,8 @@ func (c *anthropicClient) ProviderName() string { return c.name }
 // Execute implements the runtime.Provider interface. It makes a real HTTP call
 // to the Anthropic-compatible API with streaming enabled, emitting delta events
 // for each SSE chunk.
-func (c *anthropicClient) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
-	emit(types.EventTaskProgress, "execution", json.RawMessage(
+func (c *anthropicClient) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
+	emit(types.EventRunProgress, "execution", json.RawMessage(
 		`{"status":"started","provider":"`+c.name+`","real":"true"}`))
 
 	// Build the request body with streaming.
@@ -133,7 +133,7 @@ func (c *anthropicClient) Execute(ctx context.Context, task *types.TaskRecord, e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	log.Printf("real-llm-test: calling %s (%s) stream=true for task %s", c.name, c.modelID, task.TaskID)
+	log.Printf("real-llm-test: calling %s (%s) stream=true for task %s", c.name, c.modelID, task.RunID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -184,7 +184,7 @@ func (c *anthropicClient) Execute(ctx context.Context, task *types.TaskRecord, e
 				"provider": c.name,
 				"real":     "true",
 			})
-			emit(types.EventTaskDelta, "execution", deltaPayload)
+			emit(types.EventRunDelta, "execution", deltaPayload)
 		}
 	}
 
@@ -195,9 +195,9 @@ func (c *anthropicClient) Execute(ctx context.Context, task *types.TaskRecord, e
 		"provider": c.name,
 		"real":     "true",
 	})
-	emit(types.EventTaskProgress, "execution", progressPayload)
+	emit(types.EventRunProgress, "execution", progressPayload)
 
-	log.Printf("real-llm-test: %s completed for task %s (text_len=%d)", c.name, task.TaskID, len(accumulatedText))
+	log.Printf("real-llm-test: %s completed for task %s (text_len=%d)", c.name, task.RunID, len(accumulatedText))
 	return nil
 }
 
@@ -372,34 +372,34 @@ func TestVTextAgentRevisionRealLLM(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&agentResp); err != nil {
 		t.Fatalf("decode agent revision response: %v", err)
 	}
-	t.Logf("Submitted agent revision task: %s", agentResp.TaskID)
+	t.Logf("Submitted agent revision task: %s", agentResp.RunID)
 
 	// Verify metadata.
 	if agentResp.DocID != docResp.DocID {
 		t.Errorf("doc_id = %q, want %q", agentResp.DocID, docResp.DocID)
 	}
-	if agentResp.State != types.TaskPending {
+	if agentResp.State != types.RunPending {
 		t.Errorf("initial state = %q, want pending", agentResp.State)
 	}
 
 	// Step 4: Wait for the task to complete.
-	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		statusReq := vtextRealLLMRequest(t, http.MethodGet,
-			"/api/agent/status?task_id="+agentResp.TaskID, nil)
+			"/api/agent/status?run_id="+agentResp.RunID, nil)
 		statusW := httptest.NewRecorder()
-		h.HandleTaskStatus(statusW, statusReq)
-		var statusResp taskStatusResponse
+		h.HandleRunStatus(statusW, statusReq)
+		var statusResp runStatusResponse
 		_ = json.NewDecoder(statusW.Body).Decode(&statusResp)
 		t.Fatalf("task state = %q, want completed; error: %s", state, statusResp.Error)
 	}
 
 	// Get the task result.
 	statusReq := vtextRealLLMRequest(t, http.MethodGet,
-		"/api/agent/status?task_id="+agentResp.TaskID, nil)
+		"/api/agent/status?run_id="+agentResp.RunID, nil)
 	statusW := httptest.NewRecorder()
-	h.HandleTaskStatus(statusW, statusReq)
-	var statusResp taskStatusResponse
+	h.HandleRunStatus(statusW, statusReq)
+	var statusResp runStatusResponse
 	if err := json.NewDecoder(statusW.Body).Decode(&statusResp); err != nil {
 		t.Fatalf("decode status response: %v", err)
 	}
@@ -520,8 +520,8 @@ func TestVTextAgentRevisionRealLLMCodeGeneration(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
 	// Wait for completion.
-	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("task state = %q, want completed", state)
 	}
 
@@ -591,21 +591,21 @@ func TestVTextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
-	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("task state = %q, want completed", state)
 	}
 
 	// Verify events.
-	evts, err := s.ListEvents(ctx, agentResp.TaskID, 200)
+	evts, err := s.ListEvents(ctx, agentResp.RunID, 200)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
 	expectedKinds := map[types.EventKind]bool{
-		types.EventTaskSubmitted:               false,
-		types.EventTaskStarted:                 false,
-		types.EventTaskCompleted:               false,
+		types.EventRunSubmitted:               false,
+		types.EventRunStarted:                 false,
+		types.EventRunCompleted:               false,
 		types.EventVTextAgentRevisionStarted:   false,
 		types.EventVTextAgentRevisionCompleted: false,
 	}
@@ -641,13 +641,13 @@ func TestVTextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 	// Verify delta events from real streaming.
 	hasDelta := false
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta {
+		if ev.Kind == types.EventRunDelta {
 			hasDelta = true
 			break
 		}
 	}
 	if !hasDelta {
-		t.Error("expected task.delta events from real LLM streaming")
+		t.Error("expected run.delta events from real LLM streaming")
 	}
 
 	t.Logf("✓ Event emission validated (%d events captured)", len(evts))
@@ -701,13 +701,13 @@ func TestVTextAgentRevisionRealLLMMutationIdempotency(t *testing.T) {
 		t.Fatalf("decode retry response: %v", err)
 	}
 
-	if resp2.TaskID != resp1.TaskID {
-		t.Errorf("retry returned different task ID: %q vs %q (should be idempotent)", resp2.TaskID, resp1.TaskID)
+	if resp2.RunID != resp1.RunID {
+		t.Errorf("retry returned different task ID: %q vs %q (should be idempotent)", resp2.RunID, resp1.RunID)
 	}
 
 	// Wait and verify only one appagent revision.
-	state := waitForTaskCompletion(t, h, resp1.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, resp1.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("task state = %q, want completed", state)
 	}
 
@@ -726,7 +726,7 @@ func TestVTextAgentRevisionRealLLMMutationIdempotency(t *testing.T) {
 		t.Errorf("found %d appagent revisions, want 1 (no duplicate from retry)", agentCount)
 	}
 
-	t.Logf("✓ Idempotency validated: both requests returned task %s, 1 appagent revision created", resp1.TaskID)
+	t.Logf("✓ Idempotency validated: both requests returned task %s, 1 appagent revision created", resp1.RunID)
 }
 
 // TestVTextAgentRevisionRealLLMStreamingDeltas validates that the real
@@ -764,12 +764,12 @@ func TestVTextAgentRevisionRealLLMStreamingDeltas(t *testing.T) {
 	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
-	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("task state = %q, want completed", state)
 	}
 
-	evts, err := s.ListEvents(ctx, agentResp.TaskID, 200)
+	evts, err := s.ListEvents(ctx, agentResp.RunID, 200)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
@@ -777,7 +777,7 @@ func TestVTextAgentRevisionRealLLMStreamingDeltas(t *testing.T) {
 	deltaCount := 0
 	totalDeltaText := ""
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta {
+		if ev.Kind == types.EventRunDelta {
 			deltaCount++
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
@@ -830,17 +830,17 @@ func TestVTextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
 	var agentResp vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp)
 
-	state := waitForTaskCompletion(t, h, agentResp.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("task state = %q, want completed", state)
 	}
 
 	// Check metadata.
 	statusReq := vtextRealLLMRequest(t, http.MethodGet,
-		"/api/agent/status?task_id="+agentResp.TaskID, nil)
+		"/api/agent/status?run_id="+agentResp.RunID, nil)
 	statusW := httptest.NewRecorder()
-	h.HandleTaskStatus(statusW, statusReq)
-	var statusResp taskStatusResponse
+	h.HandleRunStatus(statusW, statusReq)
+	var statusResp runStatusResponse
 	_ = json.NewDecoder(statusW.Body).Decode(&statusResp)
 
 	if statusResp.Metadata == nil {
@@ -896,8 +896,8 @@ func TestVTextAgentRevisionRealLLMFullHistory(t *testing.T) {
 	var agentResp1 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp1)
 
-	state := waitForTaskCompletion(t, h, agentResp1.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state := waitForTaskCompletion(t, h, agentResp1.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("agent task 1 state = %q, want completed", state)
 	}
 
@@ -921,8 +921,8 @@ func TestVTextAgentRevisionRealLLMFullHistory(t *testing.T) {
 	var agentResp2 vtextAgentRevisionResponse
 	_ = json.NewDecoder(w.Body).Decode(&agentResp2)
 
-	state = waitForTaskCompletion(t, h, agentResp2.TaskID, 60*time.Second)
-	if state != types.TaskCompleted {
+	state = waitForTaskCompletion(t, h, agentResp2.RunID, 60*time.Second)
+	if state != types.RunCompleted {
 		t.Fatalf("agent task 2 state = %q, want completed", state)
 	}
 

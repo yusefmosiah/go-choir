@@ -22,7 +22,7 @@ export async function submitConductorPrompt(text, options = {}) {
     metadata.initial_document_title = options.initialDocumentTitle;
   }
 
-  const res = await fetchWithRenewal('/api/agent/task', {
+  const res = await fetchWithRenewal('/api/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -55,9 +55,9 @@ function parseDecision(raw) {
   return parsed;
 }
 
-export async function waitForConductorDecision(taskId, options = {}) {
-  if (!taskId) {
-    throw new Error('Conductor task ID is required');
+export async function waitForConductorDecision(runId, options = {}) {
+  if (!runId) {
+    throw new Error('Conductor run ID is required');
   }
 
   const timeoutMs = options.timeoutMs ?? 15000;
@@ -65,7 +65,7 @@ export async function waitForConductorDecision(taskId, options = {}) {
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const res = await fetchWithRenewal(`/api/agent/status?task_id=${encodeURIComponent(taskId)}`, {
+    const res = await fetchWithRenewal(`/api/agent/status?run_id=${encodeURIComponent(runId)}`, {
       method: 'GET',
     });
 

@@ -14,7 +14,7 @@ import (
 
 // BridgeProvider adapts the LLM provider.Provider interface to the
 // runtime.Provider interface consumed by the runtime engine. It translates
-// between the runtime's TaskRecord/EventEmitFunc model and the provider
+// between the runtime's RunRecord/EventEmitFunc model and the provider
 // package's LLMRequest/LLMResponse model.
 //
 // When a tool registry is active, BridgeProvider also implements the
@@ -54,7 +54,7 @@ func (b *BridgeProvider) ProviderName() string { return b.inner.Name() }
 // runtime (VAL-RUNTIME-008). The emitted events contain enough detail
 // (provider name, model, usage) to distinguish real upstream work from
 // canned stub responses.
-func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit runtime.EventEmitFunc) error {
+func (b *BridgeProvider) Execute(ctx context.Context, task *types.RunRecord, emit runtime.EventEmitFunc) error {
 	providerName := b.inner.Name()
 
 	// Emit a progress event showing we're about to call a real provider.
@@ -63,7 +63,7 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 		"provider": providerName,
 		"real":     "true",
 	})
-	emit(types.EventTaskProgress, "execution", startPayload)
+	emit(types.EventRunProgress, "execution", startPayload)
 
 	// Build the LLM request from the task prompt with streaming enabled.
 	req := LLMRequest{
@@ -82,7 +82,7 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 	}
 
 	log.Printf("bridge: calling %s provider (streaming) for task %s (prompt_len=%d)",
-		providerName, task.TaskID, len(task.Prompt))
+		providerName, task.RunID, len(task.Prompt))
 
 	// Call the real provider with streaming.
 	resp, err := b.inner.Stream(ctx, req, func(chunk StreamChunk) {
@@ -93,7 +93,7 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 				"provider": providerName,
 				"real":     "true",
 			})
-			emit(types.EventTaskDelta, "execution", deltaPayload)
+			emit(types.EventRunDelta, "execution", deltaPayload)
 		}
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 			"real":     "true",
 			"error":    err.Error(),
 		})
-		emit(types.EventTaskProgress, "execution", failPayload)
+		emit(types.EventRunProgress, "execution", failPayload)
 
 		return fmt.Errorf("provider %s call failed: %w", providerName, err)
 	}
@@ -120,13 +120,13 @@ func (b *BridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, em
 		"tokens_in":   fmt.Sprintf("%d", resp.Usage.InputTokens),
 		"tokens_out":  fmt.Sprintf("%d", resp.Usage.OutputTokens),
 	})
-	emit(types.EventTaskProgress, "execution", progressPayload)
+	emit(types.EventRunProgress, "execution", progressPayload)
 
 	// Store the result on the task for the runtime to persist.
 	task.Result = resp.Text
 
 	log.Printf("bridge: %s provider completed for task %s (tokens=%d+%d text_len=%d)",
-		providerName, task.TaskID, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
+		providerName, task.RunID, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
 
 	return nil
 }
@@ -346,8 +346,8 @@ func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
 // Execute implements the runtime.Provider interface. It translates the
 // task prompt into an LLM request and routes it through the gateway with
 // streaming enabled, emitting incremental delta events for each text chunk.
-func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit runtime.EventEmitFunc) error {
-	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"gateway","routed":true}`))
+func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.RunRecord, emit runtime.EventEmitFunc) error {
+	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started","provider":"gateway","routed":true}`))
 
 	req := LLMRequest{
 		Model:  "",
@@ -359,7 +359,7 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 		Stream:    true,
 	}
 
-	log.Printf("gateway-bridge: calling gateway (streaming) for task %s (prompt_len=%d)", task.TaskID, len(task.Prompt))
+	log.Printf("gateway-bridge: calling gateway (streaming) for task %s (prompt_len=%d)", task.RunID, len(task.Prompt))
 
 	resp, err := g.client.Stream(ctx, req, func(chunk StreamChunk) {
 		// Emit a delta event for each text chunk from the gateway.
@@ -369,7 +369,7 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 				"provider": "gateway",
 				"routed":   "true",
 			})
-			emit(types.EventTaskDelta, "execution", deltaPayload)
+			emit(types.EventRunDelta, "execution", deltaPayload)
 		}
 	})
 	if err != nil {
@@ -379,7 +379,7 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 			"routed":   "true",
 			"error":    err.Error(),
 		})
-		emit(types.EventTaskProgress, "execution", failPayload)
+		emit(types.EventRunProgress, "execution", failPayload)
 		return fmt.Errorf("gateway call failed: %w", err)
 	}
 
@@ -392,12 +392,12 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.TaskRec
 		"tokens_in":   fmt.Sprintf("%d", resp.Usage.InputTokens),
 		"tokens_out":  fmt.Sprintf("%d", resp.Usage.OutputTokens),
 	})
-	emit(types.EventTaskProgress, "execution", progressPayload)
+	emit(types.EventRunProgress, "execution", progressPayload)
 
 	task.Result = resp.Text
 
 	log.Printf("gateway-bridge: gateway completed for task %s (provider=%s tokens=%d+%d text_len=%d)",
-		task.TaskID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
+		task.RunID, resp.ProviderName, resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.Text))
 
 	return nil
 }

@@ -1,7 +1,7 @@
 <script>
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { AuthRequiredError } from './auth.js';
-  import { getAgentTopology, listAgentEvents, listAgentTasks, openEventStream } from './trace.js';
+  import { getAgentTopology, listAgentEvents, listAgentRuns, openEventStream } from './trace.js';
 
   const dispatch = createEventDispatcher();
 
@@ -9,9 +9,9 @@
   let error = '';
   let streamStatus = 'connecting';
   let topology = null;
-  let tasks = [];
+  let runs = [];
   let ownerEvents = [];
-  let selectedTaskId = '';
+  let selectedRunId = '';
   let lastSeq = 0;
   let refreshTimer = null;
   let stream = null;
@@ -21,7 +21,7 @@
     return Number.isFinite(time) ? time : 0;
   }
 
-  function sortTasksNewestFirst(items) {
+  function sortRunsNewestFirst(items) {
     return [...items].sort((left, right) => parseDate(right.created_at) - parseDate(left.created_at));
   }
 
@@ -44,35 +44,35 @@
     ownerEvents = sortEventsAscending([...ownerEvents, eventRecord]).slice(-500);
   }
 
-  function applyTaskEvent(taskId, kind) {
-    if (!taskId) return;
-    const index = tasks.findIndex((task) => task.task_id === taskId);
+  function applyRunEvent(runId, kind) {
+    if (!runId) return;
+    const index = runs.findIndex((run) => run.run_id === runId);
     if (index < 0) return;
 
-    const current = tasks[index];
+    const current = runs[index];
     let nextState = current.state;
-    if (kind === 'task.submitted') nextState = 'pending';
-    if (kind === 'task.started') nextState = 'running';
-    if (kind === 'task.completed') nextState = 'completed';
-    if (kind === 'task.failed') nextState = 'failed';
-    if (kind === 'task.blocked') nextState = 'blocked';
-    if (kind === 'task.cancelled') nextState = 'cancelled';
+    if (kind === 'run.submitted') nextState = 'pending';
+    if (kind === 'run.started') nextState = 'running';
+    if (kind === 'run.completed') nextState = 'completed';
+    if (kind === 'run.failed') nextState = 'failed';
+    if (kind === 'run.blocked') nextState = 'blocked';
+    if (kind === 'run.cancelled') nextState = 'cancelled';
 
-    tasks[index] = {
+    runs[index] = {
       ...current,
       state: nextState,
       updated_at: new Date().toISOString(),
     };
-    tasks = sortTasksNewestFirst(tasks);
+    runs = sortRunsNewestFirst(runs);
   }
 
-  function scheduleTaskRefresh() {
+  function scheduleRunRefresh() {
     if (refreshTimer) return;
     refreshTimer = setTimeout(async () => {
       refreshTimer = null;
       try {
-        const response = await listAgentTasks(120);
-        tasks = sortTasksNewestFirst(response.tasks || []);
+        const response = await listAgentRuns(120);
+        runs = sortRunsNewestFirst(response.runs || []);
       } catch (err) {
         if (err instanceof AuthRequiredError) {
           dispatch('authexpired');
@@ -95,9 +95,9 @@
         streamStatus = 'connected';
         lastSeq = Math.max(lastSeq, eventRecord.seq || 0);
         upsertEvent(eventRecord);
-        applyTaskEvent(eventRecord.task_id, eventRecord.kind);
-        if (eventRecord.task_id) {
-          scheduleTaskRefresh();
+        applyRunEvent(eventRecord.run_id, eventRecord.kind);
+        if (eventRecord.run_id) {
+          scheduleRunRefresh();
         }
       },
       onError: () => {
@@ -110,19 +110,19 @@
     loading = true;
     error = '';
     try {
-      const [taskResp, eventResp, topologyResp] = await Promise.all([
-        listAgentTasks(120),
+      const [runResp, eventResp, topologyResp] = await Promise.all([
+        listAgentRuns(120),
         listAgentEvents({ limit: 300 }),
         getAgentTopology(),
       ]);
 
-      tasks = sortTasksNewestFirst(taskResp.tasks || []);
+      runs = sortRunsNewestFirst(runResp.runs || []);
       ownerEvents = sortEventsAscending(eventResp.events || []);
       topology = topologyResp;
       lastSeq = ownerEvents.reduce((max, event) => Math.max(max, event.seq || 0), 0);
 
-      if (!selectedTaskId && tasks.length > 0) {
-        selectedTaskId = tasks[0].task_id;
+      if (!selectedRunId && runs.length > 0) {
+        selectedRunId = runs[0].run_id;
       }
       connectStream();
     } catch (err) {
@@ -136,20 +136,20 @@
     }
   }
 
-  function selectTask(taskId) {
-    selectedTaskId = taskId;
+  function selectRun(runId) {
+    selectedRunId = runId;
   }
 
-  function taskProfile(task) {
-    return task?.metadata?.agent_profile || task?.metadata?.type || 'task';
+  function runProfile(run) {
+    return run?.metadata?.agent_profile || run?.metadata?.type || 'run';
   }
 
-  function taskRole(task) {
-    return task?.metadata?.agent_role || taskProfile(task);
+  function runRole(run) {
+    return run?.metadata?.agent_role || runProfile(run);
   }
 
-  function taskParentId(task) {
-    return task?.metadata?.parent_id || '';
+  function runParentId(run) {
+    return run?.metadata?.parent_id || '';
   }
 
   function taskStateTone(state) {
@@ -161,7 +161,7 @@
 
   function excerpt(text, max = 72) {
     const normalized = (text || '').replace(/\s+/g, ' ').trim();
-    if (!normalized) return 'Untitled task';
+    if (!normalized) return 'Untitled run';
     if (normalized.length <= max) return normalized;
     return `${normalized.slice(0, max - 1)}…`;
   }
@@ -179,11 +179,11 @@
   function eventSummary(eventRecord) {
     const payload = parsePayload(eventRecord.payload);
     switch (eventRecord.kind) {
-      case 'task.submitted':
-        return payload.parent_id ? `Spawned from ${payload.parent_id.slice(0, 8)}` : 'Task submitted';
-      case 'task.started':
-        return 'Task started';
-      case 'task.progress':
+      case 'run.submitted':
+        return payload.parent_id ? `Spawned from ${payload.parent_id.slice(0, 8)}` : 'Run submitted';
+      case 'run.started':
+        return 'Run started';
+      case 'run.progress':
         if (payload.tool_calls !== undefined) {
           return `Tool loop iteration ${payload.iteration || '?'} with ${payload.tool_calls} tool calls`;
         }
@@ -197,14 +197,14 @@
         return `${payload.tool || 'tool'} returned${payload.is_error ? ' error' : ''}`;
       case 'channel.message':
         return `${payload.role || 'agent'} ${payload.from ? `(${payload.from.slice(0, 8)}) ` : ''}posted ${payload.content_len || 0} chars`;
-      case 'task.completed':
-        return 'Task completed';
-      case 'task.failed':
-        return payload.error || 'Task failed';
-      case 'task.blocked':
-        return payload.error || 'Task blocked';
-      case 'task.cancelled':
-        return payload.error || 'Task cancelled';
+      case 'run.completed':
+        return 'Run completed';
+      case 'run.failed':
+        return payload.error || 'Run failed';
+      case 'run.blocked':
+        return payload.error || 'Run blocked';
+      case 'run.cancelled':
+        return payload.error || 'Run cancelled';
       case 'vtext.agent_revision.started':
         return 'VText revision started';
       case 'vtext.agent_revision.progress':
@@ -226,24 +226,24 @@
       const current = queue.shift();
       if (!current || ids.has(current)) continue;
       ids.add(current);
-      for (const task of tasks) {
-        if (taskParentId(task) === current) {
-          queue.push(task.task_id);
+      for (const run of runs) {
+        if (runParentId(run) === current) {
+          queue.push(run.run_id);
         }
       }
     }
     return ids;
   }
 
-  $: selectedTask = tasks.find((task) => task.task_id === selectedTaskId) || null;
-  $: selectedFamilyIds = collectFamilyIds(selectedTaskId);
-  $: familyTasks = sortTasksNewestFirst(tasks.filter((task) => selectedFamilyIds.has(task.task_id))).reverse();
-  $: familyEvents = sortEventsAscending(ownerEvents.filter((eventRecord) => selectedFamilyIds.has(eventRecord.task_id)));
-  $: childTasks = familyTasks.filter((task) => task.task_id !== selectedTaskId);
+  $: selectedTask = runs.find((run) => run.run_id === selectedRunId) || null;
+  $: selectedFamilyIds = collectFamilyIds(selectedRunId);
+  $: familyTasks = sortRunsNewestFirst(runs.filter((run) => selectedFamilyIds.has(run.run_id))).reverse();
+  $: familyEvents = sortEventsAscending(ownerEvents.filter((eventRecord) => selectedFamilyIds.has(eventRecord.run_id)));
+  $: childTasks = familyTasks.filter((task) => task.run_id !== selectedRunId);
   $: familyToolCount = familyEvents.filter((eventRecord) => eventRecord.kind === 'tool.invoked').length;
   $: familyChannelCount = familyEvents.filter((eventRecord) => eventRecord.kind === 'channel.message').length;
-  $: familyResearcherCount = childTasks.filter((task) => taskProfile(task) === 'researcher').length;
-  $: familySuperCount = childTasks.filter((task) => taskProfile(task) === 'super').length;
+  $: familyResearcherCount = childTasks.filter((task) => runProfile(task) === 'researcher').length;
+  $: familySuperCount = childTasks.filter((task) => runProfile(task) === 'super').length;
 
   onMount(() => {
     loadTraceState();
@@ -273,26 +273,26 @@
 
     <div class="task-list" data-trace-task-list>
       {#if loading}
-        <div class="empty-state">Loading recent tasks…</div>
-      {:else if tasks.length === 0}
-        <div class="empty-state">No tasks yet. Run conductor or `vtext` to start tracing.</div>
+        <div class="empty-state">Loading recent runs…</div>
+      {:else if runs.length === 0}
+        <div class="empty-state">No runs yet. Run conductor or `vtext` to start tracing.</div>
       {:else}
-        {#each tasks as task (task.task_id)}
+        {#each runs as task (task.run_id)}
           <button
-            class:selected={task.task_id === selectedTaskId}
+            class:selected={task.run_id === selectedRunId}
             class={`task-item ${taskStateTone(task.state)}`}
             data-trace-task
-            data-trace-task-id={task.task_id}
-            on:click={() => selectTask(task.task_id)}
+            data-trace-task-id={task.run_id}
+            on:click={() => selectRun(task.run_id)}
           >
             <div class="task-item-top">
-              <span class="task-profile">{taskProfile(task)}</span>
+              <span class="task-profile">{runProfile(task)}</span>
               <span class={`task-state ${taskStateTone(task.state)}`}>{task.state}</span>
             </div>
             <div class="task-prompt">{excerpt(task.prompt, 58)}</div>
             <div class="task-meta">
-              <span>{taskRole(task)}</span>
-              {#if taskParentId(task)}
+              <span>{runRole(task)}</span>
+              {#if runParentId(task)}
                 <span>child</span>
               {/if}
             </div>
@@ -312,13 +312,13 @@
         <div class="summary-header">
           <div>
             <h3>{excerpt(selectedTask.prompt, 90)}</h3>
-            <p>{taskProfile(selectedTask)} · {taskRole(selectedTask)} · {selectedTask.task_id}</p>
+            <p>{runProfile(selectedTask)} · {runRole(selectedTask)} · {selectedTask.run_id}</p>
           </div>
           <span class={`task-state ${taskStateTone(selectedTask.state)}`}>{selectedTask.state}</span>
         </div>
 
         <div class="summary-metrics">
-          <div class="metric"><span>{familyTasks.length}</span><div class="metric-label">tasks</div></div>
+          <div class="metric"><span>{familyTasks.length}</span><div class="metric-label">runs</div></div>
           <div class="metric"><span>{childTasks.length}</span><div class="metric-label">delegations</div></div>
           <div class="metric"><span>{familyResearcherCount}</span><div class="metric-label">researchers</div></div>
           <div class="metric"><span>{familySuperCount}</span><div class="metric-label">supers</div></div>
@@ -330,14 +330,14 @@
       <section class="graph-panel" data-trace-family>
         <h3>Task Family</h3>
         <div class="family-grid">
-          {#each familyTasks as task (task.task_id)}
+          {#each familyTasks as task (task.run_id)}
             <div class={`family-card ${taskStateTone(task.state)}`}>
               <div class="family-card-top">
-                <strong>{taskProfile(task)}</strong>
+                <strong>{runProfile(task)}</strong>
                 <span>{task.state}</span>
               </div>
               <div class="family-card-body">{excerpt(task.prompt, 68)}</div>
-              <div class="family-card-meta">{task.task_id}</div>
+              <div class="family-card-meta">{task.run_id}</div>
             </div>
           {/each}
         </div>
@@ -346,7 +346,7 @@
       <section class="timeline-panel">
         <h3>Event Timeline</h3>
         {#if familyEvents.length === 0}
-          <div class="empty-state">No family events captured yet for this task.</div>
+          <div class="empty-state">No family events captured yet for this run.</div>
         {:else}
           <div class="event-list" data-trace-event-list>
             {#each familyEvents as eventRecord (eventRecord.event_id)}
@@ -360,7 +360,7 @@
         {/if}
       </section>
     {:else if !loading}
-      <div class="empty-state">Select a task to inspect its task family, tool calls, and channel traffic.</div>
+      <div class="empty-state">Select a run to inspect its run family, tool calls, and channel traffic.</div>
     {/if}
   </div>
 </div>

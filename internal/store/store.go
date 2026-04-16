@@ -1,7 +1,8 @@
 // Package store provides durable runtime storage for the go-choir sandbox runtime.
 //
-// The store persists task records and event records using SQLite, enabling
-// stable task IDs and restart-safe task recovery (VAL-RUNTIME-003,
+// The store persists run records, agent records, channel messages, and event
+// records using SQLite, enabling stable run IDs, durable agent/channel
+// identity, and restart-safe recovery (VAL-RUNTIME-003,
 // VAL-RUNTIME-010). The schema is designed to migrate toward Dolt-backed
 // per-user workspaces in later milestones.
 //
@@ -12,8 +13,8 @@
 //     per-user Dolt databases (that comes in the vtext milestone).
 //   - Event sequence numbers are per-task, enabling incremental cursors for
 //     the /api/events streaming surface.
-//   - The store interface is minimal: CreateTask, GetTask, UpdateTask,
-//     ListTasks, AppendEvent, ListEvents. Later features extend it.
+//   - The store interface is minimal: CreateRun, GetRun, UpdateRun,
+//     ListRuns, AppendEvent, ListEvents. Later features extend it.
 package store
 
 import (
@@ -24,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -35,7 +37,7 @@ import (
 var ErrNotFound = errors.New("record not found")
 
 // Store wraps a SQLite database connection and provides persistence for
-// task records and event records.
+// run records, agent records, channel messages, and event records.
 type Store struct {
 	db        *sql.DB
 	path      string
@@ -45,8 +47,24 @@ type Store struct {
 
 // schemaDDL creates the runtime tables if they do not already exist.
 const schemaDDL = `
-CREATE TABLE IF NOT EXISTS tasks (
-	task_id     TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS agents (
+	agent_id    TEXT PRIMARY KEY,
+	owner_id    TEXT NOT NULL,
+	sandbox_id  TEXT NOT NULL,
+	profile     TEXT NOT NULL DEFAULT '',
+	role        TEXT NOT NULL DEFAULT '',
+	channel_id  TEXT NOT NULL DEFAULT '',
+	created_at  DATETIME NOT NULL,
+	updated_at  DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+	run_id     TEXT PRIMARY KEY,
+	agent_id    TEXT NOT NULL DEFAULT '',
+	channel_id  TEXT NOT NULL DEFAULT '',
+	parent_run_id TEXT NOT NULL DEFAULT '',
+	agent_profile TEXT NOT NULL DEFAULT '',
+	agent_role TEXT NOT NULL DEFAULT '',
 	owner_id    TEXT NOT NULL,
 	sandbox_id  TEXT NOT NULL,
 	state       TEXT NOT NULL,
@@ -61,7 +79,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS events (
 	event_id   TEXT NOT NULL,
-	task_id    TEXT NOT NULL DEFAULT '',
+	run_id    TEXT NOT NULL DEFAULT '',
+	agent_id   TEXT NOT NULL DEFAULT '',
+	channel_id TEXT NOT NULL DEFAULT '',
 	owner_id   TEXT NOT NULL DEFAULT '',
 	seq        INTEGER NOT NULL,
 	ts         DATETIME NOT NULL,
@@ -71,12 +91,34 @@ CREATE TABLE IF NOT EXISTS events (
 	PRIMARY KEY (event_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_owner_id ON tasks(owner_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
-CREATE INDEX IF NOT EXISTS idx_tasks_sandbox_id ON tasks(sandbox_id);
-CREATE INDEX IF NOT EXISTS idx_events_task_id_seq ON events(task_id, seq);
+CREATE TABLE IF NOT EXISTS channel_messages (
+	channel_id      TEXT NOT NULL,
+	seq             INTEGER NOT NULL,
+	owner_id        TEXT NOT NULL DEFAULT '',
+	from_agent_id   TEXT NOT NULL DEFAULT '',
+	from_run_id     TEXT NOT NULL DEFAULT '',
+	from_name       TEXT NOT NULL DEFAULT '',
+	role            TEXT NOT NULL DEFAULT '',
+	content         TEXT NOT NULL,
+	created_at      DATETIME NOT NULL,
+	PRIMARY KEY (channel_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_owner_id ON agents(owner_id);
+CREATE INDEX IF NOT EXISTS idx_agents_channel_id ON agents(channel_id);
+CREATE INDEX IF NOT EXISTS idx_runs_owner_id ON runs(owner_id);
+CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
+CREATE INDEX IF NOT EXISTS idx_runs_sandbox_id ON runs(sandbox_id);
+CREATE INDEX IF NOT EXISTS idx_runs_agent_id ON runs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_runs_channel_id ON runs(channel_id);
+CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id ON runs(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_events_run_id_seq ON events(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_events_owner_id ON events(owner_id);
+CREATE INDEX IF NOT EXISTS idx_events_agent_id ON events(agent_id);
+CREATE INDEX IF NOT EXISTS idx_events_channel_id_ts ON events(channel_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_owner_id ON channel_messages(owner_id);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_created_at ON channel_messages(created_at);
 
 CREATE TABLE IF NOT EXISTS desktop_state (
 	owner_id       TEXT PRIMARY KEY,
@@ -84,22 +126,6 @@ CREATE TABLE IF NOT EXISTS desktop_state (
 	active_window  TEXT NOT NULL DEFAULT '',
 	updated_at     DATETIME NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS work_items (
-	id         TEXT PRIMARY KEY,
-	parent_id  TEXT NOT NULL DEFAULT '',
-	owner_id   TEXT NOT NULL,
-	objective  TEXT NOT NULL DEFAULT '',
-	state      TEXT NOT NULL DEFAULT 'pending',
-	result     TEXT NOT NULL DEFAULT '',
-	error      TEXT NOT NULL DEFAULT '',
-	created_at DATETIME NOT NULL,
-	updated_at DATETIME NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_work_items_owner_id  ON work_items(owner_id);
-CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id);
-CREATE INDEX IF NOT EXISTS idx_work_items_state     ON work_items(state);
 `
 
 // Open opens (or creates) the SQLite database at dbPath and applies the
@@ -168,6 +194,55 @@ func (s *Store) bootstrap() error {
 	if err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	for _, migration := range []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"runs", "agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"runs", "channel_id", "TEXT NOT NULL DEFAULT ''"},
+		{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"runs", "agent_profile", "TEXT NOT NULL DEFAULT ''"},
+		{"runs", "agent_role", "TEXT NOT NULL DEFAULT ''"},
+		{"events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"events", "channel_id", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(migration.table, migration.name, migration.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(table, name, ddl string) error {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid       int
+			column    string
+			colType   string
+			notNull   int
+			defaultV  sql.NullString
+			primaryK  int
+		)
+		if err := rows.Scan(&cid, &column, &colType, &notNull, &defaultV, &primaryK); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if column == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, ddl)); err != nil {
+		return fmt.Errorf("alter table %s add column %s: %w", table, name, err)
+	}
 	return nil
 }
 
@@ -206,17 +281,60 @@ func (s *Store) VTextPath() string {
 	return s.vtextPath
 }
 
-// CreateTask inserts a new task record.
-func (s *Store) CreateTask(ctx context.Context, rec types.TaskRecord) error {
+// UpsertAgent persists a durable agent record.
+func (s *Store) UpsertAgent(ctx context.Context, rec types.AgentRecord) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO agents (agent_id, owner_id, sandbox_id, profile, role, channel_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(agent_id) DO UPDATE SET
+		   owner_id = excluded.owner_id,
+		   sandbox_id = excluded.sandbox_id,
+		   profile = excluded.profile,
+		   role = excluded.role,
+		   channel_id = excluded.channel_id,
+		   updated_at = excluded.updated_at`,
+		rec.AgentID,
+		rec.OwnerID,
+		rec.SandboxID,
+		rec.Profile,
+		rec.Role,
+		rec.ChannelID,
+		rec.CreatedAt.UTC().Format(time.RFC3339Nano),
+		rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert agent: %w", err)
+	}
+	return nil
+}
+
+// GetAgent returns the agent with the given ID.
+func (s *Store) GetAgent(ctx context.Context, agentID string) (types.AgentRecord, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT agent_id, owner_id, sandbox_id, profile, role, channel_id, created_at, updated_at
+		   FROM agents
+		  WHERE agent_id = ?`,
+		agentID,
+	)
+	return scanAgent(row)
+}
+
+// CreateRun inserts a new run record.
+func (s *Store) CreateRun(ctx context.Context, rec types.RunRecord) error {
 	metadata, err := marshalJSON(rec.Metadata)
 	if err != nil {
-		return fmt.Errorf("marshal task metadata: %w", err)
+		return fmt.Errorf("marshal run metadata: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO tasks (task_id, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.TaskID,
+		`INSERT INTO runs (run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.RunID,
+		rec.AgentID,
+		rec.ChannelID,
+		rec.ParentRunID,
+		rec.AgentProfile,
+		rec.AgentRole,
 		rec.OwnerID,
 		rec.SandboxID,
 		rec.State,
@@ -229,32 +347,37 @@ func (s *Store) CreateTask(ctx context.Context, rec types.TaskRecord) error {
 		string(metadata),
 	)
 	if err != nil {
-		return fmt.Errorf("insert task: %w", err)
+		return fmt.Errorf("insert run: %w", err)
 	}
 	return nil
 }
 
-// GetTask returns the task with the given task ID.
-func (s *Store) GetTask(ctx context.Context, taskID string) (types.TaskRecord, error) {
+// GetRun returns the run with the given run ID.
+func (s *Store) GetRun(ctx context.Context, runID string) (types.RunRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT task_id, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
-		   FROM tasks
-		  WHERE task_id = ?`,
-		taskID,
+		`SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+		   FROM runs
+		  WHERE run_id = ?`,
+		runID,
 	)
-	return scanTask(row)
+	return scanRun(row)
 }
 
-// UpdateTask updates an existing task record.
-func (s *Store) UpdateTask(ctx context.Context, rec types.TaskRecord) error {
+// UpdateRun updates an existing run record.
+func (s *Store) UpdateRun(ctx context.Context, rec types.RunRecord) error {
 	metadata, err := marshalJSON(rec.Metadata)
 	if err != nil {
-		return fmt.Errorf("marshal task metadata: %w", err)
+		return fmt.Errorf("marshal run metadata: %w", err)
 	}
 
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE tasks
-		    SET owner_id = ?,
+		`UPDATE runs
+		    SET agent_id = ?,
+		        channel_id = ?,
+		        parent_run_id = ?,
+		        agent_profile = ?,
+		        agent_role = ?,
+		        owner_id = ?,
 		        sandbox_id = ?,
 		        state = ?,
 		        prompt = ?,
@@ -263,7 +386,12 @@ func (s *Store) UpdateTask(ctx context.Context, rec types.TaskRecord) error {
 		        updated_at = ?,
 		        finished_at = ?,
 		        metadata_json = ?
-		  WHERE task_id = ?`,
+		  WHERE run_id = ?`,
+		rec.AgentID,
+		rec.ChannelID,
+		rec.ParentRunID,
+		rec.AgentProfile,
+		rec.AgentRole,
 		rec.OwnerID,
 		rec.SandboxID,
 		rec.State,
@@ -273,52 +401,76 @@ func (s *Store) UpdateTask(ctx context.Context, rec types.TaskRecord) error {
 		rec.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		formatTimePtr(rec.FinishedAt),
 		string(metadata),
-		rec.TaskID,
+		rec.RunID,
 	)
 	if err != nil {
-		return fmt.Errorf("update task: %w", err)
+		return fmt.Errorf("update run: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("check updated task rows: %w", err)
+		return fmt.Errorf("check updated run rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("%w: task %s", ErrNotFound, rec.TaskID)
+		return fmt.Errorf("%w: run %s", ErrNotFound, rec.RunID)
 	}
 	return nil
 }
 
-// ListTasksByOwner returns tasks for the given owner, ordered by created_at
+// ListRunsByOwner returns runs for the given owner, ordered by created_at
 // descending, limited to the given count.
-func (s *Store) ListTasksByOwner(ctx context.Context, ownerID string, limit int) ([]types.TaskRecord, error) {
+func (s *Store) ListRunsByOwner(ctx context.Context, ownerID string, limit int) ([]types.RunRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	return s.listTasksWhere(ctx, "owner_id = ?", []any{ownerID}, limit)
+	return s.listRunsWhere(ctx, "owner_id = ?", []any{ownerID}, limit)
 }
 
-// ListTasksByState returns tasks in the given state, ordered by created_at
+// ListRunsByState returns runs in the given state, ordered by created_at
 // descending, limited to the given count.
-func (s *Store) ListTasksByState(ctx context.Context, state types.TaskState, limit int) ([]types.TaskRecord, error) {
+func (s *Store) ListRunsByState(ctx context.Context, state types.RunState, limit int) ([]types.RunRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	return s.listTasksWhere(ctx, "state = ?", []any{string(state)}, limit)
+	return s.listRunsWhere(ctx, "state = ?", []any{string(state)}, limit)
 }
 
-// ListTasks returns recent tasks ordered by created_at descending, limited
+// ListRuns returns recent runs ordered by created_at descending, limited
 // to the given count.
-func (s *Store) ListTasks(ctx context.Context, limit int) ([]types.TaskRecord, error) {
+func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.RunRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	return s.listTasksWhere(ctx, "", nil, limit)
+	return s.listRunsWhere(ctx, "", nil, limit)
 }
 
-func (s *Store) listTasksWhere(ctx context.Context, where string, args []any, limit int) ([]types.TaskRecord, error) {
-	query := `SELECT task_id, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
-	            FROM tasks`
+// ListRunsByChannel returns runs for a specific shared channel, ordered by creation time descending.
+func (s *Store) ListRunsByChannel(ctx context.Context, ownerID, channelID string, limit int) ([]types.RunRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return s.listRunsWhere(ctx, "owner_id = ? AND channel_id = ?", []any{ownerID, channelID}, limit)
+}
+
+// GetLatestActiveRunByAgent returns the most recent non-terminal run for an agent.
+func (s *Store) GetLatestActiveRunByAgent(ctx context.Context, ownerID, agentID string) (types.RunRecord, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+		   FROM runs
+		  WHERE owner_id = ?
+		    AND agent_id = ?
+		    AND state IN ('pending', 'running', 'blocked')
+		  ORDER BY updated_at DESC
+		  LIMIT 1`,
+		ownerID,
+		agentID,
+	)
+	return scanRun(row)
+}
+
+func (s *Store) listRunsWhere(ctx context.Context, where string, args []any, limit int) ([]types.RunRecord, error) {
+	query := `SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+	            FROM runs`
 	if where != "" {
 		query += " WHERE " + where
 	}
@@ -327,27 +479,27 @@ func (s *Store) listTasksWhere(ctx context.Context, where string, args []any, li
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query tasks: %w", err)
+		return nil, fmt.Errorf("query runs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tasks []types.TaskRecord
+	var runs []types.RunRecord
 	for rows.Next() {
-		rec, err := scanTask(rows)
+		rec, err := scanRun(rows)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, rec)
+		runs = append(runs, rec)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tasks: %w", err)
+		return nil, fmt.Errorf("iterate runs: %w", err)
 	}
-	return tasks, nil
+	return runs, nil
 }
 
 // AppendEvent appends an event record with an auto-assigned sequence number.
 // The Seq field on the input record is overwritten with the next sequence
-// number for the task.
+// number for the run.
 func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	if len(rec.Payload) == 0 {
 		rec.Payload = json.RawMessage(`{}`)
@@ -359,20 +511,22 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Compute the next sequence number for this task.
+ 	// Compute the next sequence number for this run.
 	row := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE task_id = ?`,
-		rec.TaskID,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id = ?`,
+		rec.RunID,
 	)
 	if err := row.Scan(&rec.Seq); err != nil {
 		return fmt.Errorf("query next event sequence: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO events (event_id, task_id, owner_id, seq, ts, kind, phase, payload_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.EventID,
-		rec.TaskID,
+		rec.RunID,
+		rec.AgentID,
+		rec.ChannelID,
 		rec.OwnerID,
 		rec.Seq,
 		rec.Timestamp.UTC().Format(time.RFC3339Nano),
@@ -391,26 +545,26 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	return nil
 }
 
-// ListEvents returns events for the given task, ordered by sequence ascending.
-func (s *Store) ListEvents(ctx context.Context, taskID string, limit int) ([]types.EventRecord, error) {
-	return s.ListEventsAfter(ctx, taskID, 0, limit)
+// ListEvents returns events for the given run, ordered by sequence ascending.
+func (s *Store) ListEvents(ctx context.Context, runID string, limit int) ([]types.EventRecord, error) {
+	return s.ListEventsAfter(ctx, runID, 0, limit)
 }
 
-// ListEventsAfter returns events for the given task with sequence > afterSeq,
+// ListEventsAfter returns events for the given run with sequence > afterSeq,
 // ordered by sequence ascending, limited to the given count.
-func (s *Store) ListEventsAfter(ctx context.Context, taskID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
+func (s *Store) ListEventsAfter(ctx context.Context, runID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, task_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
-		  WHERE task_id = ?
+		  WHERE run_id = ?
 		    AND seq > ?
 		  ORDER BY seq ASC
 		  LIMIT ?`,
-		taskID,
+		runID,
 		afterSeq,
 		limit,
 	)
@@ -441,7 +595,7 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, task_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		  ORDER BY ts DESC
@@ -469,7 +623,7 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 }
 
 // ListEventsByOwnerAfter returns events for the given owner with sequence >
-// afterSeq across all tasks, ordered by timestamp ascending, limited to the
+// afterSeq across all runs, ordered by timestamp ascending, limited to the
 // given count. This supports SSE catch-up after reconnection where the client
 // needs events newer than a previously seen sequence number.
 func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
@@ -478,7 +632,7 @@ func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afte
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, task_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		    AND seq > ?
@@ -507,15 +661,132 @@ func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afte
 	return events, nil
 }
 
-// scanTask scans a task record from a single row.
-func scanTask(row interface{ Scan(...any) error }) (types.TaskRecord, error) {
-	var rec types.TaskRecord
+// ListEventsByChannel returns recent events for the given shared channel.
+func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID string, limit int) ([]types.EventRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		   FROM events
+		  WHERE owner_id = ?
+		    AND channel_id = ?
+		  ORDER BY ts ASC
+		  LIMIT ?`,
+		ownerID,
+		channelID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query events by channel: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []types.EventRecord
+	for rows.Next() {
+		rec, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events by channel: %w", err)
+	}
+	return events, nil
+}
+
+// AppendChannelMessage persists a message to a shared channel and assigns the next cursor sequence.
+func (s *Store) AppendChannelMessage(ctx context.Context, message *types.ChannelMessage, ownerID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin channel message transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM channel_messages WHERE channel_id = ?`,
+		message.ChannelID,
+	)
+	if err := row.Scan(&message.Seq); err != nil {
+		return fmt.Errorf("query next channel message sequence: %w", err)
+	}
+	if message.Timestamp.IsZero() {
+		message.Timestamp = time.Now().UTC()
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_run_id, from_name, role, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		message.ChannelID,
+		message.Seq,
+		ownerID,
+		message.FromAgentID,
+		message.FromRunID,
+		message.From,
+		message.Role,
+		message.Content,
+		message.Timestamp.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("insert channel message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit channel message: %w", err)
+	}
+	return nil
+}
+
+// ListChannelMessages returns channel messages after the provided cursor, ordered by sequence ascending.
+func (s *Store) ListChannelMessages(ctx context.Context, ownerID, channelID string, afterSeq int64, limit int) ([]types.ChannelMessage, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	query := `SELECT channel_id, seq, from_agent_id, from_run_id, from_name, role, content, created_at
+		   FROM channel_messages
+		  WHERE channel_id = ?
+		    AND seq > ?`
+	args := []any{channelID, afterSeq}
+	if strings.TrimSpace(ownerID) != "" {
+		query += ` AND owner_id = ?`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY seq ASC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query channel messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var messages []types.ChannelMessage
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate channel messages: %w", err)
+	}
+	return messages, nil
+}
+
+// scanRun scans a run record from a single row.
+func scanRun(row interface{ Scan(...any) error }) (types.RunRecord, error) {
+	var rec types.RunRecord
 	var createdAt, updatedAt string
 	var finishedAt sql.NullString
 	var metadataJSON string
 
 	err := row.Scan(
-		&rec.TaskID,
+		&rec.RunID,
+		&rec.AgentID,
+		&rec.ChannelID,
+		&rec.ParentRunID,
+		&rec.AgentProfile,
+		&rec.AgentRole,
 		&rec.OwnerID,
 		&rec.SandboxID,
 		&rec.State,
@@ -529,33 +800,64 @@ func scanTask(row interface{ Scan(...any) error }) (types.TaskRecord, error) {
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return types.TaskRecord{}, ErrNotFound
+			return types.RunRecord{}, ErrNotFound
 		}
-		return types.TaskRecord{}, fmt.Errorf("scan task: %w", err)
+		return types.RunRecord{}, fmt.Errorf("scan run: %w", err)
 	}
 
 	rec.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return types.TaskRecord{}, fmt.Errorf("parse created_at: %w", err)
+		return types.RunRecord{}, fmt.Errorf("parse created_at: %w", err)
 	}
 	rec.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
-		return types.TaskRecord{}, fmt.Errorf("parse updated_at: %w", err)
+		return types.RunRecord{}, fmt.Errorf("parse updated_at: %w", err)
 	}
 	if finishedAt.Valid {
 		t, err := time.Parse(time.RFC3339Nano, finishedAt.String)
 		if err != nil {
-			return types.TaskRecord{}, fmt.Errorf("parse finished_at: %w", err)
+			return types.RunRecord{}, fmt.Errorf("parse finished_at: %w", err)
 		}
 		rec.FinishedAt = &t
 	}
 
 	if metadataJSON != "" && metadataJSON != "{}" {
 		if err := json.Unmarshal([]byte(metadataJSON), &rec.Metadata); err != nil {
-			return types.TaskRecord{}, fmt.Errorf("parse metadata: %w", err)
+			return types.RunRecord{}, fmt.Errorf("parse metadata: %w", err)
 		}
 	}
 
+	return rec, nil
+}
+
+// scanAgent scans an agent record from a single row.
+func scanAgent(row interface{ Scan(...any) error }) (types.AgentRecord, error) {
+	var rec types.AgentRecord
+	var createdAt, updatedAt string
+	err := row.Scan(
+		&rec.AgentID,
+		&rec.OwnerID,
+		&rec.SandboxID,
+		&rec.Profile,
+		&rec.Role,
+		&rec.ChannelID,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.AgentRecord{}, ErrNotFound
+		}
+		return types.AgentRecord{}, fmt.Errorf("scan agent: %w", err)
+	}
+	rec.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return types.AgentRecord{}, fmt.Errorf("parse agent created_at: %w", err)
+	}
+	rec.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return types.AgentRecord{}, fmt.Errorf("parse agent updated_at: %w", err)
+	}
 	return rec, nil
 }
 
@@ -567,7 +869,9 @@ func scanEvent(row interface{ Scan(...any) error }) (types.EventRecord, error) {
 
 	err := row.Scan(
 		&rec.EventID,
-		&rec.TaskID,
+		&rec.RunID,
+		&rec.AgentID,
+		&rec.ChannelID,
 		&rec.OwnerID,
 		&rec.Seq,
 		&ts,
@@ -589,6 +893,32 @@ func scanEvent(row interface{ Scan(...any) error }) (types.EventRecord, error) {
 	rec.Payload = json.RawMessage(payloadJSON)
 
 	return rec, nil
+}
+
+func scanChannelMessage(row interface{ Scan(...any) error }) (types.ChannelMessage, error) {
+	var msg types.ChannelMessage
+	var createdAt string
+	err := row.Scan(
+		&msg.ChannelID,
+		&msg.Seq,
+		&msg.FromAgentID,
+		&msg.FromRunID,
+		&msg.From,
+		&msg.Role,
+		&msg.Content,
+		&createdAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.ChannelMessage{}, ErrNotFound
+		}
+		return types.ChannelMessage{}, fmt.Errorf("scan channel message: %w", err)
+	}
+	msg.Timestamp, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return types.ChannelMessage{}, fmt.Errorf("parse channel message timestamp: %w", err)
+	}
+	return msg, nil
 }
 
 // marshalJSON marshals a value to JSON, returning "{}" for nil.
@@ -679,164 +1009,4 @@ func (s *Store) SaveDesktopState(ctx context.Context, state types.DesktopState) 
 	}
 
 	return nil
-}
-
-// ----- Work registry (VAL-CHOIR-001, VAL-CHOIR-003) -----
-
-// CreateWorkItem inserts a new work item into the work registry.
-func (s *Store) CreateWorkItem(ctx context.Context, item types.WorkItem) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO work_items (id, parent_id, owner_id, objective, state, result, error, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID,
-		item.ParentID,
-		item.OwnerID,
-		item.Objective,
-		item.State,
-		item.Result,
-		item.Error,
-		item.CreatedAt.UTC().Format(time.RFC3339Nano),
-		item.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return fmt.Errorf("insert work item: %w", err)
-	}
-	return nil
-}
-
-// GetWorkItem returns the work item with the given ID.
-func (s *Store) GetWorkItem(ctx context.Context, id string) (types.WorkItem, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, parent_id, owner_id, objective, state, result, error, created_at, updated_at
-		   FROM work_items
-		  WHERE id = ?`,
-		id,
-	)
-	return scanWorkItem(row)
-}
-
-// UpdateWorkItem updates an existing work item.
-func (s *Store) UpdateWorkItem(ctx context.Context, item types.WorkItem) error {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE work_items
-		    SET parent_id = ?,
-		        owner_id = ?,
-		        objective = ?,
-		        state = ?,
-		        result = ?,
-		        error = ?,
-		        updated_at = ?
-		  WHERE id = ?`,
-		item.ParentID,
-		item.OwnerID,
-		item.Objective,
-		item.State,
-		item.Result,
-		item.Error,
-		item.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		item.ID,
-	)
-	if err != nil {
-		return fmt.Errorf("update work item: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check updated work item rows: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("%w: work item %s", ErrNotFound, item.ID)
-	}
-	return nil
-}
-
-// ListWorkItemsByOwner returns work items for the given owner, ordered by
-// created_at descending, limited to the given count.
-func (s *Store) ListWorkItemsByOwner(ctx context.Context, ownerID string, limit int) ([]types.WorkItem, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	return s.listWorkItemsWhere(ctx, "owner_id = ?", []any{ownerID}, limit)
-}
-
-// ListWorkItemsByParent returns child work items of the given parent ID,
-// ordered by created_at descending, limited to the given count.
-func (s *Store) ListWorkItemsByParent(ctx context.Context, parentID string, limit int) ([]types.WorkItem, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	return s.listWorkItemsWhere(ctx, "parent_id = ?", []any{parentID}, limit)
-}
-
-// ListWorkItemsByState returns work items in the given state, ordered by
-// created_at descending, limited to the given count.
-func (s *Store) ListWorkItemsByState(ctx context.Context, state types.TaskState, limit int) ([]types.WorkItem, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	return s.listWorkItemsWhere(ctx, "state = ?", []any{string(state)}, limit)
-}
-
-func (s *Store) listWorkItemsWhere(ctx context.Context, where string, args []any, limit int) ([]types.WorkItem, error) {
-	query := `SELECT id, parent_id, owner_id, objective, state, result, error, created_at, updated_at
-	            FROM work_items`
-	if where != "" {
-		query += " WHERE " + where
-	}
-	query += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query work items: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var items []types.WorkItem
-	for rows.Next() {
-		item, err := scanWorkItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate work items: %w", err)
-	}
-	return items, nil
-}
-
-// scanWorkItem scans a work item record from a single row.
-func scanWorkItem(row interface{ Scan(...any) error }) (types.WorkItem, error) {
-	var item types.WorkItem
-	var createdAt, updatedAt string
-
-	err := row.Scan(
-		&item.ID,
-		&item.ParentID,
-		&item.OwnerID,
-		&item.Objective,
-		&item.State,
-		&item.Result,
-		&item.Error,
-		&createdAt,
-		&updatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return types.WorkItem{}, ErrNotFound
-		}
-		return types.WorkItem{}, fmt.Errorf("scan work item: %w", err)
-	}
-
-	item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return types.WorkItem{}, fmt.Errorf("parse created_at: %w", err)
-	}
-	item.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
-	if err != nil {
-		return types.WorkItem{}, fmt.Errorf("parse updated_at: %w", err)
-	}
-
-	return item, nil
 }

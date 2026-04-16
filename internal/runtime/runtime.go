@@ -16,9 +16,9 @@ import (
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
-// Runtime is the core runtime engine that manages task lifecycle, event
+// Runtime is the core runtime engine that manages run lifecycle, event
 // emission, and health state. It persists all state through
-// the store so that task handles and events survive sandbox process restarts
+// the store so that run handles and events survive sandbox process restarts
 // (VAL-RUNTIME-010).
 type Runtime struct {
 	cfg         Config
@@ -29,7 +29,7 @@ type Runtime struct {
 
 	mu      sync.Mutex
 	health  types.RuntimeHealthState
-	running map[string]context.CancelFunc // task_id → cancel function
+	running map[string]context.CancelFunc // run_id → cancel function
 
 	wg           sync.WaitGroup
 	toolRegistry *ToolRegistry
@@ -40,7 +40,7 @@ type Runtime struct {
 // New creates a new Runtime with the given config, store, event bus, and
 // provider. The runtime is idle until Start is called.
 // If a tool registry is provided, the runtime will use the tool-calling
-// loop for task execution instead of the simple provider bridge path.
+// loop for run execution instead of the simple provider bridge path.
 func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, opts ...RuntimeOption) *Runtime {
 	cfg = normalizeConfig(cfg)
 	rt := &Runtime{
@@ -59,6 +59,88 @@ func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, op
 	return rt
 }
 
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(metadata))
+	for k, v := range metadata {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func metadataStringValue(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func defaultAgentID(profile, ownerID string, metadata map[string]any) string {
+	if agentID := metadataStringValue(metadata, runMetadataAgentID); agentID != "" {
+		return agentID
+	}
+	switch profile {
+	case AgentProfileConductor:
+		if ownerID != "" {
+			return "conductor:" + ownerID
+		}
+	case AgentProfileVText:
+		if docID := metadataStringValue(metadata, "doc_id"); docID != "" {
+			return "vtext:" + docID
+		}
+	}
+	return uuid.New().String()
+}
+
+func defaultChannelID(profile string, metadata map[string]any, parent *types.RunRecord, agentID string) string {
+	if channelID := metadataStringValue(metadata, runMetadataChannelID); channelID != "" {
+		return channelID
+	}
+	if legacy := metadataStringValue(metadata, "work_id"); legacy != "" {
+		return legacy
+	}
+	if parent != nil && strings.TrimSpace(parent.ChannelID) != "" {
+		return strings.TrimSpace(parent.ChannelID)
+	}
+	if profile == AgentProfileVText {
+		if docID := metadataStringValue(metadata, "doc_id"); docID != "" {
+			return docID
+		}
+	}
+	return ""
+}
+
+func resolveRunIdentity(ownerID, sandboxID string, metadata map[string]any, parent *types.RunRecord) (types.AgentRecord, map[string]any) {
+	metadata = cloneMetadata(metadata)
+	profile := metadataStringValue(metadata, runMetadataAgentProfile)
+	if profile == "" {
+		if parent != nil && strings.TrimSpace(parent.AgentProfile) != "" && metadataStringValue(metadata, "type") != "vtext_agent_revision" {
+			profile = parent.AgentProfile
+		} else {
+			profile = agentProfileForRun(&types.RunRecord{Metadata: metadata})
+		}
+	}
+	role := metadataStringValue(metadata, runMetadataAgentRole)
+	if role == "" {
+		role = profile
+	}
+	agentID := defaultAgentID(profile, ownerID, metadata)
+	channelID := defaultChannelID(profile, metadata, parent, agentID)
+	metadata[runMetadataAgentProfile] = profile
+	metadata[runMetadataAgentRole] = role
+	return types.AgentRecord{
+		AgentID:   agentID,
+		OwnerID:   ownerID,
+		SandboxID: sandboxID,
+		Profile:   profile,
+		Role:      role,
+		ChannelID: channelID,
+	}, metadata
+}
+
 func (rt *Runtime) PromptStore() *PromptStore {
 	return rt.promptStore
 }
@@ -68,7 +150,7 @@ type RuntimeOption func(*Runtime)
 
 // WithToolRegistry sets the tool registry for the runtime. When a tool
 // registry is provided, the runtime uses the tool-calling loop instead
-// of the simple provider bridge path for task execution.
+// of the simple provider bridge path for run execution.
 func WithToolRegistry(registry *ToolRegistry) RuntimeOption {
 	return func(rt *Runtime) {
 		rt.toolRegistry = registry
@@ -83,20 +165,20 @@ func WithChannelManager(mgr *ChannelManager) RuntimeOption {
 	}
 }
 
-// Start begins runtime recovery and resumes tasks that were interrupted by a
+// Start begins runtime recovery and resumes runs that were interrupted by a
 // previous sandbox process exit.
 func (rt *Runtime) Start(ctx context.Context) {
-	rt.recoverInterruptedTasks(ctx)
+	rt.recoverInterruptedRuns(ctx)
 	log.Printf("runtime: started (sandbox=%s)", rt.cfg.SandboxID)
 }
 
-// Stop gracefully shuts down the runtime, cancelling all in-flight tasks.
+// Stop gracefully shuts down the runtime, cancelling all in-flight runs.
 // It is safe to call Stop multiple times.
 func (rt *Runtime) Stop() {
 	rt.mu.Lock()
-	for taskID, cancel := range rt.running {
+	for runID, cancel := range rt.running {
 		cancel()
-		delete(rt.running, taskID)
+		delete(rt.running, runID)
 	}
 	rt.mu.Unlock()
 
@@ -104,68 +186,70 @@ func (rt *Runtime) Stop() {
 	log.Printf("runtime: stopped")
 }
 
-// SubmitTask creates a new task, persists it, emits a submitted event, and
-// begins execution in a goroutine. It returns the task record with the stable
-// task ID and initial pending state (VAL-RUNTIME-003).
-func (rt *Runtime) SubmitTask(ctx context.Context, prompt, ownerID string) (*types.TaskRecord, error) {
-	return rt.SubmitTaskWithMetadata(ctx, prompt, ownerID, nil)
+// StartRun creates a new execution run, persists it, emits a submitted event,
+// and begins execution in a goroutine. It returns the record with the stable
+// run handle and initial pending state.
+func (rt *Runtime) StartRun(ctx context.Context, prompt, ownerID string) (*types.RunRecord, error) {
+	return rt.StartRunWithMetadata(ctx, prompt, ownerID, nil)
 }
 
-// SubmitTaskWithMetadata creates a new task with the given metadata, persists
-// it, emits a submitted event, and begins execution in a goroutine. Metadata
-// is used to carry feature-specific context (e.g., vtext agent revision info).
-func (rt *Runtime) SubmitTaskWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.TaskRecord, error) {
+// StartRunWithMetadata creates a new run with the given metadata, persists it,
+// emits a submitted event, and begins execution in a goroutine. Metadata is
+// used to carry feature-specific context (e.g., vtext agent revision info).
+func (rt *Runtime) StartRunWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.RunRecord, error) {
 	now := time.Now().UTC()
-	if metadata == nil {
-		metadata = make(map[string]any)
+	runID := uuid.New().String()
+	agentRec, metadata := resolveRunIdentity(ownerID, rt.cfg.SandboxID, metadata, nil)
+	if strings.TrimSpace(agentRec.ChannelID) == "" {
+		agentRec.ChannelID = runID
 	}
-	rec := &types.TaskRecord{
-		TaskID:    uuid.New().String(),
+	agentRec.CreatedAt = now
+	agentRec.UpdatedAt = now
+	if err := rt.store.UpsertAgent(ctx, agentRec); err != nil {
+		return nil, fmt.Errorf("persist agent: %w", err)
+	}
+	rec := &types.RunRecord{
+		RunID:        runID,
+		AgentID:      agentRec.AgentID,
+		ChannelID:    agentRec.ChannelID,
+		AgentProfile: agentRec.Profile,
+		AgentRole:    agentRec.Role,
 		OwnerID:   ownerID,
 		SandboxID: rt.cfg.SandboxID,
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    prompt,
 		CreatedAt: now,
 		UpdatedAt: now,
 		Metadata:  metadata,
 	}
-	if _, ok := rec.Metadata[taskMetadataAgentID]; !ok {
-		rec.Metadata[taskMetadataAgentID] = rec.TaskID
-	}
-	if _, ok := rec.Metadata[taskMetadataWorkID]; !ok {
-		rec.Metadata[taskMetadataWorkID] = rec.TaskID
-	}
-	if _, ok := rec.Metadata[taskMetadataAgentRole]; !ok {
-		rec.Metadata[taskMetadataAgentRole] = agentProfileForTask(rec)
-	}
 
-	if err := rt.store.CreateTask(ctx, *rec); err != nil {
-		return nil, fmt.Errorf("persist task: %w", err)
+	if err := rt.store.CreateRun(ctx, *rec); err != nil {
+		return nil, fmt.Errorf("persist run: %w", err)
 	}
 
 	promptLenPayload, _ := json.Marshal(map[string]int{"prompt_length": len(prompt)})
-	rt.emitEvent(ctx, rec, types.EventTaskSubmitted, events.CauseTaskLifecycle, promptLenPayload)
+	rt.emitEvent(ctx, rec, types.EventRunSubmitted, events.CauseTaskLifecycle, promptLenPayload)
 
 	// Begin execution in a goroutine. Use a copy of the record to avoid
-	// racing with the caller (the returned rec must retain TaskPending).
-	taskRec := *rec
+	// racing with the caller (the returned rec must retain RunPending).
+	runRec := *rec
 
-	taskCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.Background())
 	rt.mu.Lock()
-	rt.running[rec.TaskID] = cancel
+	rt.running[rec.RunID] = cancel
 	rt.mu.Unlock()
 
 	rt.wg.Add(1)
-	go rt.executeTask(taskCtx, &taskRec)
+	go rt.executeRun(runCtx, &runRec)
 
 	return rec, nil
 }
 
-// GetTask returns a task by ID, scoped to the given owner. If the task does
+// GetRun returns a run by ID, scoped to the given owner. If the run does
 // not exist or does not belong to the owner, it returns ErrNotFound
 // (VAL-RUNTIME-006: caller-scoped).
-func (rt *Runtime) GetTask(ctx context.Context, taskID, ownerID string) (*types.TaskRecord, error) {
-	rec, err := rt.store.GetTask(ctx, taskID)
+func (rt *Runtime) GetRun(ctx context.Context, runID, ownerID string) (*types.RunRecord, error) {
+	rec, err := rt.store.GetRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,75 +259,63 @@ func (rt *Runtime) GetTask(ctx context.Context, taskID, ownerID string) (*types.
 	return &rec, nil
 }
 
-// SpawnTask creates a child task linked to a parent task. It validates that
-// the parent task exists, creates both a runtime TaskRecord and a WorkItem
-// in the registry for parent-child tracking, and begins execution in a
-// goroutine (VAL-CHOIR-001, VAL-CHOIR-004).
+// StartChildRun creates a child run linked to a parent run. It validates that
+// the parent exists, creates a runtime record, and begins execution in a
+// goroutine.
 //
-// The child task inherits the owner from the ownerID parameter (derived from
-// auth context). Constraints are stored in the task metadata for use during
+// The child run inherits the owner from the ownerID parameter (derived from
+// auth context). Constraints are stored in the run metadata for use during
 // execution.
-func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID string, constraints map[string]any) (*types.TaskRecord, error) {
-	// Validate that the parent task exists.
-	_, err := rt.store.GetTask(ctx, parentID)
+func (rt *Runtime) StartChildRun(ctx context.Context, parentID, objective, ownerID string, constraints map[string]any) (*types.RunRecord, error) {
+	// Validate that the parent run exists.
+	parentRec, err := rt.store.GetRun(ctx, parentID)
 	if err != nil {
 		if err == store.ErrNotFound {
-			return nil, fmt.Errorf("parent task not found: %s", parentID)
+			return nil, fmt.Errorf("parent run not found: %s", parentID)
 		}
-		return nil, fmt.Errorf("lookup parent task: %w", err)
+		return nil, fmt.Errorf("lookup parent run: %w", err)
 	}
 
 	now := time.Now().UTC()
 
 	// Build metadata from constraints and parent reference.
 	metadata := map[string]any{
-		"parent_id":  parentID,
 		"spawned_by": ownerID,
+		"parent_id":  parentID,
 	}
 	for k, v := range constraints {
 		metadata[k] = v
 	}
+	runID := uuid.New().String()
+	agentRec, metadata := resolveRunIdentity(ownerID, rt.cfg.SandboxID, metadata, &parentRec)
+	if strings.TrimSpace(agentRec.ChannelID) == "" {
+		agentRec.ChannelID = runID
+	}
+	agentRec.CreatedAt = now
+	agentRec.UpdatedAt = now
+	if err := rt.store.UpsertAgent(ctx, agentRec); err != nil {
+		return nil, fmt.Errorf("persist child agent: %w", err)
+	}
 
-	taskID := uuid.New().String()
-
-	// Create the runtime task record.
-	rec := &types.TaskRecord{
-		TaskID:    taskID,
+	// Create the runtime run record.
+	rec := &types.RunRecord{
+		RunID:        runID,
+		AgentID:      agentRec.AgentID,
+		ChannelID:    agentRec.ChannelID,
+		ParentRunID:  parentID,
+		AgentProfile: agentRec.Profile,
+		AgentRole:    agentRec.Role,
 		OwnerID:   ownerID,
 		SandboxID: rt.cfg.SandboxID,
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    objective,
 		CreatedAt: now,
 		UpdatedAt: now,
 		Metadata:  metadata,
 	}
-	if _, ok := rec.Metadata[taskMetadataAgentID]; !ok {
-		rec.Metadata[taskMetadataAgentID] = rec.TaskID
-	}
-	if _, ok := rec.Metadata[taskMetadataWorkID]; !ok {
-		rec.Metadata[taskMetadataWorkID] = rec.TaskID
-	}
-	if _, ok := rec.Metadata[taskMetadataAgentRole]; !ok {
-		rec.Metadata[taskMetadataAgentRole] = agentProfileForTask(rec)
-	}
 
-	if err := rt.store.CreateTask(ctx, *rec); err != nil {
-		return nil, fmt.Errorf("persist spawned task: %w", err)
-	}
-
-	// Create the work item in the registry for parent-child tracking.
-	workItem := types.WorkItem{
-		ID:        taskID,
-		ParentID:  parentID,
-		OwnerID:   ownerID,
-		Objective: objective,
-		State:     types.TaskPending,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	if err := rt.store.CreateWorkItem(ctx, workItem); err != nil {
-		return nil, fmt.Errorf("persist work item: %w", err)
+	if err := rt.store.CreateRun(ctx, *rec); err != nil {
+		return nil, fmt.Errorf("persist child run: %w", err)
 	}
 
 	// Emit submitted event.
@@ -251,48 +323,49 @@ func (rt *Runtime) SpawnTask(ctx context.Context, parentID, objective, ownerID s
 		"prompt_length": len(objective),
 		"parent_id":     parentID,
 	})
-	rt.emitEvent(ctx, rec, types.EventTaskSubmitted, events.CauseTaskLifecycle, objectiveLenPayload)
+	rt.emitEvent(ctx, rec, types.EventRunSubmitted, events.CauseTaskLifecycle, objectiveLenPayload)
 
 	// Begin execution in a goroutine. Use a copy of the record to avoid
-	// racing with the caller (the returned rec must retain TaskPending).
-	taskRec := *rec
+	// racing with the caller (the returned rec must retain RunPending).
+	runRec := *rec
 
-	taskCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.Background())
 	rt.mu.Lock()
-	rt.running[rec.TaskID] = cancel
+	rt.running[rec.RunID] = cancel
 	rt.mu.Unlock()
 
 	rt.wg.Add(1)
-	go rt.executeTask(taskCtx, &taskRec)
+	go rt.executeRun(runCtx, &runRec)
 
-	log.Printf("runtime: spawned child task %s for parent %s (owner=%s)", taskID, parentID, ownerID)
+	log.Printf("runtime: started child run %s for parent %s (owner=%s)", rec.RunID, parentID, ownerID)
 
-	// Ensure channels exist for both parent and child, enabling immediate
-	// bidirectional communication (VAL-CHOIR-006). Children post results to
-	// the parent's channel; parents can read/wait on it.
-	if err := rt.channelMgr.ensureParentChildChannels(parentID, taskID); err != nil {
-		log.Printf("runtime: ensure channels for spawned task %s: %v", taskID, err)
-		// Non-fatal: channels will be created lazily on first access.
+	if _, err := rt.channelMgr.Channel(parentRec.ChannelID); err != nil {
+		log.Printf("runtime: ensure parent channel %s: %v", parentRec.ChannelID, err)
+	}
+	if rec.ChannelID != "" && rec.ChannelID != parentRec.ChannelID {
+		if _, err := rt.channelMgr.Channel(rec.ChannelID); err != nil {
+			log.Printf("runtime: ensure child channel %s: %v", rec.ChannelID, err)
+		}
 	}
 
 	return rec, nil
 }
 
-// CancelTask cancels a running or pending task. It validates that the task
-// exists and belongs to the given owner, then cancels the task's context
+// CancelRun cancels a running or pending run. It validates that the run
+// exists and belongs to the given owner, then cancels the run's context
 // and transitions it to cancelled state (VAL-CHOIR-010).
 //
 // Returns an error if:
-//   - the task does not exist
-//   - the task belongs to a different owner
-//   - the task is already in a terminal state
-func (rt *Runtime) CancelTask(ctx context.Context, taskID, ownerID string) error {
-	rec, err := rt.store.GetTask(ctx, taskID)
+//   - the run does not exist
+//   - the run belongs to a different owner
+//   - the run is already in a terminal state
+func (rt *Runtime) CancelRun(ctx context.Context, runID, ownerID string) error {
+	rec, err := rt.store.GetRun(ctx, runID)
 	if err != nil {
 		if err == store.ErrNotFound {
-			return fmt.Errorf("task not found: %s", taskID)
+			return fmt.Errorf("run not found: %s", runID)
 		}
-		return fmt.Errorf("lookup task: %w", err)
+		return fmt.Errorf("lookup run: %w", err)
 	}
 
 	// Ownership check.
@@ -300,45 +373,55 @@ func (rt *Runtime) CancelTask(ctx context.Context, taskID, ownerID string) error
 		return store.ErrNotFound
 	}
 
-	// Only running or pending tasks can be cancelled.
+	// Only running or pending runs can be cancelled.
 	if rec.State.Terminal() {
-		return fmt.Errorf("cannot cancel task in %s state", rec.State)
+		return fmt.Errorf("cannot cancel run in %s state", rec.State)
 	}
 
-	// Cancel the task's execution context.
+	// Cancel the run's execution context.
 	rt.mu.Lock()
-	cancel, ok := rt.running[taskID]
+	cancel, ok := rt.running[runID]
 	if ok {
 		cancel()
-		delete(rt.running, taskID)
+		delete(rt.running, runID)
 	}
 	rt.mu.Unlock()
 
 	if !ok {
-		// Task was not running in this process (e.g., pending or recovered).
+		// Run was not running in this process (e.g., pending or recovered).
 		// Transition it directly to cancelled.
 		now := time.Now().UTC()
-		rec.State = types.TaskCancelled
+		rec.State = types.RunCancelled
 		rec.UpdatedAt = now
 		rec.FinishedAt = &now
-		if err := rt.store.UpdateTask(ctx, rec); err != nil {
-			return fmt.Errorf("update cancelled task: %w", err)
+		if err := rt.store.UpdateRun(ctx, rec); err != nil {
+			return fmt.Errorf("update cancelled run: %w", err)
 		}
 
-		errPayload, _ := json.Marshal(map[string]string{"error": "task cancelled"})
-		rt.emitEvent(ctx, &rec, types.EventTaskCancelled, events.CauseTaskLifecycle, errPayload)
+		errPayload, _ := json.Marshal(map[string]string{"error": "run cancelled"})
+		rt.emitEvent(ctx, &rec, types.EventRunCancelled, events.CauseTaskLifecycle, errPayload)
 
-		// Update work item state.
-		rt.updateWorkItemState(ctx, taskID, types.TaskCancelled, "", "task cancelled")
 	}
 
 	return nil
 }
 
-// ListTasksByOwner returns recent tasks for the given owner, ordered by
+// CancelAgent cancels the most recent non-terminal run owned by the given agent.
+func (rt *Runtime) CancelAgent(ctx context.Context, agentID, ownerID string) error {
+	rec, err := rt.store.GetLatestActiveRunByAgent(ctx, ownerID, agentID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return fmt.Errorf("agent not found: %s", agentID)
+		}
+		return fmt.Errorf("lookup active agent run: %w", err)
+	}
+	return rt.CancelRun(ctx, rec.RunID, ownerID)
+}
+
+// ListRunsByOwner returns recent runs for the given owner, ordered by
 // creation time descending.
-func (rt *Runtime) ListTasksByOwner(ctx context.Context, ownerID string, limit int) ([]types.TaskRecord, error) {
-	return rt.store.ListTasksByOwner(ctx, ownerID, limit)
+func (rt *Runtime) ListRunsByOwner(ctx context.Context, ownerID string, limit int) ([]types.RunRecord, error) {
+	return rt.store.ListRunsByOwner(ctx, ownerID, limit)
 }
 
 // HealthState returns the current runtime health state.
@@ -388,7 +471,7 @@ func (rt *Runtime) SetHealth(state types.RuntimeHealthState) {
 	})
 
 	// Also persist the health event for post-restart recovery visibility.
-	var rec types.TaskRecord // runtime-level events have no specific task
+	var rec types.RunRecord // runtime-level events have no specific task
 	_ = rt.persistEvent(ctx, &rec, kind, payload)
 }
 
@@ -402,7 +485,7 @@ func (rt *Runtime) Store() *store.Store {
 	return rt.store
 }
 
-// RunningCount returns the number of currently executing tasks.
+// RunningCount returns the number of currently executing runs.
 func (rt *Runtime) RunningCount() int {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -419,64 +502,61 @@ func (rt *Runtime) ChannelManager() *ChannelManager {
 	return rt.channelMgr
 }
 
-// recoverInterruptedTasks finds tasks that were in non-terminal states when
+// recoverInterruptedRuns finds runs that were in non-terminal states when
 // the runtime previously stopped and resolves them to explicit outcomes
 // (VAL-RUNTIME-010).
-func (rt *Runtime) recoverInterruptedTasks(ctx context.Context) {
-	states := []types.TaskState{types.TaskPending, types.TaskRunning}
+func (rt *Runtime) recoverInterruptedRuns(ctx context.Context) {
+	states := []types.RunState{types.RunPending, types.RunRunning}
 	for _, state := range states {
-		tasks, err := rt.store.ListTasksByState(ctx, state, 100)
+		runs, err := rt.store.ListRunsByState(ctx, state, 100)
 		if err != nil {
-			log.Printf("runtime: recovery: query %s tasks: %v", state, err)
+			log.Printf("runtime: recovery: query %s runs: %v", state, err)
 			continue
 		}
-		for i := range tasks {
-			rec := &tasks[i]
+		for i := range runs {
+			rec := &runs[i]
 			now := time.Now().UTC()
-			rec.State = types.TaskFailed
-			rec.Error = "runtime restarted, task interrupted"
+			rec.State = types.RunFailed
+			rec.Error = "runtime restarted, run interrupted"
 			rec.UpdatedAt = now
 			rec.FinishedAt = &now
 
-			if err := rt.store.UpdateTask(ctx, *rec); err != nil {
-				log.Printf("runtime: recovery: update task %s: %v", rec.TaskID, err)
+			if err := rt.store.UpdateRun(ctx, *rec); err != nil {
+				log.Printf("runtime: recovery: update run %s: %v", rec.RunID, err)
 				continue
 			}
-			rt.emitEvent(ctx, rec, types.EventTaskFailed, events.CauseSupervisorRecovery,
+			rt.emitEvent(ctx, rec, types.EventRunFailed, events.CauseSupervisorRecovery,
 				json.RawMessage(`{"recovery":"interrupted_on_restart"}`))
-			log.Printf("runtime: recovered task %s (was %s) -> failed", rec.TaskID, state)
+			log.Printf("runtime: recovered run %s (was %s) -> failed", rec.RunID, state)
 		}
 	}
 }
 
-// executeTask runs a task to completion using the configured provider.
-// It transitions the task through pending → running → completed/failed/blocked,
+// executeRun runs a run to completion using the configured provider.
+// It transitions the run through pending → running → completed/failed/blocked,
 // emitting events at each transition.
 //
-// When a tool registry is configured, the task executes through the real
+// When a tool registry is configured, the run executes through the real
 // tool-calling loop (RunToolLoop), which handles tool_use stop reasons by
 // invoking registered Go function-call tools and feeding results back to the
-// provider. When no tool registry is configured, the task uses the simpler
+// provider. When no tool registry is configured, the run uses the simpler
 // Provider.Execute path (stub or bridge provider).
-func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
+func (rt *Runtime) executeRun(ctx context.Context, rec *types.RunRecord) {
 	defer rt.wg.Done()
-	defer rt.removeRunning(rec.TaskID)
+	defer rt.removeRunning(rec.RunID)
 
 	now := time.Now().UTC()
 
 	// Transition to running.
-	rec.State = types.TaskRunning
+	rec.State = types.RunRunning
 	rec.UpdatedAt = now
-	if err := rt.store.UpdateTask(ctx, *rec); err != nil {
-		log.Printf("runtime: update task %s to running: %v", rec.TaskID, err)
-		rt.handleExecutionError(ctx, rec, fmt.Errorf("update task state: %w", err))
+	if err := rt.store.UpdateRun(ctx, *rec); err != nil {
+		log.Printf("runtime: update run %s to running: %v", rec.RunID, err)
+		rt.handleExecutionError(ctx, rec, fmt.Errorf("update run state: %w", err))
 		return
 	}
 
-	// Update work item state to running if this is a spawned child task.
-	rt.updateWorkItemState(ctx, rec.TaskID, types.TaskRunning, "", "")
-
-	rt.emitEvent(ctx, rec, types.EventTaskStarted, events.CauseTaskLifecycle,
+	rt.emitEvent(ctx, rec, types.EventRunStarted, events.CauseTaskLifecycle,
 		json.RawMessage(`{}`))
 
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
@@ -484,13 +564,13 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		if kind == types.EventToolInvoked || kind == types.EventToolResult {
 			cause = events.CauseToolExecution
 		}
-		// Also emit vtext-specific progress events for agent revision tasks.
+		// Also emit vtext-specific progress events for agent revision runs.
 		if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
 			if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
-				if kind == types.EventTaskProgress {
+				if kind == types.EventRunProgress {
 					progressPayload, _ := json.Marshal(map[string]string{
 						"doc_id":  docID,
-						"task_id": rec.TaskID,
+						"run_id": rec.RunID,
 						"phase":   phase,
 					})
 					rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionProgress,
@@ -501,7 +581,7 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 		rt.emitEvent(ctx, rec, kind, cause, payload)
 	}
 
-	registry := rt.toolRegistryForTask(rec)
+	registry := rt.toolRegistryForRun(rec)
 
 	// Use the tool-calling loop if a tool registry is configured and the
 	// provider supports the ToolLoopProvider interface. Otherwise, fall back
@@ -513,13 +593,13 @@ func (rt *Runtime) executeTask(ctx context.Context, rec *types.TaskRecord) {
 	}
 }
 
-// executeWithToolLoop runs the task through the real tool-calling loop.
+// executeWithToolLoop runs the run through the real tool-calling loop.
 // This is the primary execution path when a tool registry is configured,
 // enabling the LLM to invoke registered Go function-call tools.
-func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecord, registry *ToolRegistry, emit EventEmitFunc) {
+func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.RunRecord, registry *ToolRegistry, emit EventEmitFunc) {
 	tlp := asToolLoopProvider(rt.provider)
 
-	// Build the initial conversation from the task prompt.
+	// Build the initial conversation from the run prompt.
 	initialMessages := []json.RawMessage{}
 	userMsg, _ := json.Marshal(map[string]any{
 		"role": "user",
@@ -529,7 +609,7 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	})
 	initialMessages = append(initialMessages, userMsg)
 
-	systemPrompt, err := rt.systemPromptForTask(rec)
+	systemPrompt, err := rt.systemPromptForRun(rec)
 	if err != nil {
 		rt.handleExecutionError(ctx, rec, err)
 		return
@@ -548,12 +628,12 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 
 	// Transition to completed.
 	now := time.Now().UTC()
-	rec.State = types.TaskCompleted
+	rec.State = types.RunCompleted
 	rec.Result = text
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
 
-	rt.normalizeCompletedTaskResult(rec)
+	rt.normalizeCompletedRunResult(rec)
 
 	// Store token usage in metadata.
 	if rec.Metadata == nil {
@@ -562,18 +642,18 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	rec.Metadata["input_tokens"] = usage.InputTokens
 	rec.Metadata["output_tokens"] = usage.OutputTokens
 
-	// For vtext agent revision tasks, create the canonical revision and emit the
-	// vtext completion event before the task is surfaced as completed. This keeps
-	// task completion aligned with document-version availability.
-	rt.handleTaskCompletion(ctx, rec)
+	// For vtext agent revision runs, create the canonical revision and emit the
+	// vtext completion event before the run is surfaced as completed. This keeps
+	// run completion aligned with document-version availability.
+	rt.handleRunCompletion(ctx, rec)
 
 	// Use a background context for post-provider persistence so that a fast
 	// shutdown or cancellation after the provider returns cannot drop the
-	// completed-task transition or parent notification.
+	// completed-run transition or parent notification.
 	persistCtx := context.Background()
 
-	if err := rt.store.UpdateTask(persistCtx, *rec); err != nil {
-		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
+	if err := rt.store.UpdateRun(persistCtx, *rec); err != nil {
+		log.Printf("runtime: update run %s to completed: %v", rec.RunID, err)
 		return
 	}
 	resultLenPayload, _ := json.Marshal(map[string]any{
@@ -581,24 +661,21 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 		"input_tokens":  usage.InputTokens,
 		"output_tokens": usage.OutputTokens,
 	})
-	rt.emitEvent(persistCtx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+	rt.emitEvent(persistCtx, rec, types.EventRunCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
-	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(persistCtx, rec.TaskID, types.TaskCompleted, rec.Result, "")
-
-	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
+	// Notify parent channel of child run completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(persistCtx, rec)
 
 }
 
-// executeWithProvider runs the task through the simple Provider.Execute path.
+// executeWithProvider runs the run through the simple Provider.Execute path.
 // This is the legacy execution path used when no tool registry is configured
 // (stub provider or bridge provider without tool-calling support).
-func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecord, emit EventEmitFunc) {
+func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.RunRecord, emit EventEmitFunc) {
 	// Execute through the provider. The provider may set rec.Result
 	// directly (e.g., BridgeProvider sets it from the LLM response text).
 	execRec := *rec
-	execPrompt, err := rt.providerPromptForTask(rec)
+	execPrompt, err := rt.providerPromptForRun(rec)
 	if err != nil {
 		rt.handleExecutionError(ctx, rec, err)
 		return
@@ -613,7 +690,7 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 
 	// Transition to completed.
 	now := time.Now().UTC()
-	rec.State = types.TaskCompleted
+	rec.State = types.RunCompleted
 	result := rec.Result
 	if result == "" {
 		result = rt.providerResult()
@@ -622,56 +699,56 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecor
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
 
-	rt.normalizeCompletedTaskResult(rec)
+	rt.normalizeCompletedRunResult(rec)
 
-	// For vtext agent revision tasks, create the canonical revision and emit the
-	// vtext completion event before the task is surfaced as completed. This keeps
-	// task completion aligned with document-version availability.
-	rt.handleTaskCompletion(ctx, rec)
+	// For vtext agent revision runs, create the canonical revision and emit the
+	// vtext completion event before the run is surfaced as completed. This keeps
+	// run completion aligned with document-version availability.
+	rt.handleRunCompletion(ctx, rec)
 
 	// Use a background context for post-provider persistence so that a fast
 	// shutdown or cancellation after the provider returns cannot drop the
-	// completed-task transition or parent notification.
+	// completed-run transition or parent notification.
 	persistCtx := context.Background()
 
-	if err := rt.store.UpdateTask(persistCtx, *rec); err != nil {
-		log.Printf("runtime: update task %s to completed: %v", rec.TaskID, err)
+	if err := rt.store.UpdateRun(persistCtx, *rec); err != nil {
+		log.Printf("runtime: update run %s to completed: %v", rec.RunID, err)
 		return
 	}
 	resultLenPayload, _ := json.Marshal(map[string]int{"result_length": len(result)})
-	rt.emitEvent(persistCtx, rec, types.EventTaskCompleted, events.CauseTaskLifecycle, resultLenPayload)
+	rt.emitEvent(persistCtx, rec, types.EventRunCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
-	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(persistCtx, rec.TaskID, types.TaskCompleted, rec.Result, "")
-
-	// Notify parent channel of child task completion (VAL-CHOIR-006, VAL-CHOIR-008).
+	// Notify parent channel of child run completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(persistCtx, rec)
 
 }
 
-func (rt *Runtime) normalizeCompletedTaskResult(rec *types.TaskRecord) {
+func (rt *Runtime) normalizeCompletedRunResult(rec *types.RunRecord) {
 	if rec == nil {
 		return
 	}
-	if agentProfileForTask(rec) != AgentProfileConductor {
+	if agentProfileForRun(rec) != AgentProfileConductor {
 		return
 	}
 	rec.Result = normalizeConductorDecision(rec)
 }
 
-func normalizeConductorDecision(rec *types.TaskRecord) string {
+type conductorDecision struct {
+	Action               string `json:"action"`
+	App                  string `json:"app,omitempty"`
+	Title                string `json:"title,omitempty"`
+	SeedPrompt           string `json:"seed_prompt,omitempty"`
+	InitialContent       string `json:"initial_content,omitempty"`
+	CreateInitialVersion *bool  `json:"create_initial_version,omitempty"`
+	Message              string `json:"message,omitempty"`
+	DocID                string `json:"doc_id,omitempty"`
+	InitialRevisionID    string `json:"initial_revision_id,omitempty"`
+	InitialRunID        string `json:"initial_run_id,omitempty"`
+}
+
+func normalizeConductorDecision(rec *types.RunRecord) string {
 	if rec == nil {
 		return `{"action":"open_app","app":"vtext","title":"VText","seed_prompt":"","initial_content":"","create_initial_version":true}`
-	}
-
-	type conductorDecision struct {
-		Action               string `json:"action"`
-		App                  string `json:"app,omitempty"`
-		Title                string `json:"title,omitempty"`
-		SeedPrompt           string `json:"seed_prompt,omitempty"`
-		InitialContent       string `json:"initial_content,omitempty"`
-		CreateInitialVersion *bool  `json:"create_initial_version,omitempty"`
-		Message              string `json:"message,omitempty"`
 	}
 
 	seedPrompt, _ := rec.Metadata["seed_prompt"].(string)
@@ -745,8 +822,88 @@ func ptrBool(v bool) *bool {
 	return &v
 }
 
-// handleTaskCompletion processes feature-specific side effects after a task
-// completes successfully. For vtext agent revision tasks, it creates the
+func (rt *Runtime) materializeConductorDecision(rec *types.RunRecord) {
+	if rec == nil || agentProfileForRun(rec) != AgentProfileConductor {
+		return
+	}
+
+	var decision conductorDecision
+	if err := json.Unmarshal([]byte(strings.TrimSpace(rec.Result)), &decision); err != nil {
+		return
+	}
+	if decision.Action != "open_app" || decision.App != AgentProfileVText || strings.TrimSpace(decision.DocID) != "" {
+		return
+	}
+
+	initialContent := strings.TrimSpace(decision.InitialContent)
+	if initialContent == "" {
+		initialContent = strings.TrimSpace(decision.SeedPrompt)
+	}
+
+	persistCtx := context.Background()
+	now := time.Now().UTC()
+	doc := types.Document{
+		DocID:     uuid.New().String(),
+		OwnerID:   rec.OwnerID,
+		Title:     decision.Title,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if strings.TrimSpace(doc.Title) == "" {
+		doc.Title = "VText"
+	}
+	if err := rt.store.CreateDocument(persistCtx, doc); err != nil {
+		log.Printf("runtime: conductor run %s: create vtext document: %v", rec.RunID, err)
+		return
+	}
+
+	revMeta, _ := json.Marshal(map[string]any{
+		"seed_prompt":       decision.SeedPrompt,
+		"conductor_run_id": rec.RunID,
+		"created_from":      "conductor",
+	})
+	rev := types.Revision{
+		RevisionID:  uuid.New().String(),
+		DocID:       doc.DocID,
+		OwnerID:     rec.OwnerID,
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: rec.OwnerID,
+		Content:     initialContent,
+		Citations:   json.RawMessage("[]"),
+		Metadata:    revMeta,
+		CreatedAt:   now,
+	}
+	if err := rt.store.CreateRevision(persistCtx, rev); err != nil {
+		log.Printf("runtime: conductor run %s: create initial vtext revision: %v", rec.RunID, err)
+		return
+	}
+
+	doc.CurrentRevisionID = rev.RevisionID
+	initialRun, err := rt.submitVTextAgentRevisionRun(persistCtx, doc, rec.OwnerID, vtextAgentRevisionRequest{Intent: "create"}, rec.RunID)
+	if err != nil {
+		log.Printf("runtime: conductor run %s: submit initial vtext revision: %v", rec.RunID, err)
+	}
+
+	decision.DocID = doc.DocID
+	decision.InitialRevisionID = rev.RevisionID
+	if initialRun != nil {
+		decision.InitialRunID = initialRun.RunID
+	}
+	if out, err := json.Marshal(decision); err == nil {
+		rec.Result = string(out)
+	}
+	if rec.Metadata == nil {
+		rec.Metadata = make(map[string]any)
+	}
+	rec.Metadata["doc_id"] = doc.DocID
+	rec.Metadata["initial_revision_id"] = rev.RevisionID
+	if initialRun != nil {
+		rec.Metadata["initial_run_id"] = initialRun.RunID
+	}
+}
+
+// handleRunCompletion processes feature-specific side effects after a run
+// completes successfully. For vtext agent revision runs, it creates the
 // canonical appagent-authored revision and emits the completion event
 // (VAL-ETEXT-003, VAL-CROSS-120).
 //
@@ -754,7 +911,12 @@ func ptrBool(v bool) *bool {
 // is created per mutation, even if the completion is processed multiple times
 // (e.g., after crash recovery). This prevents duplicate canonical revisions
 // (VAL-CROSS-122).
-func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskRecord) {
+func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord) {
+	if agentProfileForRun(rec) == AgentProfileConductor {
+		rt.materializeConductorDecision(rec)
+		return
+	}
+
 	taskType, _ := rec.Metadata["type"].(string)
 	if taskType != "vtext_agent_revision" {
 		return
@@ -762,29 +924,29 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 
 	// Use a background context for post-completion persistence so the canonical
 	// revision and completion event survive a fast runtime shutdown that
-	// cancels the task context immediately after the provider returns.
+	// cancels the run context immediately after the provider returns.
 	persistCtx := context.Background()
 
 	docID, _ := rec.Metadata["doc_id"].(string)
 	if docID == "" {
-		log.Printf("runtime: vtext agent revision task %s: missing doc_id in metadata", rec.TaskID)
+		log.Printf("runtime: vtext agent revision run %s: missing doc_id in metadata", rec.RunID)
 		return
 	}
 
 	// Check the agent mutation record to ensure we don't create a duplicate
 	// canonical revision (VAL-CROSS-122).
-	mutation, err := rt.store.GetAgentMutationByTask(persistCtx, rec.TaskID)
+	mutation, err := rt.store.GetAgentMutationByRun(persistCtx, rec.RunID)
 	if err != nil {
-		log.Printf("runtime: vtext agent revision task %s: get mutation: %v", rec.TaskID, err)
+		log.Printf("runtime: vtext agent revision run %s: get mutation: %v", rec.RunID, err)
 		return
 	}
 	if mutation == nil {
-		log.Printf("runtime: vtext agent revision task %s: no mutation record found", rec.TaskID)
+		log.Printf("runtime: vtext agent revision run %s: no mutation record found", rec.RunID)
 		return
 	}
 	if mutation.State == "completed" {
 		// Already created the revision — idempotent skip.
-		log.Printf("runtime: vtext agent revision task %s: mutation already completed, skipping", rec.TaskID)
+		log.Printf("runtime: vtext agent revision run %s: mutation already completed, skipping", rec.RunID)
 		return
 	}
 
@@ -797,8 +959,8 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 	// Get the current document state for the parent revision ID.
 	doc, err := rt.store.GetDocument(persistCtx, docID, ownerID)
 	if err != nil {
-		log.Printf("runtime: vtext agent revision task %s: get document: %v", rec.TaskID, err)
-		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
+		log.Printf("runtime: vtext agent revision run %s: get document: %v", rec.RunID, err)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		return
 	}
 
@@ -815,7 +977,7 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 
 	// Build revision metadata that preserves durable context keys from
 	// the parent revision so that subsequent revise requests can still
-	// read seed_prompt, source_path, conductor_task_id, etc.
+	// read seed_prompt, source_path, conductor_run_id, etc.
 	revMeta := buildAppagentRevisionMetadata(rec, doc, ownerID, rt.store)
 
 	now := time.Now().UTC()
@@ -833,19 +995,19 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 	}
 
 	if err := rt.store.CreateRevision(persistCtx, rev); err != nil {
-		log.Printf("runtime: vtext agent revision task %s: create revision: %v", rec.TaskID, err)
-		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
+		log.Printf("runtime: vtext agent revision run %s: create revision: %v", rec.RunID, err)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		return
 	}
 
 	// Mark the mutation as completed. If this fails because it's already
 	// completed, the revision was already created — no duplicate
 	// (VAL-CROSS-122).
-	if err := rt.store.CompleteAgentMutation(persistCtx, rec.TaskID, rev.RevisionID); err != nil {
+	if err := rt.store.CompleteAgentMutation(persistCtx, rec.RunID, rev.RevisionID); err != nil {
 		if err == store.ErrMutationAlreadyCompleted {
-			log.Printf("runtime: vtext agent revision task %s: mutation already completed (race condition), revision %s is the canonical one", rec.TaskID, rev.RevisionID)
+			log.Printf("runtime: vtext agent revision run %s: mutation already completed (race condition), revision %s is the canonical one", rec.RunID, rev.RevisionID)
 		} else {
-			log.Printf("runtime: vtext agent revision task %s: complete mutation: %v", rec.TaskID, err)
+			log.Printf("runtime: vtext agent revision run %s: complete mutation: %v", rec.RunID, err)
 		}
 	}
 
@@ -855,12 +1017,12 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 	completedPayload, _ := json.Marshal(map[string]string{
 		"doc_id":      docID,
 		"revision_id": rev.RevisionID,
-		"task_id":     rec.TaskID,
+		"run_id":     rec.RunID,
 	})
 	rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionCompleted,
 		events.CauseTaskLifecycle, completedPayload)
 
-	log.Printf("runtime: vtext agent revision task %s: created canonical revision %s for doc %s", rec.TaskID, rev.RevisionID, docID)
+	log.Printf("runtime: vtext agent revision run %s: created canonical revision %s for doc %s", rec.RunID, rev.RevisionID, docID)
 }
 
 // durableMetadataKeys lists the revision metadata keys that must survive
@@ -869,16 +1031,16 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 var durableMetadataKeys = []string{
 	"seed_prompt",
 	"source_path",
-	"conductor_task_id",
+	"conductor_run_id",
 }
 
 // buildAppagentRevisionMetadata constructs the metadata JSON for an
 // appagent-authored revision, carrying forward durable context keys
 // from the parent revision so they remain available on the next revise.
-func buildAppagentRevisionMetadata(rec *types.TaskRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
+func buildAppagentRevisionMetadata(rec *types.RunRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
 	meta := map[string]any{
 		"source":  "agent_revision",
-		"task_id": rec.TaskID,
+		"run_id": rec.RunID,
 	}
 
 	// Carry forward durable keys from the parent revision metadata.
@@ -893,12 +1055,12 @@ func buildAppagentRevisionMetadata(rec *types.TaskRecord, doc types.Document, ow
 		}
 	}
 
-	// Also carry forward from task metadata (the initial agent revision
+	// Also carry forward from run metadata (the initial agent revision
 	// request sets these directly).
 	if rec.Metadata != nil {
 		for _, key := range durableMetadataKeys {
 			if val, ok := rec.Metadata[key]; ok && val != nil && val != "" {
-				// Task metadata takes precedence over parent revision.
+				// Run metadata takes precedence over parent revision.
 				meta[key] = val
 			}
 		}
@@ -906,32 +1068,32 @@ func buildAppagentRevisionMetadata(rec *types.TaskRecord, doc types.Document, ow
 
 	data, err := json.Marshal(meta)
 	if err != nil {
-		return json.RawMessage(`{"source":"agent_revision","task_id":"` + rec.TaskID + `"}`)
+		return json.RawMessage(`{"source":"agent_revision","run_id":"` + rec.RunID + `"}`)
 	}
 	return data
 }
 
-// handleExecutionError transitions a task to failed/blocked and emits the
-// appropriate event. The runtime remains available for later tasks
+// handleExecutionError transitions a run to failed/blocked and emits the
+// appropriate event. The runtime remains available for later runs
 // (VAL-RUNTIME-008).
 //
 // Note: When the error is caused by context cancellation (runtime shutdown),
 // the passed ctx will be cancelled. We use context.Background() for the
-// critical store updates so that the task state is properly persisted even
+// critical store updates so that the run state is properly persisted even
 // during shutdown (VAL-CHOIR-009, VAL-CHOIR-010).
-func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskRecord, err error) {
+func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.RunRecord, err error) {
 	now := time.Now().UTC()
 
 	// Determine if the failure is recoverable (blocked) or permanent (failed).
-	state := types.TaskFailed
-	kind := types.EventTaskFailed
+	state := types.RunFailed
+	kind := types.EventRunFailed
 	cause := events.CauseProviderFailure
 
 	if ctx.Err() != nil {
 		// Context cancellation means the runtime is shutting down or the
-		// task was cancelled, not a provider failure. Treat as cancelled.
-		state = types.TaskCancelled
-		kind = types.EventTaskCancelled
+		// run was cancelled, not a provider failure. Treat as cancelled.
+		state = types.RunCancelled
+		kind = types.EventRunCancelled
 		cause = events.CauseTaskLifecycle
 	}
 
@@ -940,11 +1102,11 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	rec.UpdatedAt = now
 	rec.FinishedAt = &now
 
-	// Use background context for persistence so that cancelled-task state
-	// transitions are persisted even when the task context is cancelled.
+	// Use background context for persistence so that cancelled-run state
+	// transitions are persisted even when the run context is cancelled.
 	persistCtx := context.Background()
-	if updateErr := rt.store.UpdateTask(persistCtx, *rec); updateErr != nil {
-		log.Printf("runtime: update task %s to %s: %v", rec.TaskID, state, updateErr)
+	if updateErr := rt.store.UpdateRun(persistCtx, *rec); updateErr != nil {
+		log.Printf("runtime: update run %s to %s: %v", rec.RunID, state, updateErr)
 	}
 
 	errPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -953,11 +1115,11 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 	// If this is an vtext agent revision task, mark the mutation as failed
 	// and emit the vtext-specific failure event.
 	if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
-		_ = rt.store.FailAgentMutation(persistCtx, rec.TaskID)
+		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
 				"doc_id":  docID,
-				"task_id": rec.TaskID,
+				"run_id": rec.RunID,
 				"error":   err.Error(),
 			})
 			rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
@@ -965,13 +1127,10 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.TaskReco
 		}
 	}
 
-	log.Printf("runtime: task %s → %s: %v", rec.TaskID, state, err)
+	log.Printf("runtime: run %s → %s: %v", rec.RunID, state, err)
 
-	// Update work item state for spawned child tasks (VAL-CHOIR-008).
-	rt.updateWorkItemState(persistCtx, rec.TaskID, state, "", err.Error())
-
-	// Notify parent channel of child task failure (VAL-CHOIR-006, VAL-CHOIR-009).
-	if state == types.TaskFailed || state == types.TaskCancelled {
+	// Notify parent channel of child run failure (VAL-CHOIR-006, VAL-CHOIR-009).
+	if state == types.RunFailed || state == types.RunCancelled {
 		rt.notifyParent(persistCtx, rec)
 	}
 }
@@ -981,15 +1140,17 @@ func (rt *Runtime) providerResult() string {
 	if sp, ok := rt.provider.(*StubProvider); ok {
 		return sp.Result
 	}
-	return "Task completed."
+	return "Run completed."
 }
 
 // emitEvent creates and persists an event record, then publishes it on the
 // event bus for live streaming.
-func (rt *Runtime) emitEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
+func (rt *Runtime) emitEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
 	evRec := &types.EventRecord{
 		EventID:   uuid.New().String(),
-		TaskID:    rec.TaskID,
+		RunID:    rec.RunID,
+		AgentID:  rec.AgentID,
+		ChannelID: rec.ChannelID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),
 		Kind:      kind,
@@ -1009,10 +1170,12 @@ func (rt *Runtime) emitEvent(ctx context.Context, rec *types.TaskRecord, kind ty
 
 // persistEvent persists an event record without publishing it on the bus.
 // Used for recovery events that may have occurred before subscribers connect.
-func (rt *Runtime) persistEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, payload json.RawMessage) error {
+func (rt *Runtime) persistEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, payload json.RawMessage) error {
 	evRec := &types.EventRecord{
 		EventID:   uuid.New().String(),
-		TaskID:    rec.TaskID,
+		RunID:    rec.RunID,
+		AgentID:  rec.AgentID,
+		ChannelID: rec.ChannelID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),
 		Kind:      kind,
@@ -1021,69 +1184,53 @@ func (rt *Runtime) persistEvent(ctx context.Context, rec *types.TaskRecord, kind
 	return rt.store.AppendEvent(ctx, evRec)
 }
 
-// removeRunning removes a task from the running map.
-func (rt *Runtime) removeRunning(taskID string) {
+// removeRunning removes a run from the running map.
+func (rt *Runtime) removeRunning(runID string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	delete(rt.running, taskID)
-}
-
-// updateWorkItemState updates the work item state in the registry if the task
-// is a spawned child (has a work item record). It silently skips if no work
-// item exists (e.g., for root tasks submitted via SubmitTask). This keeps the
-// work registry in sync with the runtime task lifecycle
-// (VAL-CHOIR-001, VAL-CHOIR-003, VAL-CHOIR-008).
-func (rt *Runtime) updateWorkItemState(ctx context.Context, taskID string, state types.TaskState, result, errMsg string) {
-	item, err := rt.store.GetWorkItem(ctx, taskID)
-	if err != nil {
-		// Not a spawned task — no work item. This is normal for root tasks.
-		return
-	}
-
-	now := time.Now().UTC()
-	item.State = state
-	item.UpdatedAt = now
-
-	if result != "" {
-		item.Result = result
-	}
-	if errMsg != "" {
-		item.Error = errMsg
-	}
-
-	if err := rt.store.UpdateWorkItem(ctx, item); err != nil {
-		log.Printf("runtime: update work item %s to %s: %v", taskID, state, err)
-	}
+	delete(rt.running, runID)
 }
 
 // notifyParent posts a result or error message to the parent's channel when
-// a spawned child task reaches a terminal state. This enables the parent to
+// a spawned child run reaches a terminal state. This enables the parent to
 // collect results from all its children via channels
 // (VAL-CHOIR-006, VAL-CHOIR-008).
 //
-// If the task has no parent_id in metadata, this is a no-op.
-func (rt *Runtime) notifyParent(ctx context.Context, rec *types.TaskRecord) {
-	parentID, _ := rec.Metadata["parent_id"].(string)
+// If the run has no parent run, this is a no-op.
+func (rt *Runtime) notifyParent(ctx context.Context, rec *types.RunRecord) {
+	parentID := strings.TrimSpace(rec.ParentRunID)
 	if parentID == "" {
+		parentID = metadataStringValue(rec.Metadata, "parent_id")
+	}
+	if parentID == "" {
+		return
+	}
+	parentRun, err := rt.store.GetRun(ctx, parentID)
+	if err != nil {
+		log.Printf("runtime: notify parent lookup %s for child %s: %v", parentID, rec.RunID, err)
+		return
+	}
+	parentChannelID := channelIDForRun(&parentRun)
+	if parentChannelID == "" {
 		return
 	}
 
 	switch rec.State {
-	case types.TaskCompleted:
+	case types.RunCompleted:
 		result := rec.Result
 		if result == "" {
-			result = "(task completed with no result)"
+			result = "(run completed with no result)"
 		}
-		if _, err := rt.PostChildResult(ctx, parentID, rec.TaskID, result); err != nil {
-			log.Printf("runtime: notify parent %s of child %s completion: %v", parentID, rec.TaskID, err)
+		if _, err := rt.PostChildResult(WithToolExecutionContext(ctx, rec), parentChannelID, rec.RunID, result); err != nil {
+			log.Printf("runtime: notify parent %s of child %s completion: %v", parentID, rec.RunID, err)
 		}
-	case types.TaskFailed:
+	case types.RunFailed:
 		errMsg := rec.Error
 		if errMsg == "" {
-			errMsg = "(task failed with no error message)"
+			errMsg = "(run failed with no error message)"
 		}
-		if _, err := rt.PostChildError(ctx, parentID, rec.TaskID, errMsg); err != nil {
-			log.Printf("runtime: notify parent %s of child %s failure: %v", parentID, rec.TaskID, err)
+		if _, err := rt.PostChildError(WithToolExecutionContext(ctx, rec), parentChannelID, rec.RunID, errMsg); err != nil {
+			log.Printf("runtime: notify parent %s of child %s failure: %v", parentID, rec.RunID, err)
 		}
 	}
 }

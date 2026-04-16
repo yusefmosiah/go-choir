@@ -195,9 +195,9 @@ In practice:
 
 ---
 
-## Proximate Next Tasks
+## Proximate Next Runs
 
-These are the real next tasks, in order.
+These are the real next runs, in order.
 
 ### Execution Checklist
 
@@ -231,29 +231,29 @@ These are the real next tasks, in order.
 
 #### Phase 4. Make `vtext` UX coherent
 
-- [ ] The `vtext` window should be almost entirely the document surface.
-- [ ] Keep only:
+- [x] The `vtext` window should be almost entirely the document surface.
+- [x] Keep only:
   - floating Revise button
   - floating `<` and `>` version navigation
   - extremely minimal status signaling
-- [ ] Remove dead space and misleading status chrome.
-- [ ] Make version navigation clear and safe.
+- [x] Remove dead space and misleading status chrome.
+- [x] Make version navigation clear and safe.
 
 #### Phase 5. Make the `vtext` process real
 
-- [ ] The user prompt should create `v0`.
-- [ ] The `vtext` agent should write `v1` promptly, even while delegating if needed.
-- [ ] The `vtext` agent should spawn workers as needed.
-- [ ] Worker messages should cause later canonical versions rather than blocking the first one.
-- [ ] User edit batches should create one user-authored version and produce a diff/context message for `vtext`.
-- [ ] This should work naturally as an iterative document loop, not like chat turns.
+- [x] The user prompt should create `v0`.
+- [x] The `vtext` agent should write `v1` promptly, even while delegating if needed.
+- [x] The `vtext` agent should spawn workers as needed.
+- [x] Worker messages should cause later canonical versions rather than blocking the first one.
+- [x] User edit batches should create one user-authored version and produce a diff/context message for `vtext`.
+- [x] This should work naturally as an iterative document loop, not like chat turns.
 
 #### Phase 6. Make worker spawning visible and trustworthy
 
-- [ ] `researcher` should appear for current/external-info requests.
-- [ ] `super` should appear for execution-oriented work.
-- [ ] Both should be able to message `vtext` and each other through coagent tools.
-- [ ] The user should be able to tell whether delegation actually happened.
+- [x] `researcher` should appear for current/external-info requests.
+- [x] `super` should appear for execution-oriented work.
+- [x] Both should be able to message `vtext` and each other through coagent tools.
+- [x] The user should be able to tell whether delegation actually happened.
 - [ ] The runtime should converge on one singleton `super` per user microVM, with shared researchers and many durable appagents.
 - [x] Researchers should persist retrieved and evidentiary material into embedded Dolt rather than ad hoc writable filesystems.
 

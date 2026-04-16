@@ -878,7 +878,7 @@ func TestVTextAgentMutationCreateAndGet(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -894,8 +894,8 @@ func TestVTextAgentMutationCreateAndGet(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetPendingAgentMutationByDoc returned nil")
 	}
-	if got.TaskID != "task-1" {
-		t.Errorf("TaskID = %q, want %q", got.TaskID, "task-1")
+	if got.RunID != "task-1" {
+		t.Errorf("RunID = %q, want %q", got.RunID, "task-1")
 	}
 	if got.State != "pending" {
 		t.Errorf("State = %q, want %q", got.State, "pending")
@@ -908,7 +908,7 @@ func TestVTextAgentMutationByTask(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -917,12 +917,12 @@ func TestVTextAgentMutationByTask(t *testing.T) {
 		t.Fatalf("CreateAgentMutation: %v", err)
 	}
 
-	got, err := s.GetAgentMutationByTask(ctx, "task-1")
+	got, err := s.GetAgentMutationByRun(ctx, "task-1")
 	if err != nil {
-		t.Fatalf("GetAgentMutationByTask: %v", err)
+		t.Fatalf("GetAgentMutationByRun: %v", err)
 	}
 	if got == nil {
-		t.Fatal("GetAgentMutationByTask returned nil")
+		t.Fatal("GetAgentMutationByRun returned nil")
 	}
 	if got.DocID != "doc-1" {
 		t.Errorf("DocID = %q, want %q", got.DocID, "doc-1")
@@ -935,7 +935,7 @@ func TestVTextAgentMutationComplete(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -950,9 +950,9 @@ func TestVTextAgentMutationComplete(t *testing.T) {
 	}
 
 	// Verify the mutation is now completed.
-	got, err := s.GetAgentMutationByTask(ctx, "task-1")
+	got, err := s.GetAgentMutationByRun(ctx, "task-1")
 	if err != nil {
-		t.Fatalf("GetAgentMutationByTask: %v", err)
+		t.Fatalf("GetAgentMutationByRun: %v", err)
 	}
 	if got.State != "completed" {
 		t.Errorf("State = %q, want %q", got.State, "completed")
@@ -980,7 +980,7 @@ func TestVTextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1001,7 +1001,7 @@ func TestVTextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
 	}
 
 	// Verify only the first revision ID was saved.
-	got, _ := s.GetAgentMutationByTask(ctx, "task-1")
+	got, _ := s.GetAgentMutationByRun(ctx, "task-1")
 	if got.RevisionID != "rev-agent-1" {
 		t.Errorf("RevisionID = %q, want %q (should not be overwritten by second completion)", got.RevisionID, "rev-agent-1")
 	}
@@ -1013,7 +1013,7 @@ func TestVTextAgentMutationIdempotentCreation(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1034,7 +1034,7 @@ func TestVTextAgentMutationFail(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1047,7 +1047,7 @@ func TestVTextAgentMutationFail(t *testing.T) {
 		t.Fatalf("FailAgentMutation: %v", err)
 	}
 
-	got, _ := s.GetAgentMutationByTask(ctx, "task-1")
+	got, _ := s.GetAgentMutationByRun(ctx, "task-1")
 	if got.State != "failed" {
 		t.Errorf("State = %q, want %q", got.State, "failed")
 	}
@@ -1059,7 +1059,7 @@ func TestVTextAgentMutationNoCrossUserAccess(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		TaskID:    "task-1",
+		RunID:    "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),

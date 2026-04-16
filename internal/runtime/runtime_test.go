@@ -64,17 +64,17 @@ func TestSubmitTaskReturnsStableHandle(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "explain closures in Go", "user-alice")
+	rec, err := rt.StartRun(ctx, "explain closures in Go", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Task should have a stable UUID handle.
-	if rec.TaskID == "" {
-		t.Error("task_id should not be empty")
+	if rec.RunID == "" {
+		t.Error("run_id should not be empty")
 	}
-	if rec.State != types.TaskPending {
-		t.Errorf("state: got %q, want %q", rec.State, types.TaskPending)
+	if rec.State != types.RunPending {
+		t.Errorf("state: got %q, want %q", rec.State, types.RunPending)
 	}
 	if rec.OwnerID != "user-alice" {
 		t.Errorf("owner_id: got %q, want user-alice", rec.OwnerID)
@@ -94,18 +94,18 @@ func TestSubmitTaskPersistsToStore(t *testing.T) {
 	rt, s := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "test prompt", "user-bob")
+	rec, err := rt.StartRun(ctx, "test prompt", "user-bob")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Verify the task is persisted in the store.
-	stored, err := s.GetTask(ctx, rec.TaskID)
+	stored, err := s.GetRun(ctx, rec.RunID)
 	if err != nil {
 		t.Fatalf("get task from store: %v", err)
 	}
-	if stored.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", stored.TaskID, rec.TaskID)
+	if stored.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", stored.RunID, rec.RunID)
 	}
 	if stored.OwnerID != "user-bob" {
 		t.Errorf("owner_id: got %q, want user-bob", stored.OwnerID)
@@ -116,9 +116,9 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 	rt, s := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTaskWithMetadata(ctx, "hi", "user-alice", map[string]any{
-		taskMetadataAgentProfile: "conductor",
-		taskMetadataAgentRole:    "conductor",
+	rec, err := rt.StartRunWithMetadata(ctx, "hi", "user-alice", map[string]any{
+		runMetadataAgentProfile: "conductor",
+		runMetadataAgentRole:    "conductor",
 		"input_source":           "prompt_bar",
 		"requested_app":          "vtext",
 		"seed_prompt":            "hi",
@@ -130,12 +130,12 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	stored, err := s.GetTask(ctx, rec.TaskID)
+	stored, err := s.GetRun(ctx, rec.RunID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
-		t.Fatalf("state: got %q, want %q", stored.State, types.TaskCompleted)
+	if stored.State != types.RunCompleted {
+		t.Fatalf("state: got %q, want %q", stored.State, types.RunCompleted)
 	}
 
 	var result struct {
@@ -145,6 +145,9 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		SeedPrompt           string `json:"seed_prompt"`
 		InitialContent       string `json:"initial_content"`
 		CreateInitialVersion bool   `json:"create_initial_version"`
+		DocID                string `json:"doc_id"`
+		InitialRevisionID    string `json:"initial_revision_id"`
+		InitialRunID        string `json:"initial_run_id"`
 	}
 	if err := json.Unmarshal([]byte(stored.Result), &result); err != nil {
 		t.Fatalf("decode result json: %v\nraw=%q", err, stored.Result)
@@ -164,6 +167,55 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 	if !result.CreateInitialVersion {
 		t.Fatal("create_initial_version: got false, want true")
 	}
+	if result.DocID == "" {
+		t.Fatal("doc_id should not be empty")
+	}
+	if result.InitialRevisionID == "" {
+		t.Fatal("initial_revision_id should not be empty")
+	}
+	if result.InitialRunID == "" {
+		t.Fatal("initial_run_id should not be empty")
+	}
+
+	doc, err := s.GetDocument(ctx, result.DocID, "user-alice")
+	if err != nil {
+		t.Fatalf("get document: %v", err)
+	}
+	if doc.CurrentRevisionID == "" {
+		t.Fatal("document head should not be empty")
+	}
+
+	v0, err := s.GetRevision(ctx, result.InitialRevisionID, "user-alice")
+	if err != nil {
+		t.Fatalf("get initial revision: %v", err)
+	}
+	if v0.AuthorKind != types.AuthorUser {
+		t.Fatalf("v0 author_kind: got %q, want %q", v0.AuthorKind, types.AuthorUser)
+	}
+	if v0.Content != "hi" {
+		t.Fatalf("v0 content: got %q, want hi", v0.Content)
+	}
+	meta := decodeRevisionMetadata(v0.Metadata)
+	if metadataString(meta, "conductor_run_id") != rec.RunID {
+		t.Fatalf("v0 conductor_run_id: got %q, want %q", metadataString(meta, "conductor_run_id"), rec.RunID)
+	}
+
+	initialTask, err := s.GetRun(ctx, result.InitialRunID)
+	if err != nil {
+		t.Fatalf("get initial vtext task: %v", err)
+	}
+	if initialTask.Metadata["parent_id"] != rec.RunID {
+		t.Fatalf("initial task parent_id: got %v, want %q", initialTask.Metadata["parent_id"], rec.RunID)
+	}
+	if initialTask.Metadata["doc_id"] != result.DocID {
+		t.Fatalf("initial task doc_id: got %v, want %q", initialTask.Metadata["doc_id"], result.DocID)
+	}
+	if initialTask.ChannelID != result.DocID {
+		t.Fatalf("initial task channel_id: got %q, want %q", initialTask.ChannelID, result.DocID)
+	}
+	if initialTask.Metadata["current_revision_id"] != result.InitialRevisionID {
+		t.Fatalf("initial task current_revision_id: got %v, want %q", initialTask.Metadata["current_revision_id"], result.InitialRevisionID)
+	}
 }
 
 func TestProviderPromptUsesPromptOverride(t *testing.T) {
@@ -172,15 +224,15 @@ func TestProviderPromptUsesPromptOverride(t *testing.T) {
 		t.Fatalf("save prompt override: %v", err)
 	}
 
-	rec := &types.TaskRecord{
-		TaskID:   "task-1",
+	rec := &types.RunRecord{
+		RunID:   "task-1",
 		OwnerID:  "user-alice",
 		Prompt:   "route this request",
-		Metadata: map[string]any{taskMetadataAgentProfile: AgentProfileConductor},
+		Metadata: map[string]any{runMetadataAgentProfile: AgentProfileConductor},
 	}
-	prompt, err := rt.providerPromptForTask(rec)
+	prompt, err := rt.providerPromptForRun(rec)
 	if err != nil {
-		t.Fatalf("providerPromptForTask: %v", err)
+		t.Fatalf("providerPromptForRun: %v", err)
 	}
 	if !strings.Contains(prompt, "Custom conductor prompt") {
 		t.Fatalf("provider prompt should include prompt override, got %q", prompt)
@@ -190,26 +242,26 @@ func TestProviderPromptUsesPromptOverride(t *testing.T) {
 	}
 }
 
-func TestGetTaskCallerScoped(t *testing.T) {
+func TestGetRunCallerScoped(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "test prompt", "user-alice")
+	rec, err := rt.StartRun(ctx, "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Owner can see their own task.
-	got, err := rt.GetTask(ctx, rec.TaskID, "user-alice")
+	got, err := rt.GetRun(ctx, rec.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get own task: %v", err)
 	}
-	if got.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", got.TaskID, rec.TaskID)
+	if got.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
 	}
 
 	// Another user cannot see the task (VAL-RUNTIME-006).
-	_, err = rt.GetTask(ctx, rec.TaskID, "user-eve")
+	_, err = rt.GetRun(ctx, rec.RunID, "user-eve")
 	if err == nil {
 		t.Error("expected error when getting another user's task")
 	}
@@ -218,11 +270,11 @@ func TestGetTaskCallerScoped(t *testing.T) {
 	}
 }
 
-func TestGetTaskNotFound(t *testing.T) {
+func TestGetRunNotFound(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
-	_, err := rt.GetTask(ctx, "nonexistent-task-id", "user-alice")
+	_, err := rt.GetRun(ctx, "nonexistent-task-id", "user-alice")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -232,7 +284,7 @@ func TestTaskCompletesSuccessfully(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "test prompt", "user-alice")
+	rec, err := rt.StartRun(ctx, "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -240,13 +292,13 @@ func TestTaskCompletesSuccessfully(t *testing.T) {
 	// Wait for the task to complete (stub provider has 50ms delay).
 	time.Sleep(200 * time.Millisecond)
 
-	got, err := rt.GetTask(ctx, rec.TaskID, "user-alice")
+	got, err := rt.GetRun(ctx, rec.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
 
-	if got.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskCompleted)
+	if got.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", got.State, types.RunCompleted)
 	}
 	if got.Result == "" {
 		t.Error("result should not be empty for completed task")
@@ -294,7 +346,7 @@ func TestProviderFailureSurfacesStructuredOutcome(t *testing.T) {
 		_ = os.Remove(dbPath)
 	})
 
-	rec, err := rt.SubmitTask(context.Background(), "failing prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "failing prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -302,13 +354,13 @@ func TestProviderFailureSurfacesStructuredOutcome(t *testing.T) {
 	// Wait for the task to fail.
 	time.Sleep(200 * time.Millisecond)
 
-	got, err := rt.GetTask(context.Background(), rec.TaskID, "user-alice")
+	got, err := rt.GetRun(context.Background(), rec.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
 
-	if got.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskFailed)
+	if got.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", got.State, types.RunFailed)
 	}
 	if got.Error == "" {
 		t.Error("error should be set for failed task")
@@ -317,35 +369,35 @@ func TestProviderFailureSurfacesStructuredOutcome(t *testing.T) {
 		t.Error("finished_at should be set for failed task")
 	}
 
-	// Runtime should remain available for new tasks.
-	nextRec, err := rt.SubmitTask(context.Background(), "next prompt", "user-alice")
+	// Runtime should remain available for new runs.
+	nextRec, err := rt.StartRun(context.Background(), "next prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task after failure: %v", err)
 	}
-	if nextRec.TaskID == "" {
-		t.Error("task_id should not be empty for task submitted after failure")
+	if nextRec.RunID == "" {
+		t.Error("run_id should not be empty for task submitted after failure")
 	}
 }
 
 func TestRuntimeRemainsAvailableAfterProviderFailure(t *testing.T) {
 	// Verify that after a provider failure, the runtime is still healthy
-	// and can accept and complete new tasks (VAL-RUNTIME-008).
+	// and can accept and complete new runs (VAL-RUNTIME-008).
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
 	// Submit and complete a normal task.
-	rec, err := rt.SubmitTask(ctx, "normal task", "user-alice")
+	rec, err := rt.StartRun(ctx, "normal task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	got, err := rt.GetTask(ctx, rec.TaskID, "user-alice")
+	got, err := rt.GetRun(ctx, rec.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskCompleted)
+	if got.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", got.State, types.RunCompleted)
 	}
 
 	// Runtime health should still be ready.
@@ -362,22 +414,22 @@ func TestEventEmissionOnTaskSubmission(t *testing.T) {
 	ch := rt.EventBus().Subscribe()
 	defer rt.EventBus().Unsubscribe(ch)
 
-	_, err := rt.SubmitTask(ctx, "test prompt", "user-alice")
+	_, err := rt.StartRun(ctx, "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	// Should receive a task.submitted event.
+	// Should receive a run.submitted event.
 	select {
 	case ev := <-ch:
-		if ev.Record.Kind != types.EventTaskSubmitted {
-			t.Errorf("event kind: got %q, want %q", ev.Record.Kind, types.EventTaskSubmitted)
+		if ev.Record.Kind != types.EventRunSubmitted {
+			t.Errorf("event kind: got %q, want %q", ev.Record.Kind, types.EventRunSubmitted)
 		}
 		if ev.Record.OwnerID != "user-alice" {
 			t.Errorf("event owner_id: got %q, want user-alice", ev.Record.OwnerID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for task.submitted event")
+		t.Fatal("timed out waiting for run.submitted event")
 	}
 }
 
@@ -385,7 +437,7 @@ func TestEventsPersistedToStore(t *testing.T) {
 	rt, s := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "test prompt", "user-alice")
+	rec, err := rt.StartRun(ctx, "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -394,7 +446,7 @@ func TestEventsPersistedToStore(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Check that events were persisted.
-	evts, err := s.ListEvents(ctx, rec.TaskID, 20)
+	evts, err := s.ListEvents(ctx, rec.RunID, 20)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
@@ -403,9 +455,9 @@ func TestEventsPersistedToStore(t *testing.T) {
 		t.Fatal("expected events to be persisted")
 	}
 
-	// First event should be task.submitted.
-	if evts[0].Kind != types.EventTaskSubmitted {
-		t.Errorf("first event kind: got %q, want %q", evts[0].Kind, types.EventTaskSubmitted)
+	// First event should be run.submitted.
+	if evts[0].Kind != types.EventRunSubmitted {
+		t.Errorf("first event kind: got %q, want %q", evts[0].Kind, types.EventRunSubmitted)
 	}
 }
 
@@ -435,7 +487,7 @@ func TestTaskRecoveryAcrossRestart(t *testing.T) {
 	provider1 := NewStubProvider(50 * time.Millisecond)
 	rt1 := New(cfg, s1, bus1, provider1)
 
-	rec, err := rt1.SubmitTask(context.Background(), "survive restart", "user-alice")
+	rec, err := rt1.StartRun(context.Background(), "survive restart", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -464,16 +516,16 @@ func TestTaskRecoveryAcrossRestart(t *testing.T) {
 	})
 
 	// The previously completed task should be recoverable by handle.
-	got, err := rt2.GetTask(context.Background(), rec.TaskID, "user-alice")
+	got, err := rt2.GetRun(context.Background(), rec.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get task after restart: %v", err)
 	}
 
-	if got.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", got.TaskID, rec.TaskID)
+	if got.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
 	}
-	if got.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskCompleted)
+	if got.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", got.State, types.RunCompleted)
 	}
 	if got.Prompt != "survive restart" {
 		t.Errorf("prompt: got %q, want original", got.Prompt)
@@ -481,7 +533,7 @@ func TestTaskRecoveryAcrossRestart(t *testing.T) {
 }
 
 func TestInterruptedRunningTasksRecoveredOnStart(t *testing.T) {
-	// When the sandbox restarts, tasks that were running should be resolved
+	// When the sandbox restarts, runs that were running should be resolved
 	// to an explicit terminal outcome (VAL-RUNTIME-010).
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-runtime-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -499,22 +551,22 @@ func TestInterruptedRunningTasksRecoveredOnStart(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	interruptedTask := types.TaskRecord{
-		TaskID:    "interrupted-task-001",
+	interruptedTask := types.RunRecord{
+		RunID:    "interrupted-task-001",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-test",
-		State:     types.TaskRunning, // was running when process exited
+		State:     types.RunRunning, // was running when process exited
 		Prompt:    "interrupted prompt",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s1.CreateTask(ctx, interruptedTask); err != nil {
+	if err := s1.CreateRun(ctx, interruptedTask); err != nil {
 		t.Fatalf("create interrupted task: %v", err)
 	}
 	_ = s1.Close()
 
 	// Simulate restart: open new store and runtime, then call Start()
-	// which should recover interrupted tasks.
+	// which should recover interrupted runs.
 	s2, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store 2: %v", err)
@@ -537,16 +589,16 @@ func TestInterruptedRunningTasksRecoveredOnStart(t *testing.T) {
 	})
 	rt.Start(ctx)
 
-	// The interrupted task should now be in failed state with a clear error.
-	got, err := rt.GetTask(ctx, "interrupted-task-001", "user-alice")
+	// The interrupted run should now be in failed state with a clear error.
+	got, err := rt.GetRun(ctx, "interrupted-task-001", "user-alice")
 	if err != nil {
 		t.Fatalf("get interrupted task: %v", err)
 	}
-	if got.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskFailed)
+	if got.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", got.State, types.RunFailed)
 	}
-	if got.Error != "runtime restarted, task interrupted" {
-		t.Errorf("error: got %q, want runtime restarted, task interrupted", got.Error)
+	if got.Error != "runtime restarted, run interrupted" {
+		t.Errorf("error: got %q, want runtime restarted, run interrupted", got.Error)
 	}
 	if got.FinishedAt == nil {
 		t.Error("finished_at should be set for recovered task")
@@ -614,38 +666,38 @@ func TestSetHealthNoOpForSameState(t *testing.T) {
 	}
 }
 
-func TestListTasksByOwner(t *testing.T) {
+func TestListRunsByOwner(t *testing.T) {
 	rt, _ := testRuntime(t)
 	ctx := context.Background()
 
-	// Submit tasks for two owners.
-	_, err := rt.SubmitTask(ctx, "alice task 1", "user-alice")
+	// Submit runs for two owners.
+	_, err := rt.StartRun(ctx, "alice task 1", "user-alice")
 	if err != nil {
 		t.Fatalf("submit alice task: %v", err)
 	}
-	_, err = rt.SubmitTask(ctx, "bob task 1", "user-bob")
+	_, err = rt.StartRun(ctx, "bob task 1", "user-bob")
 	if err != nil {
 		t.Fatalf("submit bob task: %v", err)
 	}
-	_, err = rt.SubmitTask(ctx, "alice task 2", "user-alice")
+	_, err = rt.StartRun(ctx, "alice task 2", "user-alice")
 	if err != nil {
 		t.Fatalf("submit alice task 2: %v", err)
 	}
 
-	aliceTasks, err := rt.ListTasksByOwner(ctx, "user-alice", 10)
+	aliceTasks, err := rt.ListRunsByOwner(ctx, "user-alice", 10)
 	if err != nil {
-		t.Fatalf("list alice tasks: %v", err)
+		t.Fatalf("list alice runs: %v", err)
 	}
 	if len(aliceTasks) != 2 {
-		t.Errorf("alice tasks: got %d, want 2", len(aliceTasks))
+		t.Errorf("alice runs: got %d, want 2", len(aliceTasks))
 	}
 
-	bobTasks, err := rt.ListTasksByOwner(ctx, "user-bob", 10)
+	bobTasks, err := rt.ListRunsByOwner(ctx, "user-bob", 10)
 	if err != nil {
-		t.Fatalf("list bob tasks: %v", err)
+		t.Fatalf("list bob runs: %v", err)
 	}
 	if len(bobTasks) != 1 {
-		t.Errorf("bob tasks: got %d, want 1", len(bobTasks))
+		t.Errorf("bob runs: got %d, want 1", len(bobTasks))
 	}
 }
 
@@ -653,7 +705,7 @@ func TestEventPayloadContent(t *testing.T) {
 	rt, s := testRuntime(t)
 	ctx := context.Background()
 
-	_, err := rt.SubmitTask(ctx, "test prompt content", "user-alice")
+	_, err := rt.StartRun(ctx, "test prompt content", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -671,7 +723,7 @@ func TestProviderStubEmitsProgress(t *testing.T) {
 	ch := rt.EventBus().Subscribe()
 	defer rt.EventBus().Unsubscribe(ch)
 
-	_, err := rt.SubmitTask(ctx, "progress test", "user-alice")
+	_, err := rt.StartRun(ctx, "progress test", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -697,17 +749,17 @@ done:
 		kinds[ev.Record.Kind] = true
 	}
 
-	if !kinds[types.EventTaskSubmitted] {
-		t.Error("expected task.submitted event")
+	if !kinds[types.EventRunSubmitted] {
+		t.Error("expected run.submitted event")
 	}
-	if !kinds[types.EventTaskStarted] {
-		t.Error("expected task.started event")
+	if !kinds[types.EventRunStarted] {
+		t.Error("expected run.started event")
 	}
-	if !kinds[types.EventTaskProgress] {
-		t.Error("expected task.progress event")
+	if !kinds[types.EventRunProgress] {
+		t.Error("expected run.progress event")
 	}
-	if !kinds[types.EventTaskCompleted] {
-		t.Error("expected task.completed event")
+	if !kinds[types.EventRunCompleted] {
+		t.Error("expected run.completed event")
 	}
 }
 
@@ -715,21 +767,21 @@ func TestProviderStubDeltaEvent(t *testing.T) {
 	rt, s := testRuntime(t)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "delta test", "user-alice")
+	rec, err := rt.StartRun(ctx, "delta test", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	time.Sleep(200 * time.Millisecond)
 
-	evts, err := s.ListEvents(ctx, rec.TaskID, 20)
+	evts, err := s.ListEvents(ctx, rec.RunID, 20)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
 	hasDelta := false
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta {
+		if ev.Kind == types.EventRunDelta {
 			hasDelta = true
 			// Check that the payload contains provider info.
 			var payload map[string]string
@@ -741,7 +793,7 @@ func TestProviderStubDeltaEvent(t *testing.T) {
 		}
 	}
 	if !hasDelta {
-		t.Error("expected task.delta event from stub provider")
+		t.Error("expected run.delta event from stub provider")
 	}
 }
 
@@ -755,21 +807,21 @@ type mockBridgeProvider struct {
 	execErr    error
 	mu         sync.Mutex
 	called     bool
-	taskResult string // captures the result set by Execute on the TaskRecord
+	taskResult string // captures the result set by Execute on the RunRecord
 }
 
-func (m *mockBridgeProvider) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
+func (m *mockBridgeProvider) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
 	m.mu.Lock()
 	m.called = true
 	m.mu.Unlock()
 
 	if m.execErr != nil {
-		emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"failed","real":"true"}`))
+		emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"failed","real":"true"}`))
 		return m.execErr
 	}
 
-	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"`+m.name+`","real":"true"}`))
-	emit(types.EventTaskDelta, "execution", json.RawMessage(`{"text":"`+m.result+`","provider":"`+m.name+`","real":"true"}`))
+	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started","provider":"`+m.name+`","real":"true"}`))
+	emit(types.EventRunDelta, "execution", json.RawMessage(`{"text":"`+m.result+`","provider":"`+m.name+`","real":"true"}`))
 	task.Result = m.result
 	m.mu.Lock()
 	m.taskResult = m.result
@@ -821,7 +873,7 @@ func TestBridgeProviderSubmitsAndCompletes(t *testing.T) {
 	rt, s := testRuntimeWithBridge(t, bridge)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "What is the capital of France?", "user-bridge")
+	rec, err := rt.StartRun(ctx, "What is the capital of France?", "user-bridge")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -830,11 +882,11 @@ func TestBridgeProviderSubmitsAndCompletes(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify task completed with the bridge provider result.
-	stored, err := s.GetTask(ctx, rec.TaskID)
+	stored, err := s.GetRun(ctx, rec.RunID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
+	if stored.State != types.RunCompleted {
 		t.Errorf("state: got %q, want completed", stored.State)
 	}
 	if stored.Result != "Real Bedrock response with genuine inference!" {
@@ -856,7 +908,7 @@ func TestBridgeProviderFailureSurfacesWithoutCrashing(t *testing.T) {
 	rt, _ := testRuntimeWithBridge(t, bridge)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "This should fail at the provider", "user-fail")
+	rec, err := rt.StartRun(ctx, "This should fail at the provider", "user-fail")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -864,25 +916,25 @@ func TestBridgeProviderFailureSurfacesWithoutCrashing(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// The task should be in failed state, not crashing the runtime.
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-fail")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-fail")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskFailed {
+	if stored.State != types.RunFailed {
 		t.Errorf("state: got %q, want failed", stored.State)
 	}
 
-	// The runtime should still be healthy for later tasks.
+	// The runtime should still be healthy for later runs.
 	if rt.HealthState() == types.HealthFailed {
 		t.Error("runtime should not be in failed state after a single provider error")
 	}
 
 	// Submit another task — should still work.
-	rec2, err := rt.SubmitTask(ctx, "Another task after failure", "user-retry")
+	rec2, err := rt.StartRun(ctx, "Another task after failure", "user-retry")
 	if err != nil {
 		t.Fatalf("submit task after failure: %v", err)
 	}
-	if rec2.TaskID == "" {
+	if rec2.RunID == "" {
 		t.Error("second task should have a valid ID")
 	}
 }
@@ -896,14 +948,14 @@ func TestBridgeProviderEventsContainRealMarker(t *testing.T) {
 	rt, s := testRuntimeWithBridge(t, bridge)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "test event markers", "user-events")
+	rec, err := rt.StartRun(ctx, "test event markers", "user-events")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	time.Sleep(200 * time.Millisecond)
 
-	evts, err := s.ListEvents(ctx, rec.TaskID, 20)
+	evts, err := s.ListEvents(ctx, rec.RunID, 20)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
@@ -912,7 +964,7 @@ func TestBridgeProviderEventsContainRealMarker(t *testing.T) {
 	// bridge provider events from stub provider events.
 	hasRealMarker := false
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta || ev.Kind == types.EventTaskProgress {
+		if ev.Kind == types.EventRunDelta || ev.Kind == types.EventRunProgress {
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
 				if payload["real"] == "true" {
@@ -945,7 +997,7 @@ func TestHealthReportsActiveProvider(t *testing.T) {
 
 // TestBuildAppagentRevisionMetadataPreservesDurableKeys verifies that
 // appagent revisions carry forward seed_prompt, source_path, and
-// conductor_task_id from the parent revision metadata so subsequent
+// conductor_run_id from the parent revision metadata so subsequent
 // revise requests retain the original user context.
 func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	_, s := testRuntime(t)
@@ -966,7 +1018,7 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	parentMeta, _ := json.Marshal(map[string]any{
 		"seed_prompt":       "write a haiku about cats",
 		"source_path":       "/notes/cats.md",
-		"conductor_task_id": "task-original-conductor",
+		"conductor_run_id": "task-original-conductor",
 	})
 	parentRev := types.Revision{
 		RevisionID: "rev-parent-meta",
@@ -986,8 +1038,8 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	doc.CurrentRevisionID = parentRev.RevisionID
 
 	// Build appagent metadata with a task record that has no durable keys.
-	rec := &types.TaskRecord{
-		TaskID:   "task-agent-1",
+	rec := &types.RunRecord{
+		RunID:   "task-agent-1",
 		Metadata: map[string]any{"type": "vtext_agent_revision"},
 	}
 
@@ -1004,15 +1056,15 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	if resultMap["source_path"] != "/notes/cats.md" {
 		t.Errorf("source_path: got %v, want '/notes/cats.md'", resultMap["source_path"])
 	}
-	if resultMap["conductor_task_id"] != "task-original-conductor" {
-		t.Errorf("conductor_task_id: got %v, want 'task-original-conductor'", resultMap["conductor_task_id"])
+	if resultMap["conductor_run_id"] != "task-original-conductor" {
+		t.Errorf("conductor_run_id: got %v, want 'task-original-conductor'", resultMap["conductor_run_id"])
 	}
 
 	// Verify agent-specific fields are also present.
 	if resultMap["source"] != "agent_revision" {
 		t.Errorf("source: got %v, want 'agent_revision'", resultMap["source"])
 	}
-	if resultMap["task_id"] != "task-agent-1" {
-		t.Errorf("task_id: got %v, want 'task-agent-1'", resultMap["task_id"])
+	if resultMap["run_id"] != "task-agent-1" {
+		t.Errorf("run_id: got %v, want 'task-agent-1'", resultMap["run_id"])
 	}
 }

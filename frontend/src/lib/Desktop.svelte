@@ -339,7 +339,7 @@
         requestedApp: 'vtext',
         initialDocumentTitle: fallbackWindowTitle,
       });
-      const conductorTaskId = task.task_id || '';
+      const conductorTaskId = task.run_id || '';
       const decision = await waitForConductorDecision(conductorTaskId);
 
       if (decision.action === 'toast') {
@@ -354,6 +354,8 @@
 
       openApp('vtext', 'VText', '📝', {
         windowTitle: decision.title || fallbackWindowTitle,
+        docId: decision.doc_id || '',
+        initialTaskId: decision.initial_run_id || '',
         seedPrompt: decision.seed_prompt || text,
         initialContent: decision.initial_content || decision.seed_prompt || text,
         createInitialVersion: decision.create_initial_version !== false,
@@ -563,6 +565,7 @@
   }
 
   .vtext-content {
+    padding: 0;
     background: #12131c;
   }
 

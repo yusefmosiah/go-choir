@@ -100,7 +100,7 @@ func (ev RuntimeEvent) RequiresSupervisorAttention() bool {
 	}
 
 	// Terminal task events are actionable for the supervisor.
-	if ev.Record.Kind == types.EventTaskFailed || ev.Record.Kind == types.EventTaskBlocked {
+	if ev.Record.Kind == types.EventRunFailed || ev.Record.Kind == types.EventRunBlocked {
 		return true
 	}
 
@@ -125,7 +125,7 @@ func (ev RuntimeEvent) RequiresSupervisorAttention() bool {
 // IsTerminal returns true if the event kind represents a terminal task state.
 func IsTerminal(kind types.EventKind) bool {
 	switch kind {
-	case types.EventTaskCompleted, types.EventTaskFailed, types.EventTaskCancelled:
+	case types.EventRunCompleted, types.EventRunFailed, types.EventRunCancelled:
 		return true
 	default:
 		return false

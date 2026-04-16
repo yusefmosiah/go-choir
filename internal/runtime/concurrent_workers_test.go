@@ -29,7 +29,7 @@ import (
 //   - No interference between sibling workers
 
 // testConcurrentSetup creates a fresh Runtime with a slow provider to
-// ensure tasks stay running long enough for concurrent observation.
+// ensure runs stay running long enough for concurrent observation.
 func testConcurrentSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	t.Helper()
 
@@ -42,7 +42,7 @@ func testConcurrentSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	}
 
 	bus := events.NewEventBus()
-	// Use a slow provider so tasks stay running for concurrent observation.
+	// Use a slow provider so runs stay running for concurrent observation.
 	provider := NewStubProvider(500 * time.Millisecond)
 	cfg := Config{
 		SandboxID:           "sandbox-concurrent-test",
@@ -60,7 +60,7 @@ func testConcurrentSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	})
 
 	// Create a parent task.
-	parentRec, err := rt.SubmitTask(context.Background(), "parent objective", "user-alice")
+	parentRec, err := rt.StartRun(context.Background(), "parent objective", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}
@@ -68,7 +68,7 @@ func testConcurrentSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	// Wait for the parent to start running.
 	time.Sleep(50 * time.Millisecond)
 
-	return rt, handler, parentRec.TaskID
+	return rt, handler, parentRec.RunID
 }
 
 // TestConcurrentWorkers_Spawn3WithoutWaiting verifies that a parent can
@@ -95,7 +95,7 @@ func TestConcurrentWorkers_Spawn3WithoutWaiting(t *testing.T) {
 			t.Fatalf("spawn %d: decode response: %v", i, err)
 		}
 
-		childIDs[i] = resp.TaskID
+		childIDs[i] = resp.RunID
 	}
 
 	// All child IDs should be unique.
@@ -126,10 +126,10 @@ func TestConcurrentWorkers_AllRunningSimultaneously(t *testing.T) {
 		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 			t.Fatalf("spawn %d: decode: %v", i, err)
 		}
-		childIDs[i] = resp.TaskID
+		childIDs[i] = resp.RunID
 	}
 
-	// Poll until all tasks have transitioned to running, with a generous timeout.
+	// Poll until all runs have transitioned to running, with a generous timeout.
 	ctx := context.Background()
 	deadline := time.After(5 * time.Second)
 	var runningChildren int
@@ -142,11 +142,11 @@ func TestConcurrentWorkers_AllRunningSimultaneously(t *testing.T) {
 
 		runningChildren = 0
 		for _, id := range childIDs {
-			task, err := rt.Store().GetTask(ctx, id)
+			task, err := rt.Store().GetRun(ctx, id)
 			if err != nil {
 				t.Fatalf("get task %s: %v", id, err)
 			}
-			if task.State == types.TaskRunning {
+			if task.State == types.RunRunning {
 				runningChildren++
 			}
 		}
@@ -157,10 +157,10 @@ func TestConcurrentWorkers_AllRunningSimultaneously(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Check that the runtime reports multiple running tasks.
+	// Check that the runtime reports multiple running runs.
 	runningCount := rt.RunningCount()
 	if runningCount < 3 {
-		t.Errorf("running tasks: got %d, want at least 3 (parent + 3 children or just 3 children)", runningCount)
+		t.Errorf("running runs: got %d, want at least 3 (parent + 3 children or just 3 children)", runningCount)
 	}
 
 	if runningChildren < 3 {
@@ -179,11 +179,11 @@ func TestConcurrentWorkers_EachCompletesIndependently(t *testing.T) {
 	// Spawn 3 children.
 	childIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		rec, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("independent task %d", i), "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("independent task %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Wait for all children to complete (with timeout).
@@ -199,7 +199,7 @@ func TestConcurrentWorkers_EachCompletesIndependently(t *testing.T) {
 
 		allDone = true
 		for _, id := range childIDs {
-			task, err := rt.Store().GetTask(ctx, id)
+			task, err := rt.Store().GetRun(ctx, id)
 			if err != nil {
 				t.Fatalf("get task %s: %v", id, err)
 			}
@@ -215,12 +215,12 @@ func TestConcurrentWorkers_EachCompletesIndependently(t *testing.T) {
 
 	// Verify each child has its own result.
 	for i, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("get completed task %s: %v", id, err)
 		}
 
-		if task.State != types.TaskCompleted {
+		if task.State != types.RunCompleted {
 			t.Errorf("child %d (%s): state got %q, want completed", i, id[:8], task.State)
 		}
 		if task.Result == "" {
@@ -242,11 +242,11 @@ func TestConcurrentWorkers_IndependentChannels(t *testing.T) {
 	// Spawn 3 children.
 	childIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		rec, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("channel task %d", i), "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("channel task %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Each child should have its own channel.
@@ -305,11 +305,11 @@ func TestConcurrentWorkers_NoInterferenceBetweenSiblings(t *testing.T) {
 	objectives := make([]string, 5)
 	for i := 0; i < 5; i++ {
 		objectives[i] = fmt.Sprintf("unique objective %d: analyze feature %c", i, 'A'+i)
-		rec, err := rt.SpawnTask(ctx, parentID, objectives[i], "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, objectives[i], "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Wait for all to complete.
@@ -323,7 +323,7 @@ func TestConcurrentWorkers_NoInterferenceBetweenSiblings(t *testing.T) {
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -337,14 +337,14 @@ func TestConcurrentWorkers_NoInterferenceBetweenSiblings(t *testing.T) {
 
 	// Verify each child has the correct objective.
 	for i, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("get task %s: %v", id, err)
 		}
 		if task.Prompt != objectives[i] {
 			t.Errorf("child %d: prompt got %q, want %q", i, task.Prompt, objectives[i])
 		}
-		if task.State != types.TaskCompleted {
+		if task.State != types.RunCompleted {
 			t.Errorf("child %d: state got %q, want completed", i, task.State)
 		}
 	}
@@ -361,11 +361,11 @@ func TestConcurrentWorkers_ResultsCollectedViaChannels(t *testing.T) {
 	// Spawn 3 children.
 	childIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		rec, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("result collection task %d", i), "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("result collection task %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Wait for all children to complete.
@@ -379,7 +379,7 @@ func TestConcurrentWorkers_ResultsCollectedViaChannels(t *testing.T) {
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -392,7 +392,7 @@ func TestConcurrentWorkers_ResultsCollectedViaChannels(t *testing.T) {
 	}
 
 	// Now check that the parent received results via channels for each child.
-	// The child tasks should have posted their results to the parent's channel.
+	// The child runs should have posted their results to the parent's channel.
 	// Poll for messages since channel posting may not be instantaneous after task completion.
 	deadline = time.After(5 * time.Second)
 	var msgs []types.ChannelMessage
@@ -445,21 +445,21 @@ func TestConcurrentWorkers_ResultsCollectedViaChannels(t *testing.T) {
 	}
 }
 
-// TestConcurrentWorkers_WorkItemsUpdatedOnCompletion verifies that work items
-// in the registry are updated when spawned tasks complete
-// (VAL-CHOIR-008, related to VAL-CHOIR-001, VAL-CHOIR-003).
-func TestConcurrentWorkers_WorkItemsUpdatedOnCompletion(t *testing.T) {
+// TestConcurrentWorkers_ChildRunsReachCompletedState verifies spawned child
+// runs persist their completed state and parent linkage directly on the
+// runtime record.
+func TestConcurrentWorkers_ChildRunsReachCompletedState(t *testing.T) {
 	rt, _, parentID := testConcurrentSetup(t)
 	ctx := context.Background()
 
 	// Spawn 3 children.
 	childIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		rec, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("work item task %d", i), "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("child run %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Wait for all to complete.
@@ -473,7 +473,7 @@ func TestConcurrentWorkers_WorkItemsUpdatedOnCompletion(t *testing.T) {
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -485,27 +485,27 @@ func TestConcurrentWorkers_WorkItemsUpdatedOnCompletion(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Verify each work item is updated to completed.
+	// Verify each child run is updated to completed.
 	for i, id := range childIDs {
-		item, err := rt.Store().GetWorkItem(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
-			t.Fatalf("get work item %s: %v", id, err)
+			t.Fatalf("get child run %s: %v", id, err)
 		}
 
-		if item.State != types.TaskCompleted {
-			t.Errorf("child %d work item: state got %q, want completed", i, item.State)
+		if task.State != types.RunCompleted {
+			t.Errorf("child %d state: got %q, want completed", i, task.State)
 		}
-		if item.Result == "" {
-			t.Errorf("child %d work item: result should not be empty", i)
+		if task.Result == "" {
+			t.Errorf("child %d result should not be empty", i)
 		}
-		if item.ParentID != parentID {
-			t.Errorf("child %d work item: parent_id got %q, want %q", i, item.ParentID, parentID)
+		if task.Metadata["parent_id"] != parentID {
+			t.Errorf("child %d parent_id metadata: got %v, want %q", i, task.Metadata["parent_id"], parentID)
 		}
 	}
 }
 
 // TestConcurrentWorkers_HealthReportsRunningCount verifies that the health
-// endpoint reports the correct number of running tasks during concurrent
+// endpoint reports the correct number of running runs during concurrent
 // execution (VAL-CHOIR-008).
 func TestConcurrentWorkers_HealthReportsRunningCount(t *testing.T) {
 	_, handler, parentID := testConcurrentSetup(t)
@@ -518,13 +518,13 @@ func TestConcurrentWorkers_HealthReportsRunningCount(t *testing.T) {
 		handler.HandleSpawn(w, req)
 	}
 
-	// Poll until the health endpoint reports at least 3 running tasks.
+	// Poll until the health endpoint reports at least 3 running runs.
 	deadline := time.After(5 * time.Second)
 	var lastRunningTasks int
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timeout waiting for health to report >= 3 running tasks; last reported %d", lastRunningTasks)
+			t.Fatalf("timeout waiting for health to report >= 3 running runs; last reported %d", lastRunningTasks)
 		default:
 		}
 
@@ -541,9 +541,9 @@ func TestConcurrentWorkers_HealthReportsRunningCount(t *testing.T) {
 		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 			t.Fatalf("decode health response: %v", err)
 		}
-		lastRunningTasks = resp.RunningTasks
+		lastRunningTasks = resp.RunningRuns
 
-		if resp.RunningTasks >= 3 {
+		if resp.RunningRuns >= 3 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -552,14 +552,14 @@ func TestConcurrentWorkers_HealthReportsRunningCount(t *testing.T) {
 
 // TestConcurrentWorkers_5ConcurrentWorkers verifies spawning and completing
 // 5 workers concurrently. This matches the VAL-CHOIR-008 evidence which
-// uses 5 tasks.
+// uses 5 runs.
 func TestConcurrentWorkers_5ConcurrentWorkers(t *testing.T) {
 	rt, handler, parentID := testConcurrentSetup(t)
 	ctx := context.Background()
 
 	childIDs := make([]string, 5)
 
-	// Submit 5 tasks rapidly.
+	// Submit 5 runs rapidly.
 	for i := 0; i < 5; i++ {
 		body := fmt.Sprintf(`{"parent_id":"%s","objective":"Analyze Go features - part %d"}`, parentID, i)
 		req := authenticatedRequest(http.MethodPost, "/api/agent/spawn", body, "user-alice")
@@ -574,7 +574,7 @@ func TestConcurrentWorkers_5ConcurrentWorkers(t *testing.T) {
 		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 			t.Fatalf("spawn %d: decode: %v", i, err)
 		}
-		childIDs[i] = resp.TaskID
+		childIDs[i] = resp.RunID
 	}
 
 	// All 5 should have unique IDs.
@@ -597,7 +597,7 @@ func TestConcurrentWorkers_5ConcurrentWorkers(t *testing.T) {
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -612,11 +612,11 @@ func TestConcurrentWorkers_5ConcurrentWorkers(t *testing.T) {
 	// All 5 should be completed with correct results.
 	completedCount := 0
 	for i, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("get task %s: %v", id, err)
 		}
-		if task.State == types.TaskCompleted {
+		if task.State == types.RunCompleted {
 			completedCount++
 		} else {
 			t.Errorf("task %d (%s): state got %q, want completed", i, id[:8], task.State)
@@ -645,12 +645,12 @@ func TestConcurrentWorkers_ConcurrentSpawnStress(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			rec, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("stress task %d", idx), "user-alice", nil)
+			rec, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("stress task %d", idx), "user-alice", nil)
 			if err != nil {
 				errors[idx] = err
 				return
 			}
-			childIDs[idx] = rec.TaskID
+			childIDs[idx] = rec.RunID
 		}(i)
 	}
 
@@ -693,8 +693,8 @@ func newSlowProvider(delay time.Duration) *slowProvider {
 	}
 }
 
-// TestConcurrentWorkers_TasksActuallyRunConcurrently verifies that tasks
-// actually run concurrently, not sequentially. If 3 tasks each take 200ms,
+// TestConcurrentWorkers_TasksActuallyRunConcurrently verifies that runs
+// actually run concurrently, not sequentially. If 3 runs each take 200ms,
 // the total should be closer to 200ms than 600ms.
 func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 	dir := t.TempDir()
@@ -725,7 +725,7 @@ func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 	ctx := context.Background()
 
 	// Create parent.
-	parentRec, err := rt.SubmitTask(ctx, "parent", "user-alice")
+	parentRec, err := rt.StartRun(ctx, "parent", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -736,11 +736,11 @@ func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 	start := time.Now()
 	childIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		rec, err := rt.SpawnTask(ctx, parentRec.TaskID, fmt.Sprintf("timing task %d", i), "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentRec.RunID, fmt.Sprintf("timing task %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Wait for all to complete.
@@ -754,7 +754,7 @@ func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -768,11 +768,11 @@ func TestConcurrentWorkers_TasksActuallyRunConcurrently(t *testing.T) {
 
 	elapsed := time.Since(start)
 
-	// If tasks ran sequentially, total would be ~600ms.
+	// If runs ran sequentially, total would be ~600ms.
 	// With concurrency, should be closer to ~300ms (200ms per task + overhead).
 	// We use a generous threshold of 3 seconds to account for slow CI runners.
 	if elapsed > 3*time.Second {
-		t.Errorf("tasks appear to run sequentially: elapsed %v (expected < 3s for 3 concurrent 200ms tasks)", elapsed)
+		t.Errorf("runs appear to run sequentially: elapsed %v (expected < 3s for 3 concurrent 200ms runs)", elapsed)
 	}
 }
 
@@ -784,7 +784,7 @@ func TestConcurrentWorkers_ResultsPostedToParentChannelOnCompletion(t *testing.T
 	ctx := context.Background()
 
 	// Spawn a child.
-	rec, err := rt.SpawnTask(ctx, parentID, "auto-post result task", "user-alice", nil)
+	rec, err := rt.StartChildRun(ctx, parentID, "auto-post result task", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestConcurrentWorkers_ResultsPostedToParentChannelOnCompletion(t *testing.T
 			t.Fatal("timeout waiting for child to complete")
 		default:
 		}
-		task, _ := rt.Store().GetTask(ctx, rec.TaskID)
+		task, _ := rt.Store().GetRun(ctx, rec.RunID)
 		if task.State.Terminal() {
 			break
 		}
@@ -822,7 +822,7 @@ func TestConcurrentWorkers_ResultsPostedToParentChannelOnCompletion(t *testing.T
 
 		found = false
 		for _, msg := range msgs {
-			if msg.From == rec.TaskID && msg.Role == "result" {
+			if msg.From == rec.RunID && msg.Role == "result" {
 				found = true
 				break
 			}
@@ -873,14 +873,14 @@ func TestConcurrentWorkers_FailedChildPostsErrorToParentChannel(t *testing.T) {
 	ctx := context.Background()
 
 	// Create parent.
-	parentRec, err := rt.SubmitTask(ctx, "parent", "user-alice")
+	parentRec, err := rt.StartRun(ctx, "parent", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
 
 	// Spawn a child that will fail.
-	rec, err := rt.SpawnTask(ctx, parentRec.TaskID, "failing task", "user-alice", nil)
+	rec, err := rt.StartChildRun(ctx, parentRec.RunID, "failing task", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestConcurrentWorkers_FailedChildPostsErrorToParentChannel(t *testing.T) {
 			t.Fatal("timeout waiting for child to fail")
 		default:
 		}
-		task, _ := rt.Store().GetTask(ctx, rec.TaskID)
+		task, _ := rt.Store().GetRun(ctx, rec.RunID)
 		if task.State.Terminal() {
 			break
 		}
@@ -901,13 +901,13 @@ func TestConcurrentWorkers_FailedChildPostsErrorToParentChannel(t *testing.T) {
 	}
 
 	// Verify the child is in failed state.
-	task, _ := rt.Store().GetTask(ctx, rec.TaskID)
-	if task.State != types.TaskFailed {
+	task, _ := rt.Store().GetRun(ctx, rec.RunID)
+	if task.State != types.RunFailed {
 		t.Fatalf("child state: got %q, want failed", task.State)
 	}
 
 	// Check the parent channel for the error message.
-	msgs, _, err := rt.ChannelRead(parentRec.TaskID, 0)
+	msgs, _, err := rt.ChannelRead(parentRec.RunID, 0)
 	if err != nil {
 		t.Fatalf("parent channel read: %v", err)
 	}
@@ -915,7 +915,7 @@ func TestConcurrentWorkers_FailedChildPostsErrorToParentChannel(t *testing.T) {
 	// Should find an error message from the child.
 	found := false
 	for _, msg := range msgs {
-		if msg.From == rec.TaskID && msg.Role == "error" {
+		if msg.From == rec.RunID && msg.Role == "error" {
 			found = true
 			break
 		}
@@ -942,32 +942,32 @@ func TestConcurrentWorkers_StatusAPIReturnsCorrectState(t *testing.T) {
 
 		var resp spawnResponse
 		json.NewDecoder(w.Body).Decode(&resp)
-		childIDs[i] = resp.TaskID
+		childIDs[i] = resp.RunID
 	}
 
 	// Check each child's status via the status API.
 	for i, id := range childIDs {
-		req := authenticatedRequest(http.MethodGet, "/api/agent/status?task_id="+id, "", "user-alice")
+		req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+id, "", "user-alice")
 		w := httptest.NewRecorder()
-		handler.HandleTaskStatus(w, req)
+		handler.HandleRunStatus(w, req)
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("status for child %d: got %d, want 200", i, w.Code)
 		}
 
-		var resp taskStatusResponse
+		var resp runStatusResponse
 		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 			t.Fatalf("decode status response: %v", err)
 		}
 
-		if resp.TaskID != id {
-			t.Errorf("child %d: task_id got %q, want %q", i, resp.TaskID, id)
+		if resp.RunID != id {
+			t.Errorf("child %d: run_id got %q, want %q", i, resp.RunID, id)
 		}
 		if resp.OwnerID != "user-alice" {
 			t.Errorf("child %d: owner_id got %q, want user-alice", i, resp.OwnerID)
 		}
 		// State should be pending or running (both valid for just-spawned).
-		if resp.State != types.TaskPending && resp.State != types.TaskRunning {
+		if resp.State != types.RunPending && resp.State != types.RunRunning {
 			t.Errorf("child %d: state got %q, want pending or running", i, resp.State)
 		}
 	}
@@ -992,11 +992,11 @@ func TestConcurrentWorkers_Spawn5WorkersRapidlyThenVerifyAllComplete(t *testing.
 
 	childIDs := make([]string, len(objectives))
 	for i, obj := range objectives {
-		rec, err := rt.SpawnTask(ctx, parentID, obj, "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, obj, "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn worker %d: %v", i, err)
 		}
-		childIDs[i] = rec.TaskID
+		childIDs[i] = rec.RunID
 	}
 
 	// Step 2: Check: all show 'running' state simultaneously.
@@ -1012,11 +1012,11 @@ func TestConcurrentWorkers_Spawn5WorkersRapidlyThenVerifyAllComplete(t *testing.
 
 		runningCount = 0
 		for _, id := range childIDs {
-			task, err := rt.Store().GetTask(ctx, id)
+			task, err := rt.Store().GetRun(ctx, id)
 			if err != nil {
 				t.Fatalf("get task: %v", err)
 			}
-			if task.State == types.TaskRunning {
+			if task.State == types.RunRunning {
 				runningCount++
 			}
 		}
@@ -1040,7 +1040,7 @@ func TestConcurrentWorkers_Spawn5WorkersRapidlyThenVerifyAllComplete(t *testing.
 
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -1054,11 +1054,11 @@ func TestConcurrentWorkers_Spawn5WorkersRapidlyThenVerifyAllComplete(t *testing.
 
 	// All should be completed.
 	for i, id := range childIDs {
-		task, err := rt.Store().GetTask(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("get completed task: %v", err)
 		}
-		if task.State != types.TaskCompleted {
+		if task.State != types.RunCompleted {
 			t.Errorf("worker %d: state got %q, want completed", i, task.State)
 		}
 		if task.Result == "" {
@@ -1117,7 +1117,7 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 	ctx := context.Background()
 
 	// Create parent.
-	parentRec, err := rt.SubmitTask(ctx, "parent for 10 workers", "user-alice")
+	parentRec, err := rt.StartRun(ctx, "parent for 10 workers", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -1133,12 +1133,12 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			rec, err := rt.SpawnTask(ctx, parentRec.TaskID, fmt.Sprintf("worker %d", idx), "user-alice", nil)
+			rec, err := rt.StartChildRun(ctx, parentRec.RunID, fmt.Sprintf("worker %d", idx), "user-alice", nil)
 			if err != nil {
 				t.Errorf("spawn worker %d: %v", idx, err)
 				return
 			}
-			childIDs[idx] = rec.TaskID
+			childIDs[idx] = rec.RunID
 			successCount.Add(1)
 		}(i)
 	}
@@ -1165,7 +1165,7 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if running < numWorkers {
-		t.Errorf("running tasks: got %d, want at least %d", running, numWorkers)
+		t.Errorf("running runs: got %d, want at least %d", running, numWorkers)
 	}
 
 	// Wait for all to complete.
@@ -1182,7 +1182,7 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 			if id == "" {
 				continue
 			}
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -1200,12 +1200,12 @@ func TestConcurrentWorkers_SpawnWithSlowProvider_HighConcurrency(t *testing.T) {
 		if id == "" {
 			continue
 		}
-		task, err := rt.Store().GetTask(ctx, id)
+		task, err := rt.Store().GetRun(ctx, id)
 		if err != nil {
 			t.Errorf("get worker %d: %v", i, err)
 			continue
 		}
-		if task.State == types.TaskCompleted {
+		if task.State == types.RunCompleted {
 			completed++
 		}
 	}
@@ -1229,7 +1229,7 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 
 	bus := events.NewEventBus()
 
-	// Create a provider that fails for tasks containing "fail" in the objective.
+	// Create a provider that fails for runs containing "fail" in the objective.
 	provider := &conditionalFailProvider{
 		delay:      50 * time.Millisecond,
 		failPrefix: "fail",
@@ -1253,18 +1253,18 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 	ctx := context.Background()
 
 	// Create parent.
-	parentRec, err := rt.SubmitTask(ctx, "parent for mixed workers", "user-alice")
+	parentRec, err := rt.StartRun(ctx, "parent for mixed workers", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
 
 	// Spawn workers: 2 succeed, 1 fails.
-	rec1, _ := rt.SpawnTask(ctx, parentRec.TaskID, "analyze data", "user-alice", nil)
-	rec2, _ := rt.SpawnTask(ctx, parentRec.TaskID, "fail this task", "user-alice", nil)
-	rec3, _ := rt.SpawnTask(ctx, parentRec.TaskID, "summarize results", "user-alice", nil)
+	rec1, _ := rt.StartChildRun(ctx, parentRec.RunID, "analyze data", "user-alice", nil)
+	rec2, _ := rt.StartChildRun(ctx, parentRec.RunID, "fail this task", "user-alice", nil)
+	rec3, _ := rt.StartChildRun(ctx, parentRec.RunID, "summarize results", "user-alice", nil)
 
-	childIDs := []string{rec1.TaskID, rec2.TaskID, rec3.TaskID}
+	childIDs := []string{rec1.RunID, rec2.RunID, rec3.RunID}
 
 	// Wait for all to complete.
 	deadline := time.After(10 * time.Second)
@@ -1276,7 +1276,7 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 		}
 		allDone := true
 		for _, id := range childIDs {
-			task, _ := rt.Store().GetTask(ctx, id)
+			task, _ := rt.Store().GetRun(ctx, id)
 			if !task.State.Terminal() {
 				allDone = false
 				break
@@ -1289,17 +1289,17 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 	}
 
 	// Check task states.
-	task1, _ := rt.Store().GetTask(ctx, rec1.TaskID)
-	task2, _ := rt.Store().GetTask(ctx, rec2.TaskID)
-	task3, _ := rt.Store().GetTask(ctx, rec3.TaskID)
+	task1, _ := rt.Store().GetRun(ctx, rec1.RunID)
+	task2, _ := rt.Store().GetRun(ctx, rec2.RunID)
+	task3, _ := rt.Store().GetRun(ctx, rec3.RunID)
 
-	if task1.State != types.TaskCompleted {
+	if task1.State != types.RunCompleted {
 		t.Errorf("task1: got %q, want completed", task1.State)
 	}
-	if task2.State != types.TaskFailed {
+	if task2.State != types.RunFailed {
 		t.Errorf("task2 (failing): got %q, want failed", task2.State)
 	}
-	if task3.State != types.TaskCompleted {
+	if task3.State != types.RunCompleted {
 		t.Errorf("task3: got %q, want completed", task3.State)
 	}
 
@@ -1308,7 +1308,7 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 		t.Error("task2 should have an error message")
 	}
 
-	// Successful tasks should have results.
+	// Successful runs should have results.
 	if task1.Result == "" {
 		t.Error("task1 should have a result")
 	}
@@ -1317,7 +1317,7 @@ func TestConcurrentWorkers_MixedPassFailWorkers(t *testing.T) {
 	}
 }
 
-// conditionalFailProvider is a test provider that fails tasks containing
+// conditionalFailProvider is a test provider that fails runs containing
 // a specific prefix in the prompt.
 type conditionalFailProvider struct {
 	delay      time.Duration
@@ -1327,8 +1327,8 @@ type conditionalFailProvider struct {
 
 func (p *conditionalFailProvider) ProviderName() string { return "conditional-fail" }
 
-func (p *conditionalFailProvider) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
-	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started"}`))
+func (p *conditionalFailProvider) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
+	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started"}`))
 
 	select {
 	case <-time.After(p.delay):
@@ -1340,7 +1340,7 @@ func (p *conditionalFailProvider) Execute(ctx context.Context, task *types.TaskR
 		return fmt.Errorf("task failed: prompt contains %q", p.failPrefix)
 	}
 
-	emit(types.EventTaskDelta, "execution",
+	emit(types.EventRunDelta, "execution",
 		json.RawMessage(`{"text":"`+p.result+`"}`))
 	return nil
 }

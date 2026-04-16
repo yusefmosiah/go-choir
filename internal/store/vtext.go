@@ -68,17 +68,17 @@ CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc_created ON vtext_revisions(doc_id,
 
 CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 	doc_id              VARCHAR(255) NOT NULL,
-	task_id             VARCHAR(255) NOT NULL,
+	run_id             VARCHAR(255) NOT NULL,
 	owner_id            VARCHAR(255) NOT NULL,
 	state               VARCHAR(64) NOT NULL DEFAULT 'pending',
 	revision_id         VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL,
 	completed_at        DATETIME,
-	PRIMARY KEY (doc_id, task_id)
+	PRIMARY KEY (doc_id, run_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_doc ON vtext_agent_mutations(doc_id);
-CREATE INDEX IF NOT EXISTS idx_vtext_mutations_task ON vtext_agent_mutations(task_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_mutations_run ON vtext_agent_mutations(run_id);
 
 CREATE TABLE IF NOT EXISTS agent_evidence (
 	evidence_id    VARCHAR(255) PRIMARY KEY,
@@ -991,12 +991,12 @@ func scanRevision(row interface{ Scan(...any) error }) (types.Revision, error) {
 // ----- Agent mutation tracking (VAL-CROSS-122: idempotent revision) -----
 
 // AgentMutation represents an in-flight or completed appagent-driven document
-// mutation. It tracks the mapping from a runtime task to a document mutation,
+// mutation. It tracks the mapping from a runtime run to a document mutation,
 // enabling idempotent handling so that renewal/retry does not create a
 // duplicate canonical revision.
 type AgentMutation struct {
 	DocID       string     `json:"doc_id"`
-	TaskID      string     `json:"task_id"`
+	RunID      string     `json:"run_id"`
 	OwnerID     string     `json:"owner_id"`
 	State       string     `json:"state"` // "pending", "completed", "failed"
 	RevisionID  string     `json:"revision_id,omitempty"`
@@ -1005,18 +1005,18 @@ type AgentMutation struct {
 }
 
 // CreateAgentMutation records a new in-flight appagent mutation. It uses
-// INSERT IGNORE so that duplicate (doc_id, task_id) pairs are silently
-// ignored, supporting idempotent task creation (VAL-CROSS-122).
+// INSERT IGNORE so that duplicate (doc_id, run_id) pairs are silently
+// ignored, supporting idempotent run creation (VAL-CROSS-122).
 func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error {
 	var completedAt any
 	if m.CompletedAt != nil {
 		completedAt = m.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.vtextHandle().ExecContext(ctx,
-		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, task_id, owner_id, state, revision_id, created_at, completed_at)
+		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, run_id, owner_id, state, revision_id, created_at, completed_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		m.DocID,
-		m.TaskID,
+		m.RunID,
 		m.OwnerID,
 		m.State,
 		m.RevisionID,
@@ -1030,12 +1030,12 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 }
 
 // GetPendingAgentMutationByDoc returns the pending agent mutation for a
-// document, if one exists. This is used to return the existing task ID
+// document, if one exists. This is used to return the existing run ID
 // when a retry/renewal occurs, preventing duplicate mutation submissions
 // (VAL-CROSS-122).
 func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, run_id, owner_id, state, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
 		  WHERE doc_id = ? AND owner_id = ? AND state = 'pending'
 		  ORDER BY created_at DESC
@@ -1045,15 +1045,15 @@ func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID
 	return scanAgentMutation(row)
 }
 
-// GetAgentMutationByTask returns the agent mutation for a specific task ID.
-// This is used during task completion to check if the revision has already
+// GetAgentMutationByRun returns the agent mutation for a specific run ID.
+// This is used during run completion to check if the revision has already
 // been created (VAL-CROSS-122: no duplicate canonical revision).
-func (s *Store) GetAgentMutationByTask(ctx context.Context, taskID string) (*AgentMutation, error) {
+func (s *Store) GetAgentMutationByRun(ctx context.Context, runID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, task_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, run_id, owner_id, state, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
-		  WHERE task_id = ?`,
-		taskID,
+		  WHERE run_id = ?`,
+		runID,
 	)
 	return scanAgentMutation(row)
 }
@@ -1064,17 +1064,17 @@ func (s *Store) GetAgentMutationByTask(ctx context.Context, taskID string) (*Age
 // state, preventing duplicate canonical revisions (VAL-CROSS-122).
 var ErrMutationAlreadyCompleted = errors.New("agent mutation already completed")
 
-func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID string) error {
+func (s *Store) CompleteAgentMutation(ctx context.Context, runID, revisionID string) error {
 	now := time.Now().UTC()
 	result, err := s.vtextHandle().ExecContext(ctx,
 		`UPDATE vtext_agent_mutations
 		    SET state = 'completed',
 		        revision_id = ?,
 		        completed_at = ?
-		  WHERE task_id = ? AND state = 'pending'`,
+		  WHERE run_id = ? AND state = 'pending'`,
 		revisionID,
 		now.Format(time.RFC3339Nano),
-		taskID,
+		runID,
 	)
 	if err != nil {
 		return fmt.Errorf("complete vtext agent mutation: %w", err)
@@ -1090,15 +1090,15 @@ func (s *Store) CompleteAgentMutation(ctx context.Context, taskID, revisionID st
 }
 
 // FailAgentMutation marks an agent mutation as failed.
-func (s *Store) FailAgentMutation(ctx context.Context, taskID string) error {
+func (s *Store) FailAgentMutation(ctx context.Context, runID string) error {
 	now := time.Now().UTC()
 	_, err := s.vtextHandle().ExecContext(ctx,
 		`UPDATE vtext_agent_mutations
 		    SET state = 'failed',
 		        completed_at = ?
-		  WHERE task_id = ? AND state = 'pending'`,
+		  WHERE run_id = ? AND state = 'pending'`,
 		now.Format(time.RFC3339Nano),
-		taskID,
+		runID,
 	)
 	if err != nil {
 		return fmt.Errorf("fail vtext agent mutation: %w", err)
@@ -1200,7 +1200,7 @@ func scanAgentMutation(row interface{ Scan(...any) error }) (*AgentMutation, err
 
 	err := row.Scan(
 		&m.DocID,
-		&m.TaskID,
+		&m.RunID,
 		&m.OwnerID,
 		&m.State,
 		&m.RevisionID,

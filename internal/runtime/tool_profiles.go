@@ -22,32 +22,32 @@ const (
 )
 
 const (
-	taskMetadataAgentProfile = "agent_profile"
-	taskMetadataWorkID       = "work_id"
-	taskMetadataAgentRole    = "agent_role"
-	taskMetadataAgentID      = "agent_id"
-	taskMetadataModel        = "model"
+	runMetadataAgentProfile = "agent_profile"
+	runMetadataChannelID    = "channel_id"
+	runMetadataAgentRole    = "agent_role"
+	runMetadataAgentID      = "agent_id"
+	runMetadataModel        = "model"
 )
 
 type toolContextKey string
 
 const (
-	toolCtxTaskID    toolContextKey = "task_id"
-	toolCtxAgentID   toolContextKey = "agent_id"
-	toolCtxOwnerID   toolContextKey = "owner_id"
-	toolCtxProfile   toolContextKey = "agent_profile"
-	toolCtxRole      toolContextKey = "agent_role"
-	toolCtxWorkID    toolContextKey = "work_id"
+	toolCtxRunID    toolContextKey = "run_id"
+	toolCtxAgentID  toolContextKey = "agent_id"
+	toolCtxOwnerID  toolContextKey = "owner_id"
+	toolCtxProfile  toolContextKey = "agent_profile"
+	toolCtxRole     toolContextKey = "agent_role"
+	toolCtxChannelID toolContextKey = "channel_id"
 	toolCtxSandboxID toolContextKey = "sandbox_id"
 )
 
-func WithToolExecutionContext(ctx context.Context, rec *types.TaskRecord) context.Context {
-	ctx = context.WithValue(ctx, toolCtxTaskID, rec.TaskID)
-	ctx = context.WithValue(ctx, toolCtxAgentID, agentIDForTask(rec))
+func WithToolExecutionContext(ctx context.Context, rec *types.RunRecord) context.Context {
+	ctx = context.WithValue(ctx, toolCtxRunID, rec.RunID)
+	ctx = context.WithValue(ctx, toolCtxAgentID, agentIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxOwnerID, rec.OwnerID)
-	ctx = context.WithValue(ctx, toolCtxProfile, agentProfileForTask(rec))
-	ctx = context.WithValue(ctx, toolCtxRole, agentRoleForTask(rec))
-	ctx = context.WithValue(ctx, toolCtxWorkID, workIDForTask(rec))
+	ctx = context.WithValue(ctx, toolCtxProfile, agentProfileForRun(rec))
+	ctx = context.WithValue(ctx, toolCtxRole, agentRoleForRun(rec))
+	ctx = context.WithValue(ctx, toolCtxChannelID, channelIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxSandboxID, rec.SandboxID)
 	return ctx
 }
@@ -57,12 +57,15 @@ func stringFromToolContext(ctx context.Context, key toolContextKey) string {
 	return strings.TrimSpace(value)
 }
 
-func agentProfileForTask(rec *types.TaskRecord) string {
+func agentProfileForRun(rec *types.RunRecord) string {
 	if rec == nil {
 		return AgentProfileSuper
 	}
+	if strings.TrimSpace(rec.AgentProfile) != "" {
+		return strings.TrimSpace(rec.AgentProfile)
+	}
 	if rec.Metadata != nil {
-		if profile, _ := rec.Metadata[taskMetadataAgentProfile].(string); strings.TrimSpace(profile) != "" {
+		if profile, _ := rec.Metadata[runMetadataAgentProfile].(string); strings.TrimSpace(profile) != "" {
 			return strings.TrimSpace(profile)
 		}
 	}
@@ -72,40 +75,55 @@ func agentProfileForTask(rec *types.TaskRecord) string {
 	return AgentProfileSuper
 }
 
-func agentRoleForTask(rec *types.TaskRecord) string {
+func agentRoleForRun(rec *types.RunRecord) string {
 	if rec == nil {
 		return AgentProfileSuper
 	}
+	if strings.TrimSpace(rec.AgentRole) != "" {
+		return strings.TrimSpace(rec.AgentRole)
+	}
 	if rec.Metadata != nil {
-		if role, _ := rec.Metadata[taskMetadataAgentRole].(string); strings.TrimSpace(role) != "" {
+		if role, _ := rec.Metadata[runMetadataAgentRole].(string); strings.TrimSpace(role) != "" {
 			return strings.TrimSpace(role)
 		}
 	}
-	return agentProfileForTask(rec)
+	return agentProfileForRun(rec)
 }
 
-func agentIDForTask(rec *types.TaskRecord) string {
+func agentIDForRun(rec *types.RunRecord) string {
 	if rec == nil {
 		return ""
 	}
+	if strings.TrimSpace(rec.AgentID) != "" {
+		return strings.TrimSpace(rec.AgentID)
+	}
 	if rec.Metadata != nil {
-		if agentID, _ := rec.Metadata[taskMetadataAgentID].(string); strings.TrimSpace(agentID) != "" {
+		if agentID, _ := rec.Metadata[runMetadataAgentID].(string); strings.TrimSpace(agentID) != "" {
 			return strings.TrimSpace(agentID)
 		}
 	}
-	return strings.TrimSpace(rec.TaskID)
+	return strings.TrimSpace(rec.RunID)
 }
 
-func workIDForTask(rec *types.TaskRecord) string {
+func channelIDForRun(rec *types.RunRecord) string {
 	if rec == nil {
 		return ""
 	}
+	if strings.TrimSpace(rec.ChannelID) != "" {
+		return strings.TrimSpace(rec.ChannelID)
+	}
 	if rec.Metadata != nil {
-		if workID, _ := rec.Metadata[taskMetadataWorkID].(string); strings.TrimSpace(workID) != "" {
-			return strings.TrimSpace(workID)
+		if channelID, _ := rec.Metadata[runMetadataChannelID].(string); strings.TrimSpace(channelID) != "" {
+			return strings.TrimSpace(channelID)
+		}
+		if legacyWorkID, _ := rec.Metadata["work_id"].(string); strings.TrimSpace(legacyWorkID) != "" {
+			return strings.TrimSpace(legacyWorkID)
 		}
 	}
-	return strings.TrimSpace(rec.TaskID)
+	if strings.TrimSpace(rec.AgentID) != "" {
+		return strings.TrimSpace(rec.AgentID)
+	}
+	return strings.TrimSpace(rec.RunID)
 }
 
 type AgentRoleSpec struct {
@@ -141,7 +159,7 @@ func roleSpec(profile string) AgentRoleSpec {
 			Profile:                AgentProfileVText,
 			AllowEvidenceTools:     true,
 			AllowCoAgentTools:      true,
-			AllowedDelegateTargets: []string{AgentProfileResearcher},
+			AllowedDelegateTargets: []string{AgentProfileResearcher, AgentProfileSuper},
 		}
 	case AgentProfileCoSuper:
 		return AgentRoleSpec{
@@ -179,9 +197,9 @@ func canDelegateTo(callerProfile, targetProfile string) bool {
 	return false
 }
 
-func (rt *Runtime) systemPromptForTask(rec *types.TaskRecord) (string, error) {
-	profile := agentProfileForTask(rec)
-	workID := workIDForTask(rec)
+func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
+	profile := agentProfileForRun(rec)
+	channelID := channelIDForRun(rec)
 	ownerID := ""
 	if rec != nil {
 		ownerID = rec.OwnerID
@@ -220,17 +238,17 @@ func (rt *Runtime) systemPromptForTask(rec *types.TaskRecord) (string, error) {
 			b.WriteString(".")
 		}
 	}
-	if workID != "" {
-		b.WriteString("\n\nCurrent shared work channel: ")
-		b.WriteString(workID)
+	if channelID != "" {
+		b.WriteString("\n\nCurrent shared channel: ")
+		b.WriteString(channelID)
 		b.WriteString(".")
 	}
-	b.WriteString("\nUse shared work channels to coordinate with peer agents and keep messages concise and actionable.")
+	b.WriteString("\nUse shared channels to coordinate with peer agents and keep messages concise and actionable.")
 	return b.String(), nil
 }
 
-func (rt *Runtime) providerPromptForTask(rec *types.TaskRecord) (string, error) {
-	systemPrompt, err := rt.systemPromptForTask(rec)
+func (rt *Runtime) providerPromptForRun(rec *types.RunRecord) (string, error) {
+	systemPrompt, err := rt.systemPromptForRun(rec)
 	if err != nil {
 		return "", err
 	}
@@ -341,8 +359,8 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 	return nil
 }
 
-func (rt *Runtime) toolRegistryForTask(rec *types.TaskRecord) *ToolRegistry {
-	profile := agentProfileForTask(rec)
+func (rt *Runtime) toolRegistryForRun(rec *types.RunRecord) *ToolRegistry {
+	profile := agentProfileForRun(rec)
 	if rt.toolProfiles != nil {
 		if registry, ok := rt.toolProfiles[profile]; ok && registry != nil {
 			return registry

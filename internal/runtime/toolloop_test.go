@@ -96,12 +96,12 @@ func TestRunToolLoopEndTurn(t *testing.T) {
 	// Should have emitted a progress event for the iteration.
 	found := false
 	for _, k := range emittedEvents {
-		if k == types.EventTaskProgress {
+		if k == types.EventRunProgress {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected task.progress event from loop iteration")
+		t.Error("expected run.progress event from loop iteration")
 	}
 }
 
@@ -445,7 +445,7 @@ func TestRuntimeWithToolRegistryUsesToolLoop(t *testing.T) {
 	rt, store := testRuntimeWithProviderAndRegistry(t, provider, registry)
 	defer rt.Stop()
 
-	rec, err := rt.SubmitTask(context.Background(), "test prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -454,11 +454,11 @@ func TestRuntimeWithToolRegistryUsesToolLoop(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Check task completed with tool-loop result.
-	fetched, err := store.GetTask(context.Background(), rec.TaskID)
+	fetched, err := store.GetRun(context.Background(), rec.RunID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if fetched.State != types.TaskCompleted {
+	if fetched.State != types.RunCompleted {
 		t.Errorf("state: got %q, want completed", fetched.State)
 	}
 	if fetched.Result != "Final answer from tool loop" {
@@ -515,7 +515,7 @@ func TestRuntimeWithToolRegistryEmitsToolEvents(t *testing.T) {
 	ch := rt.EventBus().SubscribeWithBuffer(256)
 	defer rt.EventBus().Unsubscribe(ch)
 
-	rec, err := rt.SubmitTask(context.Background(), "read the test file", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "read the test file", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestRuntimeWithToolRegistryEmitsToolEvents(t *testing.T) {
 	for !invokedFound || !resultFound {
 		select {
 		case ev := <-ch:
-			if ev.Record.TaskID != rec.TaskID {
+			if ev.Record.RunID != rec.RunID {
 				continue
 			}
 			if ev.Record.Kind == types.EventToolInvoked {
@@ -544,7 +544,7 @@ func TestRuntimeWithToolRegistryEmitsToolEvents(t *testing.T) {
 	}
 
 	// Also check persisted events.
-	events, err := rt.Store().ListEvents(context.Background(), rec.TaskID, 100)
+	events, err := rt.Store().ListEvents(context.Background(), rec.RunID, 100)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}

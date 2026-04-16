@@ -79,55 +79,55 @@ func authenticatedRequest(method, path, body, user string) *http.Request {
 
 // --- Task Submission Tests ---
 
-func TestHandleTaskSubmissionReturnsStableHandle(t *testing.T) {
-	// VAL-RUNTIME-003: accepted task submission returns a stable handle.
+func TestHandleRunSubmissionReturnsStableHandle(t *testing.T) {
+	// VAL-RUNTIME-003: accepted run submission returns a stable handle.
 	_, handler := testAPISetup(t)
 
 	body := `{"prompt":"explain closures in Go"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var resp taskSubmitResponse
+	var resp runSubmitResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.TaskID == "" {
-		t.Error("task_id should not be empty")
+	if resp.RunID == "" {
+		t.Error("run_id should not be empty")
 	}
-	if resp.State != types.TaskPending {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskPending)
+	if resp.State != types.RunPending {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
 	}
 	if resp.OwnerID != "user-alice" {
 		t.Errorf("owner_id: got %q, want user-alice", resp.OwnerID)
 	}
 }
 
-func TestHandleTaskSubmissionPreservesMetadata(t *testing.T) {
+func TestHandleRunSubmissionPreservesMetadata(t *testing.T) {
 	rt, handler := testAPISetup(t)
 
 	body := `{"prompt":"route this into conductor","metadata":{"agent_profile":"conductor","agent_role":"conductor","input_source":"prompt_bar","requested_app":"vtext"}}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var resp taskSubmitResponse
+	var resp runSubmitResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	rec, err := rt.GetTask(context.Background(), resp.TaskID, "user-alice")
+	rec, err := rt.GetRun(context.Background(), resp.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
@@ -146,45 +146,45 @@ func TestHandleTaskSubmissionPreservesMetadata(t *testing.T) {
 	}
 }
 
-func TestHandleTaskListOwnerScoped(t *testing.T) {
+func TestHandleRunListOwnerScoped(t *testing.T) {
 	rt, handler := testAPISetup(t)
 
-	alice, err := rt.SubmitTaskWithMetadata(context.Background(), "trace alice root", "user-alice", map[string]any{
+	alice, err := rt.StartRunWithMetadata(context.Background(), "trace alice root", "user-alice", map[string]any{
 		"agent_profile": "conductor",
 		"agent_role":    "conductor",
 	})
 	if err != nil {
 		t.Fatalf("submit alice task: %v", err)
 	}
-	if _, err := rt.SubmitTask(context.Background(), "trace bob root", "user-bob"); err != nil {
+	if _, err := rt.StartRun(context.Background(), "trace bob root", "user-bob"); err != nil {
 		t.Fatalf("submit bob task: %v", err)
 	}
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/tasks?limit=20", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/runs?limit=20", "", "user-alice")
 	w := httptest.NewRecorder()
-	handler.HandleTaskList(w, req)
+	handler.HandleRunList(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskListResponse
+	var resp runListResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if len(resp.Tasks) == 0 {
+	if len(resp.Runs) == 0 {
 		t.Fatal("expected at least one task")
 	}
-	for _, task := range resp.Tasks {
+	for _, task := range resp.Runs {
 		if task.OwnerID != "user-alice" {
 			t.Fatalf("unexpected owner in task list: %q", task.OwnerID)
 		}
 	}
-	if resp.Tasks[0].TaskID != alice.TaskID {
-		t.Errorf("first task id: got %q, want %q", resp.Tasks[0].TaskID, alice.TaskID)
+	if resp.Runs[0].RunID != alice.RunID {
+		t.Errorf("first task id: got %q, want %q", resp.Runs[0].RunID, alice.RunID)
 	}
-	if profile, _ := resp.Tasks[0].Metadata["agent_profile"].(string); profile != "conductor" {
+	if profile, _ := resp.Runs[0].Metadata["agent_profile"].(string); profile != "conductor" {
 		t.Errorf("metadata.agent_profile: got %q, want %q", profile, "conductor")
 	}
 }
@@ -192,7 +192,7 @@ func TestHandleTaskListOwnerScoped(t *testing.T) {
 func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTaskWithMetadata(context.Background(), "trace selected task", "user-alice", map[string]any{
+	rec, err := rt.StartRunWithMetadata(context.Background(), "trace selected task", "user-alice", map[string]any{
 		"agent_profile": "vtext",
 		"agent_role":    "vtext",
 	})
@@ -218,7 +218,7 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 		t.Fatal("expected owner events")
 	}
 
-	taskReq := authenticatedRequest(http.MethodGet, "/api/agent/events?task_id="+rec.TaskID+"&limit=50", "", "user-alice")
+	taskReq := authenticatedRequest(http.MethodGet, "/api/agent/events?run_id="+rec.RunID+"&limit=50", "", "user-alice")
 	taskW := httptest.NewRecorder()
 	handler.HandleEventList(taskW, taskReq)
 
@@ -234,12 +234,12 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 		t.Fatal("expected task events")
 	}
 	for _, event := range taskResp.Events {
-		if event.TaskID != rec.TaskID {
-			t.Fatalf("unexpected task_id in task-scoped events: %q", event.TaskID)
+		if event.RunID != rec.RunID {
+			t.Fatalf("unexpected run_id in task-scoped events: %q", event.RunID)
 		}
 	}
 
-	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/events?task_id="+rec.TaskID, "", "user-bob")
+	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/events?run_id="+rec.RunID, "", "user-bob")
 	otherW := httptest.NewRecorder()
 	handler.HandleEventList(otherW, otherReq)
 	if otherW.Code != http.StatusNotFound {
@@ -247,56 +247,56 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 	}
 }
 
-func TestHandleTaskSubmissionAuthGated(t *testing.T) {
+func TestHandleRunSubmissionAuthGated(t *testing.T) {
 	// VAL-RUNTIME-002: task submission is auth-gated.
 	_, handler := testAPISetup(t)
 
 	// Request without auth header.
 	body := `{"prompt":"test prompt"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestHandleTaskSubmissionMethodNotAllowed(t *testing.T) {
+func TestHandleRunSubmissionMethodNotAllowed(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/task", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/run", "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
 
-func TestHandleTaskSubmissionEmptyPrompt(t *testing.T) {
+func TestHandleRunSubmissionEmptyPrompt(t *testing.T) {
 	_, handler := testAPISetup(t)
 
 	body := `{"prompt":""}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 
-func TestHandleTaskSubmissionInvalidBody(t *testing.T) {
+func TestHandleRunSubmissionInvalidBody(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", "not json", "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", "not json", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
@@ -305,11 +305,11 @@ func TestHandleTaskSubmissionInvalidBody(t *testing.T) {
 
 // --- Task Status Tests ---
 
-func TestHandleTaskStatusReturnsCorrelatedHandle(t *testing.T) {
+func TestHandleRunStatusReturnsCorrelatedHandle(t *testing.T) {
 	// VAL-RUNTIME-004: status is correlated to the submitted handle.
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "test prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "test prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -317,93 +317,93 @@ func TestHandleTaskStatusReturnsCorrelatedHandle(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", resp.TaskID, rec.TaskID)
+	if resp.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", resp.RunID, rec.RunID)
 	}
-	if resp.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskCompleted)
+	if resp.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunCompleted)
 	}
 	if resp.Result == "" {
 		t.Error("result should not be empty for completed task")
 	}
 }
 
-func TestHandleTaskStatusAuthGated(t *testing.T) {
+func TestHandleRunStatusAuthGated(t *testing.T) {
 	// VAL-RUNTIME-006: status is auth-gated.
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/status?task_id=test", "", "")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id=test", "", "")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestHandleTaskStatusCallerScoped(t *testing.T) {
-	// VAL-RUNTIME-006: status is caller-scoped (user cannot see other users' tasks).
+func TestHandleRunStatusCallerScoped(t *testing.T) {
+	// VAL-RUNTIME-006: status is caller-scoped (user cannot see other users' runs).
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "alice task", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "alice task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Eve tries to see Alice's task.
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-eve")
+		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-eve")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want %d (caller-scoped denial)", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestHandleTaskStatusMissingTaskID(t *testing.T) {
+func TestHandleRunStatusMissingRunID(t *testing.T) {
 	_, handler := testAPISetup(t)
 
 	req := authenticatedRequest(http.MethodGet, "/api/agent/status", "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 
-func TestHandleTaskStatusNotFound(t *testing.T) {
+func TestHandleRunStatusNotFound(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/status?task_id=nonexistent", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id=nonexistent", "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestHandleTaskStatusFailedOutcome(t *testing.T) {
+func TestHandleRunStatusFailedOutcome(t *testing.T) {
 	// VAL-RUNTIME-004: status exposes non-happy-path outcomes.
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -439,7 +439,7 @@ func TestHandleTaskStatusFailedOutcome(t *testing.T) {
 		_ = os.Remove(dbPath)
 	})
 
-	rec, err := rt.SubmitTask(context.Background(), "failing prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "failing prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -448,22 +448,22 @@ func TestHandleTaskStatusFailedOutcome(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?task_id=%s", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskFailed)
+	if resp.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunFailed)
 	}
 	if resp.Error == "" {
 		t.Error("error should not be empty for failed task")
@@ -473,11 +473,11 @@ func TestHandleTaskStatusFailedOutcome(t *testing.T) {
 // --- Task Status By Path ID Tests (VAL-CHOIR-002, VAL-CHOIR-005) ---
 // GET /api/agent/{id}/status
 
-func TestHandleTaskStatusByIDReturnsTaskRecord(t *testing.T) {
+func TestHandleRunStatusByIDReturnsTaskRecord(t *testing.T) {
 	// VAL-CHOIR-002: GET /api/agent/{id}/status returns task record.
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "test status by id", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "test status by id", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -486,23 +486,23 @@ func TestHandleTaskStatusByIDReturnsTaskRecord(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
 	// Response includes all required fields (VAL-CHOIR-002).
-	if resp.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", resp.TaskID, rec.TaskID)
+	if resp.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", resp.RunID, rec.RunID)
 	}
 	if resp.OwnerID != "user-alice" {
 		t.Errorf("owner_id: got %q, want user-alice", resp.OwnerID)
@@ -521,11 +521,11 @@ func TestHandleTaskStatusByIDReturnsTaskRecord(t *testing.T) {
 	}
 }
 
-func TestHandleTaskStatusByIDCompletedResult(t *testing.T) {
+func TestHandleRunStatusByIDCompletedResult(t *testing.T) {
 	// VAL-CHOIR-005: completed task has result and finished_at.
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "result check prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "result check prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -534,22 +534,22 @@ func TestHandleTaskStatusByIDCompletedResult(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskCompleted)
+	if resp.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunCompleted)
 	}
 	if resp.Result == "" {
 		t.Error("result should not be empty for completed task (VAL-CHOIR-005)")
@@ -559,43 +559,43 @@ func TestHandleTaskStatusByIDCompletedResult(t *testing.T) {
 	}
 }
 
-func TestHandleTaskStatusByIDAuthGated(t *testing.T) {
+func TestHandleRunStatusByIDAuthGated(t *testing.T) {
 	// VAL-CHOIR-002: unauthenticated request returns 401.
 	_, handler := testAPISetup(t)
 
 	req := authenticatedRequest(http.MethodGet, "/api/agent/some-id/status", "", "")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestHandleTaskStatusByIDCallerScoped(t *testing.T) {
+func TestHandleRunStatusByIDCallerScoped(t *testing.T) {
 	// VAL-CHOIR-002: 404 for task owned by different user (403 in spec,
 	// but we use 404 to prevent IDOR probing — same as query-param handler).
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "alice private task", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "alice private task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Eve tries to see Alice's task.
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-eve")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-eve")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want %d (caller-scoped denial)", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestHandleTaskStatusByIDNotFound(t *testing.T) {
+func TestHandleRunStatusByIDNotFound(t *testing.T) {
 	// VAL-CHOIR-002: 404 for non-existent task.
 	_, handler := testAPISetup(t)
 
@@ -603,15 +603,15 @@ func TestHandleTaskStatusByIDNotFound(t *testing.T) {
 		"/api/agent/nonexistent-task-id/status", "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestHandleTaskStatusByIDFailedOutcome(t *testing.T) {
-	// VAL-CHOIR-002: status exposes error information for failed tasks.
+func TestHandleRunStatusByIDFailedOutcome(t *testing.T) {
+	// VAL-CHOIR-002: status exposes error information for failed runs.
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create temp dir: %v", err)
@@ -646,7 +646,7 @@ func TestHandleTaskStatusByIDFailedOutcome(t *testing.T) {
 		_ = os.Remove(dbPath)
 	})
 
-	rec, err := rt.SubmitTask(context.Background(), "failing by-id prompt", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "failing by-id prompt", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -655,22 +655,22 @@ func TestHandleTaskStatusByIDFailedOutcome(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskFailed)
+	if resp.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunFailed)
 	}
 	if resp.Error == "" {
 		t.Error("error should not be empty for failed task")
@@ -680,32 +680,32 @@ func TestHandleTaskStatusByIDFailedOutcome(t *testing.T) {
 	}
 }
 
-func TestHandleTaskStatusByIDMethodNotAllowed(t *testing.T) {
+func TestHandleRunStatusByIDMethodNotAllowed(t *testing.T) {
 	// Only GET is allowed.
 	_, handler := testAPISetup(t)
 
 	req := authenticatedRequest(http.MethodPost, "/api/agent/some-id/status", "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
 
-func TestHandleTaskStatusByIDSpawnedChildTask(t *testing.T) {
-	// VAL-CHOIR-002: status works for spawned child tasks too.
+func TestHandleRunStatusByIDSpawnedChildTask(t *testing.T) {
+	// VAL-CHOIR-002: status works for spawned child runs too.
 	rt, handler := testAPISetup(t)
 
 	// Create a parent task first.
-	parent, err := rt.SubmitTask(context.Background(), "parent task", "user-alice")
+	parent, err := rt.StartRun(context.Background(), "parent task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit parent task: %v", err)
 	}
 
 	// Spawn a child task.
-	child, err := rt.SpawnTask(context.Background(), parent.TaskID, "child objective", "user-alice", nil)
+	child, err := rt.StartChildRun(context.Background(), parent.RunID, "child objective", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child task: %v", err)
 	}
@@ -714,22 +714,22 @@ func TestHandleTaskStatusByIDSpawnedChildTask(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", child.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", child.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp taskStatusResponse
+	var resp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.TaskID != child.TaskID {
-		t.Errorf("task_id: got %q, want %q", resp.TaskID, child.TaskID)
+	if resp.RunID != child.RunID {
+		t.Errorf("run_id: got %q, want %q", resp.RunID, child.RunID)
 	}
 	if resp.State == "" {
 		t.Error("state should not be empty")
@@ -737,38 +737,38 @@ func TestHandleTaskStatusByIDSpawnedChildTask(t *testing.T) {
 	// Verify metadata includes parent_id.
 	if resp.Metadata == nil {
 		t.Error("metadata should not be nil for spawned task")
-	} else if pid, _ := resp.Metadata["parent_id"].(string); pid != parent.TaskID {
-		t.Errorf("metadata.parent_id: got %q, want %q", pid, parent.TaskID)
+	} else if pid, _ := resp.Metadata["parent_id"].(string); pid != parent.RunID {
+		t.Errorf("metadata.parent_id: got %q, want %q", pid, parent.RunID)
 	}
 }
 
-func TestHandleTaskStatusByIDStateTransitions(t *testing.T) {
+func TestHandleRunStatusByIDStateTransitions(t *testing.T) {
 	// VAL-CHOIR-002: state transitions reflected in status.
 	// Verify that status shows different states as the task progresses.
 	rt, handler := testAPISetup(t)
 
-	rec, err := rt.SubmitTask(context.Background(), "state transition test", "user-alice")
+	rec, err := rt.StartRun(context.Background(), "state transition test", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Immediately check — should be at least pending (may already be running).
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
-	handler.HandleTaskStatusByID(w, req)
+	handler.HandleRunStatusByID(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("initial status: got %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var initialResp taskStatusResponse
+	var initialResp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&initialResp); err != nil {
 		t.Fatalf("decode initial response: %v", err)
 	}
 
 	// The initial state should be pending or running.
-	if initialResp.State != types.TaskPending && initialResp.State != types.TaskRunning && initialResp.State != types.TaskCompleted {
+	if initialResp.State != types.RunPending && initialResp.State != types.RunRunning && initialResp.State != types.RunCompleted {
 		t.Errorf("initial state: got %q, want pending/running/completed", initialResp.State)
 	}
 
@@ -776,17 +776,17 @@ func TestHandleTaskStatusByIDStateTransitions(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req2 := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/%s/status", rec.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/%s/status", rec.RunID), "", "user-alice")
 	w2 := httptest.NewRecorder()
-	handler.HandleTaskStatusByID(w2, req2)
+	handler.HandleRunStatusByID(w2, req2)
 
-	var finalResp taskStatusResponse
+	var finalResp runStatusResponse
 	if err := json.NewDecoder(w2.Body).Decode(&finalResp); err != nil {
 		t.Fatalf("decode final response: %v", err)
 	}
 
-	if finalResp.State != types.TaskCompleted {
-		t.Errorf("final state: got %q, want %q", finalResp.State, types.TaskCompleted)
+	if finalResp.State != types.RunCompleted {
+		t.Errorf("final state: got %q, want %q", finalResp.State, types.RunCompleted)
 	}
 
 	// UpdatedAt should be >= CreatedAt.
@@ -829,7 +829,7 @@ func TestHandleEventsReturnsSSEStream(t *testing.T) {
 	}()
 
 	// Submit a task to generate events.
-	_, err := rt.SubmitTask(context.Background(), "test prompt for events", "user-alice")
+	_, err := rt.StartRun(context.Background(), "test prompt for events", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -861,13 +861,13 @@ func TestHandleEventsReturnsSSEStream(t *testing.T) {
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				continue // skip malformed lines
 			}
-			if ev.Kind == types.EventTaskSubmitted && ev.OwnerID == "user-alice" {
+			if ev.Kind == types.EventRunSubmitted && ev.OwnerID == "user-alice" {
 				foundSubmitted = true
 			}
 		}
 	}
 	if !foundSubmitted {
-		t.Error("expected task.submitted event in SSE stream")
+		t.Error("expected run.submitted event in SSE stream")
 	}
 }
 
@@ -876,7 +876,7 @@ func TestHandleEventsCallerScoped(t *testing.T) {
 	rt, handler := testAPISetup(t)
 
 	// Submit a task for alice.
-	_, err := rt.SubmitTask(context.Background(), "alice task", "user-alice")
+	_, err := rt.StartRun(context.Background(), "alice task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -930,7 +930,7 @@ func TestHandleEventsIncremental(t *testing.T) {
 	}()
 
 	// Submit a task — should generate events incrementally.
-	_, err := rt.SubmitTask(context.Background(), "incremental test", "user-alice")
+	_, err := rt.StartRun(context.Background(), "incremental test", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -955,11 +955,11 @@ func TestHandleEventsIncremental(t *testing.T) {
 	}
 
 	// Should see at least submitted + started (incremental, not buffered).
-	if !kinds[types.EventTaskSubmitted] {
-		t.Error("expected task.submitted event")
+	if !kinds[types.EventRunSubmitted] {
+		t.Error("expected run.submitted event")
 	}
-	if !kinds[types.EventTaskStarted] {
-		t.Error("expected task.started event (arrived incrementally)")
+	if !kinds[types.EventRunStarted] {
+		t.Error("expected run.started event (arrived incrementally)")
 	}
 }
 
@@ -1054,7 +1054,7 @@ func TestHandleHealthReflectsRunningTasks(t *testing.T) {
 	_, handler := testAPISetup(t)
 	rt := handler.rt
 
-	// No tasks running initially.
+	// No runs running initially.
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	handler.HandleHealth(w, req)
@@ -1063,12 +1063,12 @@ func TestHandleHealthReflectsRunningTasks(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.RunningTasks != 0 {
-		t.Errorf("running_tasks: got %d, want 0", resp.RunningTasks)
+	if resp.RunningRuns != 0 {
+		t.Errorf("running_runs: got %d, want 0", resp.RunningRuns)
 	}
 
 	// Submit a task.
-	_, err := rt.SubmitTask(context.Background(), "running task", "user-alice")
+	_, err := rt.StartRun(context.Background(), "running task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -1080,8 +1080,8 @@ func TestHandleHealthReflectsRunningTasks(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp2); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp2.RunningTasks < 1 {
-		t.Errorf("running_tasks: got %d, want >= 1", resp2.RunningTasks)
+	if resp2.RunningRuns < 1 {
+		t.Errorf("running_runs: got %d, want >= 1", resp2.RunningRuns)
 	}
 }
 
@@ -1197,7 +1197,7 @@ func TestSupervisorRecoveryVisible(t *testing.T) {
 
 func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 	// VAL-RUNTIME-008: provider failures surface without crashing the runtime.
-	// Submit a failing task, verify the runtime still accepts new tasks.
+	// Submit a failing task, verify the runtime still accepts new runs.
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-api-test")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create temp dir: %v", err)
@@ -1234,9 +1234,9 @@ func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 
 	// Submit the failing task.
 	body := `{"prompt":"will fail"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/task", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
 	w := httptest.NewRecorder()
-	handler.HandleTaskSubmission(w, req)
+	handler.HandleRunSubmission(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
@@ -1246,38 +1246,38 @@ func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Check the failed task status.
-	var submitResp taskSubmitResponse
+	var submitResp runSubmitResponse
 	if err := json.NewDecoder(w.Body).Decode(&submitResp); err != nil {
 		t.Fatalf("decode submit response: %v", err)
 	}
 
 	statusReq := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?task_id=%s", submitResp.TaskID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?run_id=%s", submitResp.RunID), "", "user-alice")
 	statusW := httptest.NewRecorder()
-	handler.HandleTaskStatus(statusW, statusReq)
+	handler.HandleRunStatus(statusW, statusReq)
 
 	if statusW.Code != http.StatusOK {
 		t.Fatalf("status code: got %d, want %d", statusW.Code, http.StatusOK)
 	}
 
-	var statusResp taskStatusResponse
+	var statusResp runStatusResponse
 	if err := json.NewDecoder(statusW.Body).Decode(&statusResp); err != nil {
 		t.Fatalf("decode status response: %v", err)
 	}
 
-	if statusResp.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", statusResp.State, types.TaskFailed)
+	if statusResp.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", statusResp.State, types.RunFailed)
 	}
 
-	// The runtime should still accept new tasks.
+	// The runtime should still accept new runs.
 	newBody := `{"prompt":"after failure"}`
-	newReq := authenticatedRequest(http.MethodPost, "/api/agent/task", newBody, "user-alice")
+	newReq := authenticatedRequest(http.MethodPost, "/api/agent/run", newBody, "user-alice")
 	newW := httptest.NewRecorder()
 
 	// Replace the provider with a working one for the new task.
 	rt.provider = NewStubProvider(50 * time.Millisecond)
 
-	handler.HandleTaskSubmission(newW, newReq)
+	handler.HandleRunSubmission(newW, newReq)
 
 	if newW.Code != http.StatusAccepted {
 		t.Errorf("status after failure: got %d, want %d", newW.Code, http.StatusAccepted)

@@ -1,20 +1,20 @@
 <!--
-  TaskRunner — shell prompt and runtime task progress UI.
+  TaskRunner — shell prompt and runtime run progress UI.
 
-  Submits prompts through POST /api/agent/task, renders task/status/event
+  Submits prompts through POST /api/agent/run, renders run/status/event
   progress, returns the real provider-backed answer, and supports
   reattachment across reload/new-tab without resubmitting (VAL-CROSS-121).
 
   Renewal-safe submission (VAL-CROSS-111):
-    - submitTask() uses fetchWithRenewal so expired access tokens are
+    - submitRun() uses fetchWithRenewal so expired access tokens are
       silently renewed before retry.
-    - The client-side active-task guard prevents duplicate submission
+    - The client-side active-run guard prevents duplicate submission
       even if renewal causes a second fetch attempt.
 
   Reattachment (VAL-CROSS-121):
-    - On mount, reattachToActiveTask() checks sessionStorage for an
-      in-flight task handle and resumes progress instead of resubmitting.
-    - The task handle is cleared from sessionStorage when the task
+    - On mount, reattachToActiveRun() checks sessionStorage for an
+      in-flight run handle and resumes progress instead of resubmitting.
+    - The run handle is cleared from sessionStorage when the run
       reaches a terminal state.
 
   Data attributes for test targeting:
@@ -32,13 +32,13 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import {
-    submitTask,
-    fetchTaskStatus,
+    submitRun,
+    fetchRunStatus,
     connectEventStream,
-    reattachToActiveTask,
-    clearActiveTask,
+    reattachToActiveRun,
+    clearActiveRun,
     isTerminalState,
-    getActiveTask,
+    getActiveRun,
   } from './runtime.js';
   import { AuthRequiredError } from './auth.js';
 
@@ -50,22 +50,22 @@
   /** Whether a submission is in progress. */
   let submitting = false;
 
-  /** The current task ID (stable handle). */
-  let currentTaskId = '';
+  /** The current run ID (stable handle). */
+  let currentRunId = '';
 
-  /** The current task state. */
-  let currentTaskState = '';
+  /** The current run state. */
+  let currentRunState = '';
 
-  /** The task result text (populated on completion). */
+  /** The run result text (populated on completion). */
   let taskResult = '';
 
-  /** Task error message (populated on failure). */
+  /** Run error message (populated on failure). */
   let taskError = '';
 
-  /** Collected events for the current task. */
+  /** Collected events for the current run. */
   let taskEvents = [];
 
-  /** Whether we are reattaching to an in-flight task. */
+  /** Whether we are reattaching to an in-flight run. */
   let reattaching = false;
 
   /** Event stream handle. */
@@ -83,23 +83,23 @@
   import { onDestroy } from 'svelte';
 
   onMount(async () => {
-    // Attempt reattachment to any in-flight task (VAL-CROSS-121).
+    // Attempt reattachment to any in-flight run (VAL-CROSS-121).
     try {
       reattaching = true;
-      const status = await reattachToActiveTask();
+      const status = await reattachToActiveRun();
       if (status && !isTerminalState(status.state)) {
-        // Found an in-flight task — resume tracking it.
-        currentTaskId = status.task_id;
-        currentTaskState = status.state;
+        // Found an in-flight run — resume tracking it.
+        currentRunId = status.run_id;
+        currentRunState = status.state;
         taskResult = status.result || '';
         taskError = status.error || '';
         promptText = status.prompt || '';
         startEventStream();
         startStatusPolling();
       } else if (status && isTerminalState(status.state)) {
-        // Task already finished — show the result.
-        currentTaskId = status.task_id;
-        currentTaskState = status.state;
+        // Run already finished — show the result.
+        currentRunId = status.run_id;
+        currentRunState = status.state;
         taskResult = status.result || '';
         taskError = status.error || '';
         promptText = status.prompt || '';
@@ -126,7 +126,7 @@
     }
   }
 
-  // ---- Task submission ----
+  // ---- Run submission ----
 
   async function handleSubmit() {
     const trimmed = promptText.trim();
@@ -139,10 +139,10 @@
     submitting = true;
 
     try {
-      const taskInfo = await submitTask(trimmed);
+      const runInfo = await submitRun(trimmed);
 
-      currentTaskId = taskInfo.task_id;
-      currentTaskState = taskInfo.state;
+      currentRunId = runInfo.run_id;
+      currentRunState = runInfo.state;
 
       // Start tracking progress.
       startEventStream();
@@ -152,7 +152,7 @@
         dispatch('authexpired');
         return;
       }
-      submissionError = err.message || 'Task submission failed';
+      submissionError = err.message || 'Run submission failed';
     } finally {
       submitting = false;
     }
@@ -181,8 +181,8 @@
 
     eventStreamHandle = connectEventStream(
       (event) => {
-        // Only track events for the current task.
-        if (currentTaskId && event.task_id && event.task_id !== currentTaskId) {
+        // Only track events for the current run.
+        if (currentRunId && event.run_id && event.run_id !== currentRunId) {
           return;
         }
 
@@ -194,16 +194,16 @@
         taskEvents = [...taskEvents, event];
 
         // Update state from events if the event carries state info.
-        if (event.kind === 'task.started') {
-          currentTaskState = 'running';
-        } else if (event.kind === 'task.completed') {
-          currentTaskState = 'completed';
+        if (event.kind === 'run.started') {
+          currentRunState = 'running';
+        } else if (event.kind === 'run.completed') {
+          currentRunState = 'completed';
           handleTaskComplete(event);
-        } else if (event.kind === 'task.failed') {
-          currentTaskState = 'failed';
+        } else if (event.kind === 'run.failed') {
+          currentRunState = 'failed';
           handleTaskFailed(event);
-        } else if (event.kind === 'task.cancelled') {
-          currentTaskState = 'cancelled';
+        } else if (event.kind === 'run.cancelled') {
+          currentRunState = 'cancelled';
           handleTaskTerminal();
         }
       },
@@ -219,11 +219,11 @@
     }
 
     statusPollInterval = setInterval(async () => {
-      if (!currentTaskId) return;
+      if (!currentRunId) return;
 
       try {
-        const status = await fetchTaskStatus(currentTaskId);
-        currentTaskState = status.state;
+        const status = await fetchRunStatus(currentRunId);
+        currentRunState = status.state;
 
         if (status.result) {
           taskResult = status.result;
@@ -233,7 +233,7 @@
         }
 
         if (isTerminalState(status.state)) {
-          // Task reached terminal state — stop polling and clean up.
+          // Run reached terminal state — stop polling and clean up.
           clearInterval(statusPollInterval);
           statusPollInterval = null;
 
@@ -242,8 +242,8 @@
             eventStreamHandle = null;
           }
 
-          // Clear the stored task handle (VAL-CROSS-121).
-          clearActiveTask();
+          // Clear the stored run handle (VAL-CROSS-121).
+          clearActiveRun();
         }
       } catch (_err) {
         // Status poll failed — may be transient. Keep polling.
@@ -265,12 +265,12 @@
     }
 
     // Do a final status fetch to get the full result text.
-    if (currentTaskId) {
-      fetchTaskStatus(currentTaskId)
+    if (currentRunId) {
+      fetchRunStatus(currentRunId)
         .then((status) => {
           if (status.result) taskResult = status.result;
           if (status.error) taskError = status.error;
-          currentTaskState = status.state;
+          currentRunState = status.state;
         })
         .catch(() => {});
     }
@@ -292,7 +292,7 @@
 
   function handleTaskTerminal() {
     // Clear the stored task handle so a new submission is allowed.
-    clearActiveTask();
+    clearActiveRun();
 
     if (eventStreamHandle) {
       eventStreamHandle.close();
@@ -332,14 +332,14 @@
 
   function eventKindLabel(kind) {
     switch (kind) {
-      case 'task.submitted': return 'Submitted';
-      case 'task.started': return 'Started';
-      case 'task.progress': return 'Progress';
-      case 'task.delta': return 'Delta';
-      case 'task.completed': return 'Completed';
-      case 'task.failed': return 'Failed';
-      case 'task.blocked': return 'Blocked';
-      case 'task.cancelled': return 'Cancelled';
+      case 'run.submitted': return 'Submitted';
+      case 'run.started': return 'Started';
+      case 'run.progress': return 'Progress';
+      case 'run.delta': return 'Delta';
+      case 'run.completed': return 'Completed';
+      case 'run.failed': return 'Failed';
+      case 'run.blocked': return 'Blocked';
+      case 'run.cancelled': return 'Cancelled';
       case 'tool.invoked': return 'Tool Call';
       case 'tool.result': return 'Tool Result';
       case 'runtime.health': return 'Health';
@@ -349,7 +349,7 @@
   }
 
   /** Whether the task is in progress (pending or running). */
-  $: taskInProgress = currentTaskState === 'pending' || currentTaskState === 'running';
+  $: taskInProgress = currentRunState === 'pending' || currentRunState === 'running';
 </script>
 
 <div class="task-runner" data-task-runner>
@@ -386,12 +386,12 @@
   </div>
 
   <!-- Task status and progress -->
-  {#if currentTaskId}
+  {#if currentRunId}
     <div class="task-progress" data-task-status>
       <div class="task-header">
-        <span class="task-id" data-task-id>Task: {currentTaskId.slice(0, 8)}…</span>
-        <span class="task-state {stateClass(currentTaskState)}" data-task-state>
-          {stateLabel(currentTaskState)}
+        <span class="task-id" data-task-id>Run: {currentRunId.slice(0, 8)}…</span>
+        <span class="task-state {stateClass(currentRunState)}" data-task-state>
+          {stateLabel(currentRunState)}
         </span>
       </div>
 
@@ -400,7 +400,7 @@
           <div class="progress-spinner"></div>
           <span class="progress-text">
             {#if reattaching}
-              Reattaching to in-flight task…
+              Reattaching to in-flight run…
             {:else}
               Processing your request…
             {/if}
@@ -431,7 +431,7 @@
           <ul class="event-list">
             {#each taskEvents as event}
               <li class="event-item" data-event-item>
-                <span class="event-kind {stateClass(event.kind === 'task.completed' ? 'completed' : event.kind === 'task.failed' ? 'failed' : '')}">
+                <span class="event-kind {stateClass(event.kind === 'run.completed' ? 'completed' : event.kind === 'run.failed' ? 'failed' : '')}">
                   {eventKindLabel(event.kind)}
                 </span>
                 <span class="event-seq">#{event.seq || '?'}</span>

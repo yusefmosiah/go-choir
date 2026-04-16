@@ -3,7 +3,7 @@
 // HTTP API surface consumed through the authenticated proxy.
 //
 // Design decisions:
-//   - Tasks execute as direct goroutines, not subprocess CLI loops or
+//   - Runs execute as direct goroutines, not subprocess CLI loops or
 //     adapter-wrapper processes.
 //   - Provider is an interface; the stub provider simulates execution until
 //     the Bedrock/Z.AI bridge feature replaces it with a real provider.

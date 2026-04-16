@@ -18,8 +18,8 @@ func TestEventBusPublishReceive(t *testing.T) {
 			EventID:   "evt-001",
 			Seq:       1,
 			Timestamp: time.Now().UTC(),
-			TaskID:    "task-001",
-			Kind:      types.EventTaskStarted,
+			RunID:    "task-001",
+			Kind:      types.EventRunStarted,
 			Payload:   json.RawMessage(`{}`),
 		},
 		Actor: ActorRuntime,
@@ -55,7 +55,7 @@ func TestEventBusMultipleSubscribers(t *testing.T) {
 		Record: types.EventRecord{
 			EventID: "evt-002",
 			Seq:     1,
-			Kind:    types.EventTaskSubmitted,
+			Kind:    types.EventRunSubmitted,
 			Payload: json.RawMessage(`{}`),
 		},
 		Actor: ActorRuntime,
@@ -88,7 +88,7 @@ func TestEventBusUnsubscribeStopsDelivery(t *testing.T) {
 	ev := RuntimeEvent{
 		Record: types.EventRecord{
 			EventID: "evt-003",
-			Kind:    types.EventTaskSubmitted,
+			Kind:    types.EventRunSubmitted,
 			Payload: json.RawMessage(`{}`),
 		},
 	}
@@ -114,7 +114,7 @@ func TestEventBusDropOnFullBuffer(t *testing.T) {
 	ev := RuntimeEvent{
 		Record: types.EventRecord{
 			EventID: "evt-drop",
-			Kind:    types.EventTaskProgress,
+			Kind:    types.EventRunProgress,
 			Payload: json.RawMessage(`{}`),
 		},
 	}
@@ -140,7 +140,7 @@ func TestEventBusStats(t *testing.T) {
 
 	ev := RuntimeEvent{
 		Record: types.EventRecord{
-			Kind:    types.EventTaskSubmitted,
+			Kind:    types.EventRunSubmitted,
 			Payload: json.RawMessage(`{}`),
 		},
 	}
@@ -196,7 +196,7 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 		{
 			name: "provider failure requires attention",
 			event: RuntimeEvent{
-				Record: types.EventRecord{Kind: types.EventTaskFailed},
+				Record: types.EventRecord{Kind: types.EventRunFailed},
 				Actor:  ActorProvider,
 				Cause:  CauseProviderFailure,
 			},
@@ -214,7 +214,7 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 		{
 			name: "task blocked requires attention",
 			event: RuntimeEvent{
-				Record: types.EventRecord{Kind: types.EventTaskBlocked},
+				Record: types.EventRecord{Kind: types.EventRunBlocked},
 				Actor:  ActorProvider,
 				Cause:  CauseProviderFailure,
 			},
@@ -223,7 +223,7 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 		{
 			name: "supervisor own action does not require attention",
 			event: RuntimeEvent{
-				Record: types.EventRecord{Kind: types.EventTaskFailed},
+				Record: types.EventRecord{Kind: types.EventRunFailed},
 				Actor:  ActorSupervisor,
 				Cause:  CauseSupervisorRecovery,
 			},
@@ -232,7 +232,7 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 		{
 			name: "provider progress is noise for supervisor",
 			event: RuntimeEvent{
-				Record: types.EventRecord{Kind: types.EventTaskProgress},
+				Record: types.EventRecord{Kind: types.EventRunProgress},
 				Actor:  ActorProvider,
 				Cause:  CauseProviderProgress,
 			},
@@ -241,7 +241,7 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 		{
 			name: "task submitted is not actionable for supervisor",
 			event: RuntimeEvent{
-				Record: types.EventRecord{Kind: types.EventTaskSubmitted},
+				Record: types.EventRecord{Kind: types.EventRunSubmitted},
 				Actor:  ActorRuntime,
 				Cause:  CauseTaskLifecycle,
 			},
@@ -270,9 +270,9 @@ func TestRequiresSupervisorAttention(t *testing.T) {
 
 func TestIsTerminal(t *testing.T) {
 	terminalKinds := []types.EventKind{
-		types.EventTaskCompleted,
-		types.EventTaskFailed,
-		types.EventTaskCancelled,
+		types.EventRunCompleted,
+		types.EventRunFailed,
+		types.EventRunCancelled,
 	}
 	for _, k := range terminalKinds {
 		if !IsTerminal(k) {
@@ -281,11 +281,11 @@ func TestIsTerminal(t *testing.T) {
 	}
 
 	nonTerminalKinds := []types.EventKind{
-		types.EventTaskSubmitted,
-		types.EventTaskStarted,
-		types.EventTaskProgress,
-		types.EventTaskDelta,
-		types.EventTaskBlocked,
+		types.EventRunSubmitted,
+		types.EventRunStarted,
+		types.EventRunProgress,
+		types.EventRunDelta,
+		types.EventRunBlocked,
 		types.EventRuntimeHealth,
 		types.EventRuntimeDegraded,
 	}
@@ -308,7 +308,7 @@ func TestEventBusConcurrentPublish(t *testing.T) {
 			for j := 0; j < 100; j++ {
 				bus.Publish(RuntimeEvent{
 					Record: types.EventRecord{
-						Kind:    types.EventTaskProgress,
+						Kind:    types.EventRunProgress,
 						Payload: json.RawMessage(`{}`),
 					},
 					Actor: ActorRuntime,

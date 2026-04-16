@@ -64,16 +64,16 @@ func TestCloseIdempotent(t *testing.T) {
 	_ = s.Close()
 }
 
-func TestCreateAndGetTask(t *testing.T) {
+func TestCreateAndGetRun(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	rec := types.TaskRecord{
-		TaskID:    "task-001",
+	rec := types.RunRecord{
+		RunID:    "task-001",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    "explain closures in Go",
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -82,17 +82,17 @@ func TestCreateAndGetTask(t *testing.T) {
 		},
 	}
 
-	if err := s.CreateTask(ctx, rec); err != nil {
+	if err := s.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	got, err := s.GetTask(ctx, "task-001")
+	got, err := s.GetRun(ctx, "task-001")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
 
-	if got.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", got.TaskID, rec.TaskID)
+	if got.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
 	}
 	if got.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", got.OwnerID, rec.OwnerID)
@@ -114,66 +114,66 @@ func TestCreateAndGetTask(t *testing.T) {
 	}
 }
 
-func TestGetTaskNotFound(t *testing.T) {
+func TestGetRunNotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.GetTask(ctx, "nonexistent")
+	_, err := s.GetRun(ctx, "nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestUpdateTask(t *testing.T) {
+func TestUpdateRun(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	rec := types.TaskRecord{
-		TaskID:    "task-002",
+	rec := types.RunRecord{
+		RunID:    "task-002",
 		OwnerID:   "user-bob",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    "write a hello world",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	if err := s.CreateTask(ctx, rec); err != nil {
+	if err := s.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
 	// Update to running.
-	rec.State = types.TaskRunning
+	rec.State = types.RunRunning
 	rec.UpdatedAt = now.Add(1 * time.Second)
-	if err := s.UpdateTask(ctx, rec); err != nil {
+	if err := s.UpdateRun(ctx, rec); err != nil {
 		t.Fatalf("update task to running: %v", err)
 	}
 
-	got, err := s.GetTask(ctx, "task-002")
+	got, err := s.GetRun(ctx, "task-002")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskRunning {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskRunning)
+	if got.State != types.RunRunning {
+		t.Errorf("state: got %q, want %q", got.State, types.RunRunning)
 	}
 
 	// Update to completed with result.
 	finishedAt := now.Add(10 * time.Second)
-	rec.State = types.TaskCompleted
+	rec.State = types.RunCompleted
 	rec.Result = "Hello, World!"
 	rec.UpdatedAt = finishedAt
 	rec.FinishedAt = &finishedAt
-	if err := s.UpdateTask(ctx, rec); err != nil {
+	if err := s.UpdateRun(ctx, rec); err != nil {
 		t.Fatalf("update task to completed: %v", err)
 	}
 
-	got, err = s.GetTask(ctx, "task-002")
+	got, err = s.GetRun(ctx, "task-002")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskCompleted {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskCompleted)
+	if got.State != types.RunCompleted {
+		t.Errorf("state: got %q, want %q", got.State, types.RunCompleted)
 	}
 	if got.Result != "Hello, World!" {
 		t.Errorf("result: got %q, want %q", got.Result, "Hello, World!")
@@ -183,50 +183,50 @@ func TestUpdateTask(t *testing.T) {
 	}
 }
 
-func TestUpdateTaskNotFound(t *testing.T) {
+func TestUpdateRunNotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	rec := types.TaskRecord{
-		TaskID: "nonexistent",
-		State:  types.TaskRunning,
+	rec := types.RunRecord{
+		RunID: "nonexistent",
+		State:  types.RunRunning,
 	}
 
-	err := s.UpdateTask(ctx, rec)
+	err := s.UpdateRun(ctx, rec)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestListTasksByOwner(t *testing.T) {
+func TestListRunsByOwner(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	// Create tasks for two owners.
+	// Create runs for two owners.
 	for i, owner := range []string{"alice", "bob", "alice"} {
-		taskID := fmtTaskID(i)
-		rec := types.TaskRecord{
-			TaskID:    taskID,
+		taskID := fmtRunID(i)
+		rec := types.RunRecord{
+			RunID:    taskID,
 			OwnerID:   owner,
 			SandboxID: "sandbox-dev",
-			State:     types.TaskPending,
+			State:     types.RunPending,
 			Prompt:    "prompt " + taskID,
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 			UpdatedAt: now.Add(time.Duration(i) * time.Second),
 		}
-		if err := s.CreateTask(ctx, rec); err != nil {
+		if err := s.CreateRun(ctx, rec); err != nil {
 			t.Fatalf("create task %s: %v", taskID, err)
 		}
 	}
 
-	aliceTasks, err := s.ListTasksByOwner(ctx, "alice", 10)
+	aliceTasks, err := s.ListRunsByOwner(ctx, "alice", 10)
 	if err != nil {
-		t.Fatalf("list tasks by owner: %v", err)
+		t.Fatalf("list runs by owner: %v", err)
 	}
 	if len(aliceTasks) != 2 {
-		t.Errorf("alice tasks: got %d, want 2", len(aliceTasks))
+		t.Errorf("alice runs: got %d, want 2", len(aliceTasks))
 	}
 	for _, task := range aliceTasks {
 		if task.OwnerID != "alice" {
@@ -234,26 +234,26 @@ func TestListTasksByOwner(t *testing.T) {
 		}
 	}
 
-	bobTasks, err := s.ListTasksByOwner(ctx, "bob", 10)
+	bobTasks, err := s.ListRunsByOwner(ctx, "bob", 10)
 	if err != nil {
-		t.Fatalf("list tasks by owner: %v", err)
+		t.Fatalf("list runs by owner: %v", err)
 	}
 	if len(bobTasks) != 1 {
-		t.Errorf("bob tasks: got %d, want 1", len(bobTasks))
+		t.Errorf("bob runs: got %d, want 1", len(bobTasks))
 	}
 }
 
-func TestListTasksByState(t *testing.T) {
+func TestListRunsByState(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	states := []types.TaskState{types.TaskPending, types.TaskRunning, types.TaskCompleted, types.TaskPending}
+	states := []types.RunState{types.RunPending, types.RunRunning, types.RunCompleted, types.RunPending}
 	for i, state := range states {
-		taskID := fmtTaskID(i)
-		rec := types.TaskRecord{
-			TaskID:    taskID,
+		taskID := fmtRunID(i)
+		rec := types.RunRecord{
+			RunID:    taskID,
 			OwnerID:   "user-test",
 			SandboxID: "sandbox-dev",
 			State:     state,
@@ -261,66 +261,66 @@ func TestListTasksByState(t *testing.T) {
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 			UpdatedAt: now.Add(time.Duration(i) * time.Second),
 		}
-		if err := s.CreateTask(ctx, rec); err != nil {
+		if err := s.CreateRun(ctx, rec); err != nil {
 			t.Fatalf("create task %s: %v", taskID, err)
 		}
 	}
 
-	pendingTasks, err := s.ListTasksByState(ctx, types.TaskPending, 10)
+	pendingTasks, err := s.ListRunsByState(ctx, types.RunPending, 10)
 	if err != nil {
-		t.Fatalf("list tasks by state: %v", err)
+		t.Fatalf("list runs by state: %v", err)
 	}
 	if len(pendingTasks) != 2 {
-		t.Errorf("pending tasks: got %d, want 2", len(pendingTasks))
+		t.Errorf("pending runs: got %d, want 2", len(pendingTasks))
 	}
 	for _, task := range pendingTasks {
-		if task.State != types.TaskPending {
+		if task.State != types.RunPending {
 			t.Errorf("state: got %q, want pending", task.State)
 		}
 	}
 
-	completedTasks, err := s.ListTasksByState(ctx, types.TaskCompleted, 10)
+	completedTasks, err := s.ListRunsByState(ctx, types.RunCompleted, 10)
 	if err != nil {
-		t.Fatalf("list tasks by state: %v", err)
+		t.Fatalf("list runs by state: %v", err)
 	}
 	if len(completedTasks) != 1 {
-		t.Errorf("completed tasks: got %d, want 1", len(completedTasks))
+		t.Errorf("completed runs: got %d, want 1", len(completedTasks))
 	}
 }
 
-func TestListTasks(t *testing.T) {
+func TestListRuns(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	for i := 0; i < 5; i++ {
-		taskID := fmtTaskID(i)
-		rec := types.TaskRecord{
-			TaskID:    taskID,
+		taskID := fmtRunID(i)
+		rec := types.RunRecord{
+			RunID:    taskID,
 			OwnerID:   "user-test",
 			SandboxID: "sandbox-dev",
-			State:     types.TaskPending,
+			State:     types.RunPending,
 			Prompt:    "prompt " + taskID,
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 			UpdatedAt: now.Add(time.Duration(i) * time.Second),
 		}
-		if err := s.CreateTask(ctx, rec); err != nil {
+		if err := s.CreateRun(ctx, rec); err != nil {
 			t.Fatalf("create task %s: %v", taskID, err)
 		}
 	}
 
-	tasks, err := s.ListTasks(ctx, 3)
+	runs, err := s.ListRuns(ctx, 3)
 	if err != nil {
-		t.Fatalf("list tasks: %v", err)
+		t.Fatalf("list runs: %v", err)
 	}
-	if len(tasks) != 3 {
-		t.Errorf("tasks: got %d, want 3 (limited)", len(tasks))
+	if len(runs) != 3 {
+		t.Errorf("runs: got %d, want 3 (limited)", len(runs))
 	}
 
 	// Should be ordered by created_at descending (newest first).
-	if tasks[0].CreatedAt.Before(tasks[1].CreatedAt) {
-		t.Error("expected tasks ordered by created_at descending")
+	if runs[0].CreatedAt.Before(runs[1].CreatedAt) {
+		t.Error("expected runs ordered by created_at descending")
 	}
 }
 
@@ -329,42 +329,42 @@ func TestTaskStateTransitionFromPendingToRunning(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	rec := types.TaskRecord{
-		TaskID:    "task-transition",
+	rec := types.RunRecord{
+		RunID:    "task-transition",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    "test transition",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.CreateTask(ctx, rec); err != nil {
+	if err := s.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
 	// Transition: pending → running
-	rec.State = types.TaskRunning
+	rec.State = types.RunRunning
 	rec.UpdatedAt = now.Add(1 * time.Second)
-	if err := s.UpdateTask(ctx, rec); err != nil {
+	if err := s.UpdateRun(ctx, rec); err != nil {
 		t.Fatalf("update task to running: %v", err)
 	}
 
 	// Transition: running → failed (provider failure scenario)
 	finishedAt := now.Add(5 * time.Second)
-	rec.State = types.TaskFailed
+	rec.State = types.RunFailed
 	rec.Error = "provider timeout"
 	rec.UpdatedAt = finishedAt
 	rec.FinishedAt = &finishedAt
-	if err := s.UpdateTask(ctx, rec); err != nil {
+	if err := s.UpdateRun(ctx, rec); err != nil {
 		t.Fatalf("update task to failed: %v", err)
 	}
 
-	got, err := s.GetTask(ctx, "task-transition")
+	got, err := s.GetRun(ctx, "task-transition")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskFailed)
+	if got.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", got.State, types.RunFailed)
 	}
 	if got.Error != "provider timeout" {
 		t.Errorf("error: got %q, want %q", got.Error, "provider timeout")
@@ -373,17 +373,17 @@ func TestTaskStateTransitionFromPendingToRunning(t *testing.T) {
 		t.Fatal("finished_at should be set for failed task")
 	}
 
-	// Runtime should remain available for new tasks after failure.
-	nextTask := types.TaskRecord{
-		TaskID:    "task-after-failure",
+	// Runtime should remain available for new runs after failure.
+	nextTask := types.RunRecord{
+		RunID:    "task-after-failure",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskPending,
+		State:     types.RunPending,
 		Prompt:    "next prompt after failure",
 		CreatedAt: now.Add(10 * time.Second),
 		UpdatedAt: now.Add(10 * time.Second),
 	}
-	if err := s.CreateTask(ctx, nextTask); err != nil {
+	if err := s.CreateRun(ctx, nextTask); err != nil {
 		t.Fatalf("create task after failure: %v", err)
 	}
 }
@@ -396,17 +396,17 @@ func TestAppendAndListEvents(t *testing.T) {
 
 	// Append a sequence of events for a task.
 	kinds := []types.EventKind{
-		types.EventTaskSubmitted,
-		types.EventTaskStarted,
-		types.EventTaskProgress,
-		types.EventTaskDelta,
-		types.EventTaskCompleted,
+		types.EventRunSubmitted,
+		types.EventRunStarted,
+		types.EventRunProgress,
+		types.EventRunDelta,
+		types.EventRunCompleted,
 	}
 
 	for i, kind := range kinds {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-001",
+			RunID:    "task-001",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      kind,
@@ -448,10 +448,10 @@ func TestListEventsAfter(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-002",
+			RunID:    "task-002",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Kind:      types.EventTaskProgress,
+			Kind:      types.EventRunProgress,
 			Payload:   json.RawMessage(`{}`),
 		}
 		if err := s.AppendEvent(ctx, rec); err != nil {
@@ -486,10 +486,10 @@ func TestListEventsByOwner(t *testing.T) {
 	for i, owner := range []string{"alice", "bob", "alice"} {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-" + owner,
+			RunID:    "task-" + owner,
 			OwnerID:   owner,
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Kind:      types.EventTaskSubmitted,
+			Kind:      types.EventRunSubmitted,
 			Payload:   json.RawMessage(`{}`),
 		}
 		if err := s.AppendEvent(ctx, rec); err != nil {
@@ -524,16 +524,16 @@ func TestTaskRecoveryAcrossReopen(t *testing.T) {
 		t.Fatalf("open store 1: %v", err)
 	}
 
-	rec := types.TaskRecord{
-		TaskID:    "task-recovery",
+	rec := types.RunRecord{
+		RunID:    "task-recovery",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskRunning,
+		State:     types.RunRunning,
 		Prompt:    "test recovery across restart",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s1.CreateTask(ctx, rec); err != nil {
+	if err := s1.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	if err := s1.Close(); err != nil {
@@ -550,14 +550,14 @@ func TestTaskRecoveryAcrossReopen(t *testing.T) {
 		_ = os.Remove(path)
 	}()
 
-	got, err := s2.GetTask(ctx, "task-recovery")
+	got, err := s2.GetRun(ctx, "task-recovery")
 	if err != nil {
 		t.Fatalf("get task after reopen: %v", err)
 	}
-	if got.TaskID != "task-recovery" {
-		t.Errorf("task_id: got %q, want task-recovery", got.TaskID)
+	if got.RunID != "task-recovery" {
+		t.Errorf("run_id: got %q, want task-recovery", got.RunID)
 	}
-	if got.State != types.TaskRunning {
+	if got.State != types.RunRunning {
 		t.Errorf("state: got %q, want running", got.State)
 	}
 	if got.Prompt != "test recovery across restart" {
@@ -581,10 +581,10 @@ func TestEventRecoveryAcrossReopen(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-event-recovery",
+			RunID:    "task-event-recovery",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Kind:      types.EventTaskProgress,
+			Kind:      types.EventRunProgress,
 			Payload:   json.RawMessage(`{"step":` + string(rune('0'+byte(i))) + `}`),
 		}
 		if err := s1.AppendEvent(ctx, rec); err != nil {
@@ -626,9 +626,9 @@ func TestAppendEventDefaultPayload(t *testing.T) {
 
 	rec := &types.EventRecord{
 		EventID:   "evt-default-payload",
-		TaskID:    "task-001",
+		RunID:    "task-001",
 		Timestamp: time.Now().UTC(),
-		Kind:      types.EventTaskSubmitted,
+		Kind:      types.EventRunSubmitted,
 		Payload:   nil, // should default to {}
 	}
 	if err := s.AppendEvent(ctx, rec); err != nil {
@@ -654,27 +654,27 @@ func TestTaskWithFailedStatePersistsError(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	finishedAt := now.Add(5 * time.Second)
 
-	rec := types.TaskRecord{
-		TaskID:     "task-failed",
+	rec := types.RunRecord{
+		RunID:     "task-failed",
 		OwnerID:    "user-alice",
 		SandboxID:  "sandbox-dev",
-		State:      types.TaskFailed,
+		State:      types.RunFailed,
 		Prompt:     "prompt that fails",
 		Error:      "provider timeout after 30s",
 		CreatedAt:  now,
 		UpdatedAt:  finishedAt,
 		FinishedAt: &finishedAt,
 	}
-	if err := s.CreateTask(ctx, rec); err != nil {
+	if err := s.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	got, err := s.GetTask(ctx, "task-failed")
+	got, err := s.GetRun(ctx, "task-failed")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskFailed {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskFailed)
+	if got.State != types.RunFailed {
+		t.Errorf("state: got %q, want %q", got.State, types.RunFailed)
 	}
 	if got.Error != "provider timeout after 30s" {
 		t.Errorf("error: got %q, want provider timeout after 30s", got.Error)
@@ -690,26 +690,26 @@ func TestTaskWithBlockedState(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	rec := types.TaskRecord{
-		TaskID:    "task-blocked",
+	rec := types.RunRecord{
+		RunID:    "task-blocked",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
-		State:     types.TaskBlocked,
+		State:     types.RunBlocked,
 		Prompt:    "prompt that gets blocked",
 		Error:     "provider rate limit exceeded",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.CreateTask(ctx, rec); err != nil {
+	if err := s.CreateRun(ctx, rec); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	got, err := s.GetTask(ctx, "task-blocked")
+	got, err := s.GetRun(ctx, "task-blocked")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.State != types.TaskBlocked {
-		t.Errorf("state: got %q, want %q", got.State, types.TaskBlocked)
+	if got.State != types.RunBlocked {
+		t.Errorf("state: got %q, want %q", got.State, types.RunBlocked)
 	}
 	if !got.State.Valid() {
 		t.Error("blocked state should be valid")
@@ -720,7 +720,7 @@ func TestTaskWithBlockedState(t *testing.T) {
 }
 
 // Helper functions for generating deterministic IDs in tests.
-func fmtTaskID(i int) string {
+func fmtRunID(i int) string {
 	return fmtID("task", i)
 }
 
@@ -742,10 +742,10 @@ func TestListEventsByOwnerAfter(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-001",
+			RunID:    "task-001",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Kind:      types.EventTaskProgress,
+			Kind:      types.EventRunProgress,
 			Payload:   json.RawMessage(`{"step":` + string(rune('0'+byte(i))) + `}`),
 		}
 		if err := s.AppendEvent(ctx, rec); err != nil {
@@ -785,10 +785,10 @@ func TestListEventsByOwnerAfterFiltersByOwner(t *testing.T) {
 	for i, owner := range []string{"alice", "bob", "alice"} {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			TaskID:    "task-" + owner,
+			RunID:    "task-" + owner,
 			OwnerID:   owner,
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-			Kind:      types.EventTaskSubmitted,
+			Kind:      types.EventRunSubmitted,
 			Payload:   json.RawMessage(`{}`),
 		}
 		if err := s.AppendEvent(ctx, rec); err != nil {

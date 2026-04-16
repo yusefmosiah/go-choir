@@ -25,15 +25,15 @@ import (
 //
 //   - Worker failure sends error message to parent
 //   - Parent task continues running (not crashed)
-//   - Error includes task_id and error message
+//   - Error includes run_id and error message
 //   - Parent can spawn replacement worker if needed
 //   - Other sibling workers unaffected by one failure
 //   - Failed task transitions to failed state with error details
-//   - task.failed event emitted with error details
+//   - run.failed event emitted with error details
 //   - Runtime health remains ready or degraded (not failed)
-//   - Parent can cancel running child tasks (VAL-CHOIR-010)
+//   - Parent can cancel running child runs (VAL-CHOIR-010)
 //   - Cancelled task transitions to cancelled state
-//   - task.cancelled event emitted
+//   - run.cancelled event emitted
 
 // failureIsolationSetup creates a fresh Runtime with a configurable provider
 // for testing failure scenarios.
@@ -65,7 +65,7 @@ func failureIsolationSetup(t *testing.T, provider Provider) (*Runtime, *APIHandl
 	})
 
 	// Create a parent task that stays running for the duration of the test.
-	parentRec, err := rt.SubmitTask(context.Background(), "parent task for isolation tests", "user-alice")
+	parentRec, err := rt.StartRun(context.Background(), "parent task for isolation tests", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}
@@ -73,22 +73,22 @@ func failureIsolationSetup(t *testing.T, provider Provider) (*Runtime, *APIHandl
 	// Wait for parent to start running.
 	time.Sleep(50 * time.Millisecond)
 
-	return rt, handler, parentRec.TaskID
+	return rt, handler, parentRec.RunID
 }
 
 // waitForTaskState polls until the task reaches a terminal state or times out.
-func waitForTaskState(t *testing.T, rt *Runtime, taskID string, timeout time.Duration) types.TaskRecord {
+func waitForTaskState(t *testing.T, rt *Runtime, taskID string, timeout time.Duration) types.RunRecord {
 	t.Helper()
 	ctx := context.Background()
 	deadline := time.After(timeout)
 	for {
 		select {
 		case <-deadline:
-			task, _ := rt.Store().GetTask(ctx, taskID)
+			task, _ := rt.Store().GetRun(ctx, taskID)
 			t.Fatalf("timeout waiting for task %s (state=%s)", taskID[:8], task.State)
 		default:
 		}
-		task, err := rt.Store().GetTask(ctx, taskID)
+		task, err := rt.Store().GetRun(ctx, taskID)
 		if err != nil {
 			t.Fatalf("get task %s: %v", taskID, err)
 		}
@@ -113,16 +113,16 @@ func TestFailureIsolation_FailedWorkerSendsErrorToParent(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn a child that will fail.
-	child, err := rt.SpawnTask(ctx, parentID, "execute invalid command", "user-alice", nil)
+	child, err := rt.StartChildRun(ctx, parentID, "execute invalid command", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
 
 	// Wait for the child to reach a terminal state.
-	task := waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	task := waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
 	// Verify the child is in failed state.
-	if task.State != types.TaskFailed {
+	if task.State != types.RunFailed {
 		t.Fatalf("child state: got %q, want failed", task.State)
 	}
 
@@ -142,7 +142,7 @@ func TestFailureIsolation_FailedWorkerSendsErrorToParent(t *testing.T) {
 
 	found := false
 	for _, msg := range msgs {
-		if msg.From == child.TaskID && msg.Role == "error" {
+		if msg.From == child.RunID && msg.Role == "error" {
 			found = true
 			if !strings.Contains(msg.Content, "simulated worker failure") {
 				t.Errorf("error message content: got %q, want to contain 'simulated worker failure'", msg.Content)
@@ -167,31 +167,31 @@ func TestFailureIsolation_ParentContinuesRunning(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn a child that will fail.
-	child, err := rt.SpawnTask(ctx, parentID, "failing objective", "user-alice", nil)
+	child, err := rt.StartChildRun(ctx, parentID, "failing objective", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
 
 	// Wait for child to finish (fail).
-	waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
 	// Verify the parent is still functional by spawning another child.
-	child2, err := rt.SpawnTask(ctx, parentID, "second objective after failure", "user-alice", nil)
+	child2, err := rt.StartChildRun(ctx, parentID, "second objective after failure", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn second child after first failure: %v", err)
 	}
 
 	// Wait for second child to finish (will also fail, but that's fine).
-	waitForTaskState(t, rt, child2.TaskID, 10*time.Second)
+	waitForTaskState(t, rt, child2.RunID, 10*time.Second)
 
 	// The fact that we could spawn a second child proves the parent is
 	// still operational and the runtime didn't crash.
 }
 
-// TestFailureIsolation_ErrorIncludesTaskIDAndMessage verifies that the error
-// notification includes both the task_id and the error message
+// TestFailureIsolation_ErrorIncludesRunIDAndMessage verifies that the error
+// notification includes both the run_id and the error message
 // (VAL-CHOIR-009, expected behavior #3).
-func TestFailureIsolation_ErrorIncludesTaskIDAndMessage(t *testing.T) {
+func TestFailureIsolation_ErrorIncludesRunIDAndMessage(t *testing.T) {
 	provider := &StubProvider{
 		Delay:   10 * time.Millisecond,
 		FailErr: fmt.Errorf("detailed error: connection refused to upstream service"),
@@ -199,16 +199,16 @@ func TestFailureIsolation_ErrorIncludesTaskIDAndMessage(t *testing.T) {
 	rt, _, parentID := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
-	child, err := rt.SpawnTask(ctx, parentID, "task with specific error", "user-alice", nil)
+	child, err := rt.StartChildRun(ctx, parentID, "task with specific error", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
 
-	task := waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	task := waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
-	// Verify task record has both task_id and error.
-	if task.TaskID != child.TaskID {
-		t.Errorf("task_id: got %q, want %q", task.TaskID, child.TaskID)
+	// Verify task record has both run_id and error.
+	if task.RunID != child.RunID {
+		t.Errorf("run_id: got %q, want %q", task.RunID, child.RunID)
 	}
 	if task.Error == "" {
 		t.Fatal("error field should not be empty")
@@ -217,13 +217,8 @@ func TestFailureIsolation_ErrorIncludesTaskIDAndMessage(t *testing.T) {
 		t.Errorf("error field: got %q, want to contain 'connection refused'", task.Error)
 	}
 
-	// Verify work item also has the error.
-	item, err := rt.Store().GetWorkItem(ctx, child.TaskID)
-	if err != nil {
-		t.Fatalf("get work item: %v", err)
-	}
-	if item.Error == "" {
-		t.Error("work item error should not be empty")
+	if task.Metadata["parent_id"] != parentID {
+		t.Errorf("parent_id metadata: got %v, want %q", task.Metadata["parent_id"], parentID)
 	}
 }
 
@@ -232,7 +227,7 @@ func TestFailureIsolation_ErrorIncludesTaskIDAndMessage(t *testing.T) {
 // (VAL-CHOIR-009, expected behavior #4).
 func TestFailureIsolation_ParentCanSpawnReplacementWorker(t *testing.T) {
 	// First child fails, second succeeds. Use the conditionalFailProvider
-	// which fails tasks containing "fail" in the prompt.
+	// which fails runs containing "fail" in the prompt.
 	provider := &conditionalFailProvider{
 		delay:      20 * time.Millisecond,
 		failPrefix: "fail",
@@ -242,26 +237,26 @@ func TestFailureIsolation_ParentCanSpawnReplacementWorker(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn a child that will fail.
-	child1, err := rt.SpawnTask(ctx, parentID, "fail: first attempt", "user-alice", nil)
+	child1, err := rt.StartChildRun(ctx, parentID, "fail: first attempt", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn first child: %v", err)
 	}
 
 	// Wait for it to fail.
-	task1 := waitForTaskState(t, rt, child1.TaskID, 10*time.Second)
-	if task1.State != types.TaskFailed {
+	task1 := waitForTaskState(t, rt, child1.RunID, 10*time.Second)
+	if task1.State != types.RunFailed {
 		t.Fatalf("first child state: got %q, want failed", task1.State)
 	}
 
 	// Spawn a replacement worker that will succeed.
-	child2, err := rt.SpawnTask(ctx, parentID, "replacement attempt", "user-alice", nil)
+	child2, err := rt.StartChildRun(ctx, parentID, "replacement attempt", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn replacement child: %v", err)
 	}
 
 	// Wait for replacement to complete (should succeed).
-	task2 := waitForTaskState(t, rt, child2.TaskID, 10*time.Second)
-	if task2.State != types.TaskCompleted {
+	task2 := waitForTaskState(t, rt, child2.RunID, 10*time.Second)
+	if task2.State != types.RunCompleted {
 		t.Fatalf("replacement child state: got %q, want completed", task2.State)
 	}
 
@@ -279,10 +274,10 @@ func TestFailureIsolation_ParentCanSpawnReplacementWorker(t *testing.T) {
 	errorFound := false
 	resultFound := false
 	for _, msg := range msgs {
-		if msg.From == child1.TaskID && msg.Role == "error" {
+		if msg.From == child1.RunID && msg.Role == "error" {
 			errorFound = true
 		}
-		if msg.From == child2.TaskID && msg.Role == "result" {
+		if msg.From == child2.RunID && msg.Role == "result" {
 			resultFound = true
 		}
 	}
@@ -308,25 +303,25 @@ func TestFailureIsolation_SiblingWorkersUnaffected(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn 3 children: 2 succeed, 1 fails.
-	succeed1, _ := rt.SpawnTask(ctx, parentID, "analyze data", "user-alice", nil)
-	fail, _ := rt.SpawnTask(ctx, parentID, "fail this task on purpose", "user-alice", nil)
-	succeed2, _ := rt.SpawnTask(ctx, parentID, "summarize results", "user-alice", nil)
+	succeed1, _ := rt.StartChildRun(ctx, parentID, "analyze data", "user-alice", nil)
+	fail, _ := rt.StartChildRun(ctx, parentID, "fail this task on purpose", "user-alice", nil)
+	succeed2, _ := rt.StartChildRun(ctx, parentID, "summarize results", "user-alice", nil)
 
 	// Wait for all to reach terminal state.
-	taskS1 := waitForTaskState(t, rt, succeed1.TaskID, 10*time.Second)
-	taskF := waitForTaskState(t, rt, fail.TaskID, 10*time.Second)
-	taskS2 := waitForTaskState(t, rt, succeed2.TaskID, 10*time.Second)
+	taskS1 := waitForTaskState(t, rt, succeed1.RunID, 10*time.Second)
+	taskF := waitForTaskState(t, rt, fail.RunID, 10*time.Second)
+	taskS2 := waitForTaskState(t, rt, succeed2.RunID, 10*time.Second)
 
 	// Verify the failing child failed.
-	if taskF.State != types.TaskFailed {
+	if taskF.State != types.RunFailed {
 		t.Errorf("failing child state: got %q, want failed", taskF.State)
 	}
 
 	// Verify the succeeding children completed.
-	if taskS1.State != types.TaskCompleted {
+	if taskS1.State != types.RunCompleted {
 		t.Errorf("succeeding child 1 state: got %q, want completed", taskS1.State)
 	}
-	if taskS2.State != types.TaskCompleted {
+	if taskS2.State != types.RunCompleted {
 		t.Errorf("succeeding child 2 state: got %q, want completed", taskS2.State)
 	}
 
@@ -356,8 +351,8 @@ func TestFailureIsolation_RuntimeHealthRemainsReady(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn a failing child.
-	child, _ := rt.SpawnTask(ctx, parentID, "fail task", "user-alice", nil)
-	waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	child, _ := rt.StartChildRun(ctx, parentID, "fail task", "user-alice", nil)
+	waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
 	// Check runtime health.
 	health := rt.HealthState()
@@ -365,15 +360,15 @@ func TestFailureIsolation_RuntimeHealthRemainsReady(t *testing.T) {
 		t.Errorf("runtime health should not be 'failed' after a single worker failure, got %q", health)
 	}
 
-	// The runtime should still be able to accept new tasks.
-	child2, err := rt.SpawnTask(ctx, parentID, "post-failure task", "user-alice", nil)
+	// The runtime should still be able to accept new runs.
+	child2, err := rt.StartChildRun(ctx, parentID, "post-failure task", "user-alice", nil)
 	if err != nil {
-		t.Fatalf("runtime should accept new tasks after worker failure: %v", err)
+		t.Fatalf("runtime should accept new runs after worker failure: %v", err)
 	}
-	waitForTaskState(t, rt, child2.TaskID, 10*time.Second)
+	waitForTaskState(t, rt, child2.RunID, 10*time.Second)
 }
 
-// TestFailureIsolation_TaskFailedEventEmitted verifies that a task.failed event
+// TestFailureIsolation_TaskFailedEventEmitted verifies that a run.failed event
 // is emitted when a worker fails (VAL-CHOIR-009 pass condition).
 func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 	provider := &StubProvider{
@@ -389,24 +384,24 @@ func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 	defer bus.Unsubscribe(ch)
 
 	// Spawn a failing child.
-	child, _ := rt.SpawnTask(ctx, parentID, "fail for event test", "user-alice", nil)
-	waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	child, _ := rt.StartChildRun(ctx, parentID, "fail for event test", "user-alice", nil)
+	waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
-	// Check for task.failed event.
+	// Check for run.failed event.
 	found := false
 	timeout := time.After(3 * time.Second)
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for task.failed event")
+			t.Fatal("timeout waiting for run.failed event")
 		case ev := <-ch:
-			if ev.Record.Kind == types.EventTaskFailed && ev.Record.TaskID == child.TaskID {
+			if ev.Record.Kind == types.EventRunFailed && ev.Record.RunID == child.RunID {
 				found = true
 				// Verify the event has error details in the payload.
 				var payload map[string]string
 				if err := json.Unmarshal(ev.Record.Payload, &payload); err == nil {
 					if payload["error"] == "" {
-						t.Error("task.failed event payload should contain error details")
+						t.Error("run.failed event payload should contain error details")
 					}
 				}
 			}
@@ -421,34 +416,32 @@ func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 	}
 }
 
-// TestFailureIsolation_WorkItemUpdatedOnFailure verifies that the work item
-// in the registry is updated to failed state when the task fails
-// (VAL-CHOIR-009, related to VAL-CHOIR-001).
-func TestFailureIsolation_WorkItemUpdatedOnFailure(t *testing.T) {
+// TestFailureIsolation_ChildRunUpdatedOnFailure verifies that the child run
+// is updated to failed state when execution fails.
+func TestFailureIsolation_ChildRunUpdatedOnFailure(t *testing.T) {
 	provider := &StubProvider{
 		Delay:   10 * time.Millisecond,
-		FailErr: fmt.Errorf("work item failure test"),
+		FailErr: fmt.Errorf("child run failure test"),
 	}
 	rt, _, parentID := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
-	child, _ := rt.SpawnTask(ctx, parentID, "work item fail task", "user-alice", nil)
-	waitForTaskState(t, rt, child.TaskID, 10*time.Second)
+	child, _ := rt.StartChildRun(ctx, parentID, "child fail task", "user-alice", nil)
+	waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
-	// Check the work item.
-	item, err := rt.Store().GetWorkItem(ctx, child.TaskID)
+	task, err := rt.Store().GetRun(ctx, child.RunID)
 	if err != nil {
-		t.Fatalf("get work item: %v", err)
+		t.Fatalf("get child run: %v", err)
 	}
 
-	if item.State != types.TaskFailed {
-		t.Errorf("work item state: got %q, want failed", item.State)
+	if task.State != types.RunFailed {
+		t.Errorf("state: got %q, want failed", task.State)
 	}
-	if item.Error == "" {
-		t.Error("work item error should not be empty")
+	if task.Error == "" {
+		t.Error("error should not be empty")
 	}
-	if item.ParentID != parentID {
-		t.Errorf("work item parent_id: got %q, want %q", item.ParentID, parentID)
+	if task.Metadata["parent_id"] != parentID {
+		t.Errorf("parent_id metadata: got %v, want %q", task.Metadata["parent_id"], parentID)
 	}
 }
 
@@ -477,20 +470,20 @@ func TestFailureIsolation_APIStatusReturnsFailedState(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Check status via API.
-	req = authenticatedRequest(http.MethodGet, "/api/agent/status?task_id="+spawnResp.TaskID, "", "user-alice")
+	req = authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+spawnResp.RunID, "", "user-alice")
 	w = httptest.NewRecorder()
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status API: got %d, want 200", w.Code)
 	}
 
-	var statusResp taskStatusResponse
+	var statusResp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&statusResp); err != nil {
 		t.Fatalf("decode status response: %v", err)
 	}
 
-	if statusResp.State != types.TaskFailed {
+	if statusResp.State != types.RunFailed {
 		t.Errorf("task state: got %q, want failed", statusResp.State)
 	}
 	if statusResp.Error == "" {
@@ -550,20 +543,20 @@ func TestFailureIsolation_MultipleFailuresDontCrashRuntime(t *testing.T) {
 
 	// Spawn 5 failing children in sequence.
 	for i := 0; i < 5; i++ {
-		child, err := rt.SpawnTask(ctx, parentID, fmt.Sprintf("failure %d", i), "user-alice", nil)
+		child, err := rt.StartChildRun(ctx, parentID, fmt.Sprintf("failure %d", i), "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		task := waitForTaskState(t, rt, child.TaskID, 10*time.Second)
-		if task.State != types.TaskFailed {
+		task := waitForTaskState(t, rt, child.RunID, 10*time.Second)
+		if task.State != types.RunFailed {
 			t.Errorf("child %d: got %q, want failed", i, task.State)
 		}
 	}
 
 	// The runtime should still be operational.
-	// Switch to a succeeding provider and verify new tasks complete.
+	// Switch to a succeeding provider and verify new runs complete.
 	// (We can't switch providers mid-test, so verify that the runtime
-	// accepted all tasks and they all failed as expected.)
+	// accepted all runs and they all failed as expected.)
 	health := rt.HealthState()
 	// Health may be degraded after multiple failures, but not crashed.
 	if health == types.HealthFailed {
@@ -594,19 +587,19 @@ func TestFailureIsolation_ConcurrentFailuresAndSuccesses(t *testing.T) {
 	}
 
 	for i, obj := range objectives {
-		rec, err := rt.SpawnTask(ctx, parentID, obj, "user-alice", nil)
+		rec, err := rt.StartChildRun(ctx, parentID, obj, "user-alice", nil)
 		if err != nil {
 			t.Fatalf("spawn child %d: %v", i, err)
 		}
-		ids[i] = rec.TaskID
+		ids[i] = rec.RunID
 	}
 
 	// Wait for all to complete.
 	for i, id := range ids {
 		task := waitForTaskState(t, rt, id, 10*time.Second)
-		expectedState := types.TaskCompleted
+		expectedState := types.RunCompleted
 		if strings.Contains(objectives[i], "fail") {
-			expectedState = types.TaskFailed
+			expectedState = types.RunFailed
 		}
 		if task.State != expectedState {
 			t.Errorf("child %d (%q): state got %q, want %q", i, objectives[i], task.State, expectedState)
@@ -639,7 +632,7 @@ func TestFailureIsolation_ConcurrentFailuresAndSuccesses(t *testing.T) {
 
 // TestFailureIsolation_ParentResponsiveAfterFailure verifies that the parent
 // task remains responsive after a child failure by checking that the parent
-// can still receive messages and spawn new tasks
+// can still receive messages and spawn new runs
 // (VAL-CHOIR-009 verification step #3).
 func TestFailureIsolation_ParentResponsiveAfterFailure(t *testing.T) {
 	provider := &StubProvider{
@@ -650,8 +643,8 @@ func TestFailureIsolation_ParentResponsiveAfterFailure(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn and wait for a failing child.
-	child1, _ := rt.SpawnTask(ctx, parentID, "fail task", "user-alice", nil)
-	waitForTaskState(t, rt, child1.TaskID, 10*time.Second)
+	child1, _ := rt.StartChildRun(ctx, parentID, "fail task", "user-alice", nil)
+	waitForTaskState(t, rt, child1.RunID, 10*time.Second)
 
 	// Parent should still be responsive: check channel read works.
 	msgs, cursor, err := rt.ChannelRead(parentID, 0)
@@ -663,11 +656,11 @@ func TestFailureIsolation_ParentResponsiveAfterFailure(t *testing.T) {
 	}
 
 	// Parent should be able to spawn a new child.
-	child2, err := rt.SpawnTask(ctx, parentID, "post-failure task", "user-alice", nil)
+	child2, err := rt.StartChildRun(ctx, parentID, "post-failure task", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn after failure: %v", err)
 	}
-	waitForTaskState(t, rt, child2.TaskID, 10*time.Second)
+	waitForTaskState(t, rt, child2.RunID, 10*time.Second)
 
 	// Verify parent received messages from both children.
 	msgs2, _, err := rt.ChannelRead(parentID, cursor)
@@ -690,7 +683,7 @@ func TestCancellation_CancelRunningTask(t *testing.T) {
 	ctx := context.Background()
 
 	// Spawn a child with a long-running task.
-	child, err := rt.SpawnTask(ctx, parentID, "long running analysis", "user-alice", nil)
+	child, err := rt.StartChildRun(ctx, parentID, "long running analysis", "user-alice", nil)
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
@@ -699,26 +692,26 @@ func TestCancellation_CancelRunningTask(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify it's running.
-	task, _ := rt.Store().GetTask(ctx, child.TaskID)
-	if task.State != types.TaskRunning {
+	task, _ := rt.Store().GetRun(ctx, child.RunID)
+	if task.State != types.RunRunning {
 		t.Fatalf("child should be running, got %q", task.State)
 	}
 
 	// Cancel the task via the runtime.
-	err = rt.CancelTask(ctx, child.TaskID, "user-alice")
+	err = rt.CancelRun(ctx, child.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
 
 	// Wait for the task to reach terminal state.
-	task = waitForTaskState(t, rt, child.TaskID, 5*time.Second)
+	task = waitForTaskState(t, rt, child.RunID, 5*time.Second)
 
-	if task.State != types.TaskCancelled {
+	if task.State != types.RunCancelled {
 		t.Errorf("cancelled task state: got %q, want cancelled", task.State)
 	}
 }
 
-// TestCancellation_CancelledEventEmitted verifies that a task.cancelled event
+// TestCancellation_CancelledEventEmitted verifies that a run.cancelled event
 // is emitted when a task is cancelled (VAL-CHOIR-010).
 func TestCancellation_CancelledEventEmitted(t *testing.T) {
 	provider := NewStubProvider(5 * time.Second)
@@ -730,11 +723,11 @@ func TestCancellation_CancelledEventEmitted(t *testing.T) {
 	ch := bus.SubscribeWithBuffer(128)
 	defer bus.Unsubscribe(ch)
 
-	child, _ := rt.SpawnTask(ctx, parentID, "cancellable task", "user-alice", nil)
+	child, _ := rt.StartChildRun(ctx, parentID, "cancellable task", "user-alice", nil)
 	time.Sleep(100 * time.Millisecond)
 
 	// Cancel the task.
-	err := rt.CancelTask(ctx, child.TaskID, "user-alice")
+	err := rt.CancelRun(ctx, child.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
@@ -745,9 +738,9 @@ func TestCancellation_CancelledEventEmitted(t *testing.T) {
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for task.cancelled event")
+			t.Fatal("timeout waiting for run.cancelled event")
 		case ev := <-ch:
-			if ev.Record.Kind == types.EventTaskCancelled && ev.Record.TaskID == child.TaskID {
+			if ev.Record.Kind == types.EventRunCancelled && ev.Record.RunID == child.RunID {
 				found = true
 			}
 		default:
@@ -763,17 +756,17 @@ func TestCancellation_CancelledTaskNoResult(t *testing.T) {
 	rt, _, parentID := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
-	child, _ := rt.SpawnTask(ctx, parentID, "task to cancel", "user-alice", nil)
+	child, _ := rt.StartChildRun(ctx, parentID, "task to cancel", "user-alice", nil)
 	time.Sleep(100 * time.Millisecond)
 
-	err := rt.CancelTask(ctx, child.TaskID, "user-alice")
+	err := rt.CancelRun(ctx, child.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
 
-	task := waitForTaskState(t, rt, child.TaskID, 5*time.Second)
+	task := waitForTaskState(t, rt, child.RunID, 5*time.Second)
 
-	if task.State != types.TaskCancelled {
+	if task.State != types.RunCancelled {
 		t.Errorf("state: got %q, want cancelled", task.State)
 	}
 
@@ -790,7 +783,7 @@ func TestCancellation_CancelNonExistentTask(t *testing.T) {
 	rt, _, _ := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
-	err := rt.CancelTask(ctx, "non-existent-task-id", "user-alice")
+	err := rt.CancelRun(ctx, "non-existent-run-id", "user-alice")
 	if err == nil {
 		t.Error("expected error when cancelling non-existent task")
 	}
@@ -803,50 +796,50 @@ func TestCancellation_CancelOtherUsersTask(t *testing.T) {
 	rt, _, parentID := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
-	child, _ := rt.SpawnTask(ctx, parentID, "task owned by alice", "user-alice", nil)
+	child, _ := rt.StartChildRun(ctx, parentID, "task owned by alice", "user-alice", nil)
 	time.Sleep(100 * time.Millisecond)
 
 	// Try to cancel as a different user.
-	err := rt.CancelTask(ctx, child.TaskID, "user-bob")
+	err := rt.CancelRun(ctx, child.RunID, "user-bob")
 	if err == nil {
 		t.Error("expected error when cancelling another user's task")
 	}
 }
 
 // TestCancellation_SiblingUnaffectedByCancel verifies that cancelling one
-// running task does not affect other running tasks (VAL-CHOIR-010).
+// running task does not affect other running runs (VAL-CHOIR-010).
 func TestCancellation_SiblingUnaffectedByCancel(t *testing.T) {
 	provider := NewStubProvider(500 * time.Millisecond)
 	rt, _, parentID := failureIsolationSetup(t, provider)
 	ctx := context.Background()
 
 	// Spawn 3 children.
-	child1, _ := rt.SpawnTask(ctx, parentID, "task 1", "user-alice", nil)
-	child2, _ := rt.SpawnTask(ctx, parentID, "task 2", "user-alice", nil)
-	child3, _ := rt.SpawnTask(ctx, parentID, "task 3", "user-alice", nil)
+	child1, _ := rt.StartChildRun(ctx, parentID, "task 1", "user-alice", nil)
+	child2, _ := rt.StartChildRun(ctx, parentID, "task 2", "user-alice", nil)
+	child3, _ := rt.StartChildRun(ctx, parentID, "task 3", "user-alice", nil)
 
 	time.Sleep(100 * time.Millisecond)
 
 	// Cancel only child2.
-	err := rt.CancelTask(ctx, child2.TaskID, "user-alice")
+	err := rt.CancelRun(ctx, child2.RunID, "user-alice")
 	if err != nil {
 		t.Fatalf("cancel child2: %v", err)
 	}
 
 	// Wait for child2 to be cancelled.
-	task2 := waitForTaskState(t, rt, child2.TaskID, 5*time.Second)
-	if task2.State != types.TaskCancelled {
+	task2 := waitForTaskState(t, rt, child2.RunID, 5*time.Second)
+	if task2.State != types.RunCancelled {
 		t.Errorf("child2 state: got %q, want cancelled", task2.State)
 	}
 
 	// Wait for children 1 and 3 to complete normally.
-	task1 := waitForTaskState(t, rt, child1.TaskID, 10*time.Second)
-	task3 := waitForTaskState(t, rt, child3.TaskID, 10*time.Second)
+	task1 := waitForTaskState(t, rt, child1.RunID, 10*time.Second)
+	task3 := waitForTaskState(t, rt, child3.RunID, 10*time.Second)
 
-	if task1.State != types.TaskCompleted {
+	if task1.State != types.RunCompleted {
 		t.Errorf("child1 state: got %q, want completed (should be unaffected)", task1.State)
 	}
-	if task3.State != types.TaskCompleted {
+	if task3.State != types.RunCompleted {
 		t.Errorf("child3 state: got %q, want completed (should be unaffected)", task3.State)
 	}
 
@@ -879,7 +872,7 @@ func TestCancellation_CancelViaAPI(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Cancel via API.
-	cancelBody := fmt.Sprintf(`{"task_id":"%s"}`, spawnResp.TaskID)
+	cancelBody := fmt.Sprintf(`{"run_id":"%s"}`, spawnResp.RunID)
 	req = authenticatedRequest(http.MethodPost, "/api/agent/cancel", cancelBody, "user-alice")
 	w = httptest.NewRecorder()
 	handler.HandleCancel(w, req)
@@ -890,32 +883,32 @@ func TestCancellation_CancelViaAPI(t *testing.T) {
 
 	// Verify the task is cancelled via status API.
 	time.Sleep(200 * time.Millisecond)
-	req = authenticatedRequest(http.MethodGet, "/api/agent/status?task_id="+spawnResp.TaskID, "", "user-alice")
+	req = authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+spawnResp.RunID, "", "user-alice")
 	w = httptest.NewRecorder()
-	handler.HandleTaskStatus(w, req)
+	handler.HandleRunStatus(w, req)
 
-	var statusResp taskStatusResponse
+	var statusResp runStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&statusResp); err != nil {
 		t.Fatalf("decode status response: %v", err)
 	}
 
-	if statusResp.State != types.TaskCancelled {
+	if statusResp.State != types.RunCancelled {
 		t.Errorf("task state after cancel: got %q, want cancelled", statusResp.State)
 	}
 }
 
 // --- VAL-CHOIR-014: Recovery After Sandbox Restart ---
 
-// TestRecovery_InterruptedTasksMarkedFailedOnRestart verifies that tasks in
+// TestRecovery_InterruptedTasksMarkedFailedOnRestart verifies that runs in
 // non-terminal states when the runtime stops are recovered and marked as
 // failed on restart (VAL-CHOIR-014).
 func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := fmt.Sprintf("%s/%s.db", dir, t.Name())
 
-	// First instance: create tasks in the store directly to simulate tasks
+	// First instance: create runs in the store directly to simulate runs
 	// that were running when the process crashed. We don't use rt.Stop()
-	// because that cleanly cancels tasks before exiting.
+	// because that cleanly cancels runs before exiting.
 	s1, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store 1: %v", err)
@@ -924,46 +917,32 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Create a parent task in running state (simulating interrupted).
-	parent := types.TaskRecord{
-		TaskID:    "parent-recovery-test",
+	parent := types.RunRecord{
+		RunID:    "parent-recovery-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-test",
-		State:     types.TaskRunning,
+		State:     types.RunRunning,
 		Prompt:    "parent for recovery test",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s1.CreateTask(context.Background(), parent); err != nil {
+	if err := s1.CreateRun(context.Background(), parent); err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
 
 	// Create a child task in running state (simulating interrupted).
-	child := types.TaskRecord{
-		TaskID:    "child-recovery-test",
+	child := types.RunRecord{
+		RunID:    "child-recovery-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-test",
-		State:     types.TaskRunning,
+		State:     types.RunRunning,
 		Prompt:    "task that will be interrupted",
 		CreatedAt: now,
 		UpdatedAt: now,
 		Metadata:  map[string]any{"parent_id": "parent-recovery-test"},
 	}
-	if err := s1.CreateTask(context.Background(), child); err != nil {
+	if err := s1.CreateRun(context.Background(), child); err != nil {
 		t.Fatalf("create child: %v", err)
-	}
-
-	// Also create a work item for the child.
-	workItem := types.WorkItem{
-		ID:        "child-recovery-test",
-		ParentID:  "parent-recovery-test",
-		OwnerID:   "user-alice",
-		Objective: "task that will be interrupted",
-		State:     types.TaskRunning,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if err := s1.CreateWorkItem(context.Background(), workItem); err != nil {
-		t.Fatalf("create work item: %v", err)
 	}
 
 	// Simulate crash: close the store without graceful shutdown.
@@ -996,11 +975,11 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 	ctx := context.Background()
 
 	// Check the parent task is now failed.
-	parentTask, err := rt2.Store().GetTask(ctx, "parent-recovery-test")
+	parentTask, err := rt2.Store().GetRun(ctx, "parent-recovery-test")
 	if err != nil {
 		t.Fatalf("get parent task after recovery: %v", err)
 	}
-	if parentTask.State != types.TaskFailed {
+	if parentTask.State != types.RunFailed {
 		t.Errorf("recovered parent state: got %q, want failed", parentTask.State)
 	}
 	if !strings.Contains(parentTask.Error, "interrupted") {
@@ -1008,11 +987,11 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 	}
 
 	// Check the child task is now failed.
-	childTask, err := rt2.Store().GetTask(ctx, "child-recovery-test")
+	childTask, err := rt2.Store().GetRun(ctx, "child-recovery-test")
 	if err != nil {
 		t.Fatalf("get child task after recovery: %v", err)
 	}
-	if childTask.State != types.TaskFailed {
+	if childTask.State != types.RunFailed {
 		t.Errorf("recovered child state: got %q, want failed", childTask.State)
 	}
 	if !strings.Contains(childTask.Error, "interrupted") {
@@ -1020,8 +999,8 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 	}
 }
 
-// TestRecovery_RecoveredTasksEmitFailedEvents verifies that recovered tasks
-// emit task.failed events (VAL-CHOIR-014).
+// TestRecovery_RecoveredTasksEmitFailedEvents verifies that recovered runs
+// emit run.failed events (VAL-CHOIR-014).
 func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := fmt.Sprintf("%s/%s.db", dir, t.Name())
@@ -1033,16 +1012,16 @@ func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	task := types.TaskRecord{
-		TaskID:    "recovery-event-test",
+	task := types.RunRecord{
+		RunID:    "recovery-event-test",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-events",
-		State:     types.TaskRunning,
+		State:     types.RunRunning,
 		Prompt:    "interrupted task for events",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s1.CreateTask(context.Background(), task); err != nil {
+	if err := s1.CreateRun(context.Background(), task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	_ = s1.Close()
@@ -1076,15 +1055,15 @@ func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 	// Wait for recovery.
 	time.Sleep(200 * time.Millisecond)
 
-	// Check for task.failed event from recovery.
+	// Check for run.failed event from recovery.
 	found := false
 	timeout := time.After(3 * time.Second)
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for recovery task.failed event")
+			t.Fatal("timeout waiting for recovery run.failed event")
 		case ev := <-ch:
-			if ev.Record.Kind == types.EventTaskFailed && ev.Record.TaskID == "recovery-event-test" {
+			if ev.Record.Kind == types.EventRunFailed && ev.Record.RunID == "recovery-event-test" {
 				found = true
 			}
 		default:
@@ -1094,7 +1073,7 @@ func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 }
 
 // TestRecovery_RuntimeAcceptsNewTasksAfterRecovery verifies that after
-// recovering interrupted tasks, the runtime can accept and complete new tasks.
+// recovering interrupted runs, the runtime can accept and complete new runs.
 func TestRecovery_RuntimeAcceptsNewTasksAfterRecovery(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := fmt.Sprintf("%s/%s.db", dir, t.Name())
@@ -1106,16 +1085,16 @@ func TestRecovery_RuntimeAcceptsNewTasksAfterRecovery(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	task := types.TaskRecord{
-		TaskID:    "old-interrupted-task",
+	task := types.RunRecord{
+		RunID:    "old-interrupted-task",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-recovery-accept",
-		State:     types.TaskRunning,
+		State:     types.RunRunning,
 		Prompt:    "interrupted task",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s1.CreateTask(context.Background(), task); err != nil {
+	if err := s1.CreateRun(context.Background(), task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	_ = s1.Close()
@@ -1144,13 +1123,13 @@ func TestRecovery_RuntimeAcceptsNewTasksAfterRecovery(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // Let recovery process.
 
 	// Submit a new task and verify it completes.
-	newTask, err := rt2.SubmitTask(context.Background(), "post-recovery task", "user-alice")
+	newTask, err := rt2.StartRun(context.Background(), "post-recovery task", "user-alice")
 	if err != nil {
 		t.Fatalf("submit post-recovery task: %v", err)
 	}
 
-	completedTask := waitForTaskState(t, rt2, newTask.TaskID, 10*time.Second)
-	if completedTask.State != types.TaskCompleted {
+	completedTask := waitForTaskState(t, rt2, newTask.RunID, 10*time.Second)
+	if completedTask.State != types.RunCompleted {
 		t.Errorf("post-recovery task state: got %q, want completed", completedTask.State)
 	}
 }

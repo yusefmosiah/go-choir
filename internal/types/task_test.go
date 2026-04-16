@@ -7,14 +7,14 @@ import (
 )
 
 func TestTaskStateTerminal(t *testing.T) {
-	terminalStates := []TaskState{TaskCompleted, TaskFailed, TaskCancelled}
+	terminalStates := []RunState{RunCompleted, RunFailed, RunCancelled}
 	for _, s := range terminalStates {
 		if !s.Terminal() {
 			t.Errorf("expected %q to be terminal", s)
 		}
 	}
 
-	nonTerminalStates := []TaskState{TaskPending, TaskRunning, TaskBlocked}
+	nonTerminalStates := []RunState{RunPending, RunRunning, RunBlocked}
 	for _, s := range nonTerminalStates {
 		if s.Terminal() {
 			t.Errorf("expected %q to not be terminal", s)
@@ -23,9 +23,9 @@ func TestTaskStateTerminal(t *testing.T) {
 }
 
 func TestTaskStateValid(t *testing.T) {
-	validStates := []TaskState{
-		TaskPending, TaskRunning, TaskCompleted,
-		TaskFailed, TaskCancelled, TaskBlocked,
+	validStates := []RunState{
+		RunPending, RunRunning, RunCompleted,
+		RunFailed, RunCancelled, RunBlocked,
 	}
 	for _, s := range validStates {
 		if !s.Valid() {
@@ -33,7 +33,7 @@ func TestTaskStateValid(t *testing.T) {
 		}
 	}
 
-	invalidStates := []TaskState{"unknown", "", "created", "starting", "waiting_input"}
+	invalidStates := []RunState{"unknown", "", "created", "starting", "waiting_input"}
 	for _, s := range invalidStates {
 		if s.Valid() {
 			t.Errorf("expected %q to be invalid", s)
@@ -45,11 +45,11 @@ func TestTaskRecordJSONRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	finishedAt := now.Add(10 * time.Second)
 
-	rec := TaskRecord{
-		TaskID:     "task-001",
+	rec := RunRecord{
+		RunID:     "task-001",
 		OwnerID:    "user-alice",
 		SandboxID:  "sandbox-dev",
-		State:      TaskCompleted,
+		State:      RunCompleted,
 		Prompt:     "explain closures in Go",
 		Result:     "Closures in Go capture variables...",
 		CreatedAt:  now,
@@ -66,13 +66,13 @@ func TestTaskRecordJSONRoundTrip(t *testing.T) {
 		t.Fatalf("marshal task record: %v", err)
 	}
 
-	var decoded TaskRecord
+	var decoded RunRecord
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal task record: %v", err)
 	}
 
-	if decoded.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", decoded.TaskID, rec.TaskID)
+	if decoded.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", decoded.RunID, rec.RunID)
 	}
 	if decoded.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, rec.OwnerID)
@@ -96,11 +96,11 @@ func TestTaskRecordJSONRoundTrip(t *testing.T) {
 
 func TestTaskRecordWithoutOptionalFields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	rec := TaskRecord{
-		TaskID:    "task-002",
+	rec := RunRecord{
+		RunID:    "task-002",
 		OwnerID:   "user-bob",
 		SandboxID: "sandbox-dev",
-		State:     TaskPending,
+		State:     RunPending,
 		Prompt:    "hello world",
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -111,7 +111,7 @@ func TestTaskRecordWithoutOptionalFields(t *testing.T) {
 		t.Fatalf("marshal task record: %v", err)
 	}
 
-	var decoded TaskRecord
+	var decoded RunRecord
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal task record: %v", err)
 	}
@@ -133,9 +133,9 @@ func TestEventRecordJSONRoundTrip(t *testing.T) {
 		EventID:   "evt-001",
 		Seq:       1,
 		Timestamp: now,
-		TaskID:    "task-001",
+		RunID:    "task-001",
 		OwnerID:   "user-alice",
-		Kind:      EventTaskStarted,
+		Kind:      EventRunStarted,
 		Phase:     "execution",
 		Payload:   json.RawMessage(`{"adapter":"host-process"}`),
 	}
@@ -159,8 +159,8 @@ func TestEventRecordJSONRoundTrip(t *testing.T) {
 	if decoded.Kind != rec.Kind {
 		t.Errorf("kind: got %q, want %q", decoded.Kind, rec.Kind)
 	}
-	if decoded.TaskID != rec.TaskID {
-		t.Errorf("task_id: got %q, want %q", decoded.TaskID, rec.TaskID)
+	if decoded.RunID != rec.RunID {
+		t.Errorf("run_id: got %q, want %q", decoded.RunID, rec.RunID)
 	}
 	if decoded.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, rec.OwnerID)
@@ -175,8 +175,8 @@ func TestEventRecordWithEmptyPayload(t *testing.T) {
 		EventID:   "evt-002",
 		Seq:       2,
 		Timestamp: time.Now().UTC(),
-		TaskID:    "task-001",
-		Kind:      EventTaskCompleted,
+		RunID:    "task-001",
+		Kind:      EventRunCompleted,
 		Payload:   json.RawMessage(`{}`),
 	}
 
@@ -206,101 +206,6 @@ func TestRuntimeHealthStateValues(t *testing.T) {
 		valid := s == HealthReady || s == HealthDegraded || s == HealthFailed
 		if valid != expected {
 			t.Errorf("health state %q: got valid=%v, want %v", s, valid, expected)
-		}
-	}
-}
-
-func TestWorkItemJSONRoundTrip(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Microsecond)
-
-	item := WorkItem{
-		ID:        "work-001",
-		ParentID:  "parent-001",
-		OwnerID:   "user-alice",
-		Objective: "research topic X",
-		State:     TaskCompleted,
-		Result:    "found 5 papers",
-		Error:     "",
-		CreatedAt: now,
-		UpdatedAt: now.Add(5 * time.Second),
-	}
-
-	data, err := json.Marshal(item)
-	if err != nil {
-		t.Fatalf("marshal work item: %v", err)
-	}
-
-	var decoded WorkItem
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal work item: %v", err)
-	}
-
-	if decoded.ID != item.ID {
-		t.Errorf("id: got %q, want %q", decoded.ID, item.ID)
-	}
-	if decoded.ParentID != item.ParentID {
-		t.Errorf("parent_id: got %q, want %q", decoded.ParentID, item.ParentID)
-	}
-	if decoded.OwnerID != item.OwnerID {
-		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, item.OwnerID)
-	}
-	if decoded.Objective != item.Objective {
-		t.Errorf("objective: got %q, want %q", decoded.Objective, item.Objective)
-	}
-	if decoded.State != item.State {
-		t.Errorf("state: got %q, want %q", decoded.State, item.State)
-	}
-	if decoded.Result != item.Result {
-		t.Errorf("result: got %q, want %q", decoded.Result, item.Result)
-	}
-	if !decoded.CreatedAt.Equal(item.CreatedAt) {
-		t.Errorf("created_at: got %v, want %v", decoded.CreatedAt, item.CreatedAt)
-	}
-	if !decoded.UpdatedAt.Equal(item.UpdatedAt) {
-		t.Errorf("updated_at: got %v, want %v", decoded.UpdatedAt, item.UpdatedAt)
-	}
-}
-
-func TestWorkItemOmitsEmptyFields(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	item := WorkItem{
-		ID:        "work-002",
-		ParentID:  "",
-		OwnerID:   "user-bob",
-		Objective: "root task",
-		State:     TaskPending,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	data, err := json.Marshal(item)
-	if err != nil {
-		t.Fatalf("marshal work item: %v", err)
-	}
-
-	// Verify parent_id is omitted when empty.
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal to map: %v", err)
-	}
-	if _, ok := raw["parent_id"]; ok {
-		t.Error("expected parent_id to be omitted when empty")
-	}
-	if _, ok := raw["result"]; ok {
-		t.Error("expected result to be omitted when empty")
-	}
-	if _, ok := raw["error"]; ok {
-		t.Error("expected error to be omitted when empty")
-	}
-}
-
-func TestWorkItemUsesTaskState(t *testing.T) {
-	// Verify WorkItem uses the same TaskState vocabulary.
-	states := []TaskState{TaskPending, TaskRunning, TaskCompleted, TaskFailed, TaskCancelled}
-	for _, state := range states {
-		item := WorkItem{ID: "test", State: state}
-		if !item.State.Valid() {
-			t.Errorf("work item state %q should be valid", state)
 		}
 	}
 }
@@ -336,8 +241,8 @@ func TestVTextAgentRevisionEventKinds(t *testing.T) {
 
 	// Verify they're distinct from task lifecycle events.
 	taskKinds := []EventKind{
-		EventTaskSubmitted, EventTaskStarted, EventTaskCompleted,
-		EventTaskFailed, EventTaskCancelled,
+		EventRunSubmitted, EventRunStarted, EventRunCompleted,
+		EventRunFailed, EventRunCancelled,
 	}
 	for _, tk := range taskKinds {
 		if seen[string(tk)] {

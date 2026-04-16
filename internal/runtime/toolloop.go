@@ -93,7 +93,7 @@ const maxToolLoopIterations = 25
 // This is adapted from Cogent's runToolLoop but simplified for go-choir:
 //   - No session history management (the runtime loop manages conversation
 //     state per task).
-//   - No steer/interrupt mechanism (tasks are atomic from the runtime's
+//   - No steer/interrupt mechanism (runs are atomic from the runtime's
 //     perspective; steering belongs in the appagent layer).
 //   - No history compression (context window management is the provider's
 //     concern in go-choir's model).
@@ -134,7 +134,7 @@ func RunToolLoop(ctx context.Context, provider ToolLoopProvider, registry *ToolR
 			"tool_calls":  len(resp.ToolCalls),
 			"model":       resp.Model,
 		})
-		emit(types.EventTaskProgress, "tool_loop", progressPayload)
+		emit(types.EventRunProgress, "tool_loop", progressPayload)
 
 		switch resp.StopReason {
 		case "tool_use":
@@ -227,7 +227,7 @@ func buildToolResultContent(results []types.ToolResult) []any {
 // This is used when a provider (like the StubProvider or BridgeProvider)
 // doesn't directly implement CallWithTools.
 //
-// The adapter converts the tool-loop request into a TaskRecord-like call
+// The adapter converts the tool-loop request into a RunRecord-like call
 // through the Provider.Execute method. It does NOT support actual tool-calling
 // (it ignores tool definitions and always returns end_turn), so it should
 // only be used when the runtime wants the executeTask path without the
@@ -243,14 +243,14 @@ func (a *toolLoopAdapter) CallWithTools(ctx context.Context, req ToolLoopRequest
 	// Extract the last user message as the prompt for the simple provider.
 	prompt := extractLastUserMessage(req.Messages)
 
-	task := &types.TaskRecord{
+	task := &types.RunRecord{
 		Prompt: prompt,
 	}
 
 	var capturedText string
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		// Capture delta text for the response.
-		if kind == types.EventTaskDelta {
+		if kind == types.EventRunDelta {
 			var delta struct {
 				Text string `json:"text"`
 			}

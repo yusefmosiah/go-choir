@@ -18,14 +18,14 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
-// taskSubmitRequest is the JSON payload for POST /api/agent/task.
-type taskSubmitRequest struct {
+// runSubmitRequest is the JSON payload for POST /api/agent/run.
+type runSubmitRequest struct {
 	Prompt   string         `json:"prompt"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // spawnRequest is the JSON payload for POST /api/agent/spawn.
-// It creates a child task linked to a parent, with an objective and optional
+// It creates a child run linked to a parent, with an objective and optional
 // constraints (VAL-CHOIR-001).
 type spawnRequest struct {
 	ParentID    string         `json:"parent_id"`
@@ -34,71 +34,79 @@ type spawnRequest struct {
 }
 
 // spawnResponse is the JSON response for POST /api/agent/spawn.
-// It returns the child task handle with the parent linkage (VAL-CHOIR-001,
-// VAL-CHOIR-004).
+// It returns the child run handle with the parent linkage.
 type spawnResponse struct {
-	TaskID    string          `json:"task_id"`
+	AgentID   string          `json:"agent_id"`
+	RunID     string          `json:"run_id"`
+	ChannelID string          `json:"channel_id,omitempty"`
 	ParentID  string          `json:"parent_id"`
-	State     types.TaskState `json:"state"`
+	State     types.RunState `json:"state"`
 	OwnerID   string          `json:"owner_id"`
 	CreatedAt string          `json:"created_at"`
 }
 
 // cancelRequest is the JSON payload for POST /api/agent/cancel.
-// It cancels a running or pending task (VAL-CHOIR-010).
+// It cancels a running or pending run (VAL-CHOIR-010).
 type cancelRequest struct {
-	TaskID string `json:"task_id"`
+	RunID string `json:"run_id"`
 }
 
 // cancelResponse is the JSON response for POST /api/agent/cancel.
 type cancelResponse struct {
-	TaskID string          `json:"task_id"`
-	State  types.TaskState `json:"state"`
+	RunID string          `json:"run_id"`
+	State  types.RunState `json:"state"`
 }
 
-// taskSubmitResponse is the JSON response for POST /api/agent/task.
-// It returns the stable task handle and initial lifecycle state
+// runSubmitResponse is the JSON response for POST /api/agent/run.
+// It returns the stable run handle and initial lifecycle state
 // (VAL-RUNTIME-003).
-type taskSubmitResponse struct {
-	TaskID    string          `json:"task_id"`
-	State     types.TaskState `json:"state"`
-	OwnerID   string          `json:"owner_id"`
-	CreatedAt string          `json:"created_at"`
+type runSubmitResponse struct {
+	AgentID     string          `json:"agent_id"`
+	RunID       string          `json:"run_id"`
+	ChannelID   string          `json:"channel_id,omitempty"`
+	State       types.RunState `json:"state"`
+	OwnerID     string          `json:"owner_id"`
+	CreatedAt   string          `json:"created_at"`
 }
 
-// taskStatusResponse is the JSON response for GET /api/agent/status.
-// It returns the full task record correlated to the submitted handle
+// runStatusResponse is the JSON response for GET /api/agent/status.
+// It returns the full run record correlated to the submitted handle
 // (VAL-RUNTIME-004).
-type taskStatusResponse struct {
-	TaskID     string          `json:"task_id"`
-	OwnerID    string          `json:"owner_id"`
-	SandboxID  string          `json:"sandbox_id"`
-	State      types.TaskState `json:"state"`
-	Prompt     string          `json:"prompt"`
-	Result     string          `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	CreatedAt  string          `json:"created_at"`
-	UpdatedAt  string          `json:"updated_at"`
-	FinishedAt *string         `json:"finished_at,omitempty"`
-	Metadata   map[string]any  `json:"metadata,omitempty"`
+type runStatusResponse struct {
+	AgentID      string          `json:"agent_id"`
+	RunID        string          `json:"run_id"`
+	ChannelID    string          `json:"channel_id,omitempty"`
+	ParentRunID  string          `json:"parent_run_id,omitempty"`
+	AgentProfile string          `json:"agent_profile,omitempty"`
+	AgentRole    string          `json:"agent_role,omitempty"`
+	OwnerID      string          `json:"owner_id"`
+	SandboxID    string          `json:"sandbox_id"`
+	State        types.RunState `json:"state"`
+	Prompt       string          `json:"prompt"`
+	Result       string          `json:"result,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+	FinishedAt   *string         `json:"finished_at,omitempty"`
+	Metadata     map[string]any  `json:"metadata,omitempty"`
 }
 
-// taskListResponse is the JSON response for GET /api/agent/tasks.
-// It returns recent tasks owned by the authenticated user so debugging
+// runListResponse is the JSON response for GET /api/agent/runs.
+// It returns recent runs owned by the authenticated user so debugging
 // surfaces can group live events into runs and child delegations.
-type taskListResponse struct {
-	Tasks []taskStatusResponse `json:"tasks"`
+type runListResponse struct {
+	Runs []runStatusResponse `json:"runs"`
 }
 
 // eventListResponse is the JSON response for GET /api/agent/events.
-// It returns historical runtime events either for a specific task or for
-// the authenticated owner across recent tasks.
+// It returns historical runtime events either for a specific run or for
+// the authenticated owner across recent runs.
 type eventListResponse struct {
 	Events []types.EventRecord `json:"events"`
 }
 
 // runtimeHealthResponse is the JSON structure returned by GET /health.
-// It reports runtime readiness for real task handling, and surfaces
+// It reports runtime readiness for real run handling, and surfaces
 // degraded state rather than hiding it behind a generic healthy response
 // (VAL-RUNTIME-001). The active provider name is included so operators
 // can distinguish real-provider paths from stub/canned paths.
@@ -107,7 +115,7 @@ type runtimeHealthResponse struct {
 	Service         string                   `json:"service"`
 	SandboxID       string                   `json:"sandbox_id"`
 	RuntimeHealth   types.RuntimeHealthState `json:"runtime_health"`
-	RunningTasks    int                      `json:"running_tasks"`
+	RunningRuns     int                      `json:"running_runs"`
 	ResearcherCount int                      `json:"researcher_count"`
 	ActiveProvider  string                   `json:"active_provider"`
 }
@@ -119,7 +127,7 @@ type runtimeHealthResponse struct {
 type runtimeTopologyResponse struct {
 	SandboxID       string `json:"sandbox_id"`
 	ResearcherCount int    `json:"researcher_count"`
-	RunningTasks    int    `json:"running_tasks"`
+	RunningRuns     int    `json:"running_runs"`
 	ChannelCount    int    `json:"channel_count"`
 	RuntimeHealth   string `json:"runtime_health"`
 	ActiveProvider  string `json:"active_provider"`
@@ -156,11 +164,11 @@ func writeAPIJSON(w http.ResponseWriter, status int, v interface{}) {
 	}
 }
 
-// HandleTaskSubmission handles POST /api/agent/task.
+// HandleRunSubmission handles POST /api/agent/run.
 // It accepts work only through the authenticated same-origin proxy path and
 // denies missing or invalid auth before runtime work starts
-// (VAL-RUNTIME-002). Returns a stable task handle (VAL-RUNTIME-003).
-func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request) {
+// (VAL-RUNTIME-002). Returns a stable run handle (VAL-RUNTIME-003).
+func (h *APIHandler) HandleRunSubmission(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -172,7 +180,7 @@ func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req taskSubmitRequest
+	var req runSubmitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
 		return
@@ -183,15 +191,17 @@ func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), req.Prompt, ownerID, req.Metadata)
+	rec, err := h.rt.StartRunWithMetadata(r.Context(), req.Prompt, ownerID, req.Metadata)
 	if err != nil {
-		log.Printf("runtime api: submit task: %v", err)
-		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit task"})
+		log.Printf("runtime api: submit run: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit run"})
 		return
 	}
 
-	writeAPIJSON(w, http.StatusAccepted, taskSubmitResponse{
-		TaskID:    rec.TaskID,
+	writeAPIJSON(w, http.StatusAccepted, runSubmitResponse{
+		AgentID:   rec.AgentID,
+		RunID:     rec.RunID,
+		ChannelID: rec.ChannelID,
 		State:     rec.State,
 		OwnerID:   rec.OwnerID,
 		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -199,10 +209,8 @@ func (h *APIHandler) HandleTaskSubmission(w http.ResponseWriter, r *http.Request
 }
 
 // HandleSpawn handles POST /api/agent/spawn.
-// It creates a child task linked to the given parent task, tracking it in
-// the work registry with parent-child relationships (VAL-CHOIR-001,
-// VAL-CHOIR-004). The child task inherits the owner from the authenticated
-// user context and begins in pending state.
+// It creates a child run linked to the given parent. The child run inherits
+// the owner from the authenticated user context and begins in pending state.
 func (h *APIHandler) HandleSpawn(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
@@ -231,20 +239,22 @@ func (h *APIHandler) HandleSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := h.rt.SpawnTask(r.Context(), req.ParentID, req.Objective, ownerID, req.Constraints)
+	rec, err := h.rt.StartChildRun(r.Context(), req.ParentID, req.Objective, ownerID, req.Constraints)
 	if err != nil {
-		// Check if the parent was not found.
-		if strings.Contains(err.Error(), "parent task not found") {
-			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "parent task not found"})
+		// Check if the parent run was not found.
+		if strings.Contains(err.Error(), "parent run not found") {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "parent run not found"})
 			return
 		}
-		log.Printf("runtime api: spawn task: %v", err)
-		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to spawn task"})
+		log.Printf("runtime api: start child run: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to start child run"})
 		return
 	}
 
 	writeAPIJSON(w, http.StatusAccepted, spawnResponse{
-		TaskID:    rec.TaskID,
+		AgentID:   rec.AgentID,
+		RunID:     rec.RunID,
+		ChannelID: rec.ChannelID,
 		ParentID:  req.ParentID,
 		State:     rec.State,
 		OwnerID:   rec.OwnerID,
@@ -253,8 +263,8 @@ func (h *APIHandler) HandleSpawn(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCancel handles POST /api/agent/cancel.
-// It cancels a running or pending task, transitioning it to cancelled state.
-// The cancel endpoint is owner-scoped — a request for a task owned by a
+// It cancels a running or pending run, transitioning it to cancelled state.
+// The cancel endpoint is owner-scoped — a request for a run owned by a
 // different user returns 404 to prevent IDOR probing (VAL-CHOIR-010).
 func (h *APIHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -274,38 +284,38 @@ func (h *APIHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(req.TaskID) == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "task_id is required"})
+	if strings.TrimSpace(req.RunID) == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "run_id is required"})
 		return
 	}
 
-	err = h.rt.CancelTask(r.Context(), req.TaskID, ownerID)
+	err = h.rt.CancelRun(r.Context(), req.RunID, ownerID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "run not found"})
 			return
 		}
 		if strings.Contains(err.Error(), "cannot cancel") {
 			writeAPIJSON(w, http.StatusConflict, apiError{Error: err.Error()})
 			return
 		}
-		log.Printf("runtime api: cancel task: %v", err)
-		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to cancel task"})
+		log.Printf("runtime api: cancel run: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to cancel run"})
 		return
 	}
 
 	writeAPIJSON(w, http.StatusOK, cancelResponse{
-		TaskID: req.TaskID,
-		State:  types.TaskCancelled,
+		RunID: req.RunID,
+		State:  types.RunCancelled,
 	})
 }
 
-// HandleTaskStatus handles GET /api/agent/status.
+// HandleRunStatus handles GET /api/agent/status.
 // It is exposed through the authenticated same-origin proxy path, accepts or
-// returns a stable correlation to the task handle from submission, and exposes
+// returns a stable correlation to the run handle from submission, and exposes
 // machine-readable lifecycle state including non-happy-path outcomes
 // (VAL-RUNTIME-004, VAL-RUNTIME-006).
-func (h *APIHandler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleRunStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -317,17 +327,17 @@ func (h *APIHandler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID := r.URL.Query().Get("task_id")
-	if taskID == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "task_id query parameter is required"})
+	runID := r.URL.Query().Get("run_id")
+	if runID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "run_id query parameter is required"})
 		return
 	}
 
-	rec, err := h.rt.GetTask(r.Context(), taskID, ownerID)
+	rec, err := h.rt.GetRun(r.Context(), runID, ownerID)
 	if err != nil {
-		// ErrNotFound covers both "task doesn't exist" and "task belongs to
-		// another user" so callers cannot probe for other users' tasks.
-		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+		// ErrNotFound covers both "run doesn't exist" and "run belongs to
+		// another user" so callers cannot probe for other users' runs.
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "run not found"})
 		return
 	}
 
@@ -337,26 +347,31 @@ func (h *APIHandler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
 		finishedAt = &s
 	}
 
-	writeAPIJSON(w, http.StatusOK, taskStatusResponse{
-		TaskID:     rec.TaskID,
-		OwnerID:    rec.OwnerID,
-		SandboxID:  rec.SandboxID,
-		State:      rec.State,
-		Prompt:     rec.Prompt,
-		Result:     rec.Result,
-		Error:      rec.Error,
-		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-		UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
-		FinishedAt: finishedAt,
-		Metadata:   rec.Metadata,
+	writeAPIJSON(w, http.StatusOK, runStatusResponse{
+		AgentID:      rec.AgentID,
+		RunID:        rec.RunID,
+		ChannelID:    rec.ChannelID,
+		ParentRunID:  rec.ParentRunID,
+		AgentProfile: rec.AgentProfile,
+		AgentRole:    rec.AgentRole,
+		OwnerID:      rec.OwnerID,
+		SandboxID:    rec.SandboxID,
+		State:        rec.State,
+		Prompt:       rec.Prompt,
+		Result:       rec.Result,
+		Error:        rec.Error,
+		CreatedAt:    rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		UpdatedAt:    rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
+		FinishedAt:   finishedAt,
+		Metadata:     rec.Metadata,
 	})
 }
 
-// HandleTaskList handles GET /api/agent/tasks.
-// It returns recent owner-scoped tasks in reverse chronological order so
-// debugging and orchestration surfaces can inspect current work and task
+// HandleRunList handles GET /api/agent/runs.
+// It returns recent owner-scoped runs in reverse chronological order so
+// debugging and orchestration surfaces can inspect current work and run
 // families without polling individual IDs one by one.
-func (h *APIHandler) HandleTaskList(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleRunList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -375,32 +390,43 @@ func (h *APIHandler) HandleTaskList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tasks, err := h.rt.ListTasksByOwner(r.Context(), ownerID, limit)
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	var runs []types.RunRecord
+	if channelID != "" {
+		runs, err = h.rt.Store().ListRunsByChannel(r.Context(), ownerID, channelID, limit)
+	} else {
+		runs, err = h.rt.ListRunsByOwner(r.Context(), ownerID, limit)
+	}
 	if err != nil {
-		log.Printf("runtime api: list tasks: %v", err)
-		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list tasks"})
+		log.Printf("runtime api: list runs: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list runs"})
 		return
 	}
 
-	resp := taskListResponse{Tasks: make([]taskStatusResponse, 0, len(tasks))}
-	for _, rec := range tasks {
+	resp := runListResponse{Runs: make([]runStatusResponse, 0, len(runs))}
+	for _, rec := range runs {
 		var finishedAt *string
 		if rec.FinishedAt != nil {
 			s := rec.FinishedAt.Format("2006-01-02T15:04:05.000Z")
 			finishedAt = &s
 		}
-		resp.Tasks = append(resp.Tasks, taskStatusResponse{
-			TaskID:     rec.TaskID,
-			OwnerID:    rec.OwnerID,
-			SandboxID:  rec.SandboxID,
-			State:      rec.State,
-			Prompt:     rec.Prompt,
-			Result:     rec.Result,
-			Error:      rec.Error,
-			CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-			UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
-			FinishedAt: finishedAt,
-			Metadata:   rec.Metadata,
+		resp.Runs = append(resp.Runs, runStatusResponse{
+			AgentID:      rec.AgentID,
+			RunID:        rec.RunID,
+			ChannelID:    rec.ChannelID,
+			ParentRunID:  rec.ParentRunID,
+			AgentProfile: rec.AgentProfile,
+			AgentRole:    rec.AgentRole,
+			OwnerID:      rec.OwnerID,
+			SandboxID:    rec.SandboxID,
+			State:        rec.State,
+			Prompt:       rec.Prompt,
+			Result:       rec.Result,
+			Error:        rec.Error,
+			CreatedAt:    rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+			UpdatedAt:    rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
+			FinishedAt:   finishedAt,
+			Metadata:     rec.Metadata,
 		})
 	}
 
@@ -408,9 +434,9 @@ func (h *APIHandler) HandleTaskList(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleEventList handles GET /api/agent/events.
-// When task_id is present, it returns historical events for that specific
-// task after verifying owner access. Otherwise it returns recent owner-scoped
-// events across tasks. This complements the live /api/events SSE feed.
+// When run_id is present, it returns historical events for that specific
+// run after verifying owner access. Otherwise it returns recent owner-scoped
+// events across runs. This complements the live /api/events SSE feed.
 func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
@@ -430,16 +456,27 @@ func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
-	if taskID != "" {
-		if _, err := h.rt.GetTask(r.Context(), taskID, ownerID); err != nil {
-			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+	runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+	if runID != "" {
+		if _, err := h.rt.GetRun(r.Context(), runID, ownerID); err != nil {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "run not found"})
 			return
 		}
-		events, err := h.rt.Store().ListEvents(r.Context(), taskID, limit)
+		events, err := h.rt.Store().ListEvents(r.Context(), runID, limit)
 		if err != nil {
-			log.Printf("runtime api: list task events: %v", err)
-			writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list task events"})
+			log.Printf("runtime api: list run events: %v", err)
+			writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list run events"})
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
+		return
+	}
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	if channelID != "" {
+		events, err := h.rt.Store().ListEventsByChannel(r.Context(), ownerID, channelID, limit)
+		if err != nil {
+			log.Printf("runtime api: list channel events: %v", err)
+			writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to list channel events"})
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
@@ -455,14 +492,14 @@ func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, eventListResponse{Events: events})
 }
 
-// HandleTaskStatusByID handles GET /api/agent/{id}/status.
-// It returns the full task record for the task identified by the URL path
+// HandleRunStatusByID handles GET /api/agent/{id}/status.
+// It returns the full run record for the run identified by the URL path
 // parameter {id}. The response includes state, result (if complete), error
 // (if failed), and timestamps (VAL-CHOIR-002, VAL-CHOIR-005).
-// Access is scoped to the authenticated owner — a request for a task owned
+// Access is scoped to the authenticated owner — a request for a run owned
 // by a different user returns 404 to prevent IDOR probing. State updates
 // are visible immediately after change.
-func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request) {
+func (h *APIHandler) HandleRunStatusByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
 		return
@@ -474,7 +511,7 @@ func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Extract task ID from URL path: /api/agent/{id}/status
+	// Extract run ID from URL path: /api/agent/{id}/status
 	// Expected prefix: /api/agent/  and suffix: /status
 	path := r.URL.Path
 	prefix := "/api/agent/"
@@ -483,18 +520,18 @@ func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid status path"})
 		return
 	}
-	taskID := strings.TrimPrefix(path, prefix)
-	taskID = strings.TrimSuffix(taskID, suffix)
-	if taskID == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "task ID is required"})
+	runID := strings.TrimPrefix(path, prefix)
+	runID = strings.TrimSuffix(runID, suffix)
+	if runID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "run ID is required"})
 		return
 	}
 
-	rec, err := h.rt.GetTask(r.Context(), taskID, ownerID)
+	rec, err := h.rt.GetRun(r.Context(), runID, ownerID)
 	if err != nil {
-		// ErrNotFound covers both "task doesn't exist" and "task belongs to
-		// another user" so callers cannot probe for other users' tasks.
-		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "task not found"})
+		// ErrNotFound covers both "run doesn't exist" and "run belongs to
+		// another user" so callers cannot probe for other users' runs.
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "run not found"})
 		return
 	}
 
@@ -504,24 +541,29 @@ func (h *APIHandler) HandleTaskStatusByID(w http.ResponseWriter, r *http.Request
 		finishedAt = &s
 	}
 
-	writeAPIJSON(w, http.StatusOK, taskStatusResponse{
-		TaskID:     rec.TaskID,
-		OwnerID:    rec.OwnerID,
-		SandboxID:  rec.SandboxID,
-		State:      rec.State,
-		Prompt:     rec.Prompt,
-		Result:     rec.Result,
-		Error:      rec.Error,
-		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-		UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
-		FinishedAt: finishedAt,
-		Metadata:   rec.Metadata,
+	writeAPIJSON(w, http.StatusOK, runStatusResponse{
+		AgentID:      rec.AgentID,
+		RunID:        rec.RunID,
+		ChannelID:    rec.ChannelID,
+		ParentRunID:  rec.ParentRunID,
+		AgentProfile: rec.AgentProfile,
+		AgentRole:    rec.AgentRole,
+		OwnerID:      rec.OwnerID,
+		SandboxID:    rec.SandboxID,
+		State:        rec.State,
+		Prompt:       rec.Prompt,
+		Result:       rec.Result,
+		Error:        rec.Error,
+		CreatedAt:    rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		UpdatedAt:    rec.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
+		FinishedAt:   finishedAt,
+		Metadata:     rec.Metadata,
 	})
 }
 
 // HandleTopology handles GET /api/agent/topology.
 // It exposes the runtime's orchestration shape for operator/UI inspection:
-// researcher count, current running task count, and the number of active
+// researcher count, current running run count, and the number of active
 // coordination channels.
 func (h *APIHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -534,7 +576,7 @@ func (h *APIHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(runtimeTopologyResponse{
 		SandboxID:       h.rt.cfg.SandboxID,
 		ResearcherCount: h.rt.cfg.ResearcherCount,
-		RunningTasks:    h.rt.RunningCount(),
+		RunningRuns:     h.rt.RunningCount(),
 		ChannelCount:    len(h.rt.ChannelManager().ListChannels()),
 		RuntimeHealth:   string(h.rt.HealthState()),
 		ActiveProvider:  h.rt.provider.ProviderName(),
@@ -637,7 +679,7 @@ func (h *APIHandler) sendHistoricalEvents(ctx context.Context, w http.ResponseWr
 }
 
 // HandleHealth handles GET /health for the runtime service.
-// It reports runtime readiness for real task handling, and surfaces degraded
+// It reports runtime readiness for real run handling, and surfaces degraded
 // state rather than hiding it behind a generic healthy response
 // (VAL-RUNTIME-001).
 func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
@@ -664,7 +706,7 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		Service:         "sandbox",
 		SandboxID:       h.rt.cfg.SandboxID,
 		RuntimeHealth:   health,
-		RunningTasks:    h.rt.RunningCount(),
+		RunningRuns:     h.rt.RunningCount(),
 		ResearcherCount: h.rt.cfg.ResearcherCount,
 		ActiveProvider:  h.rt.provider.ProviderName(),
 	})
@@ -675,14 +717,14 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // report runtime readiness.
 func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
-	s.HandleFunc("/api/agent/task", h.HandleTaskSubmission)
-	s.HandleFunc("/api/agent/tasks", h.HandleTaskList)
+	s.HandleFunc("/api/agent/run", h.HandleRunSubmission)
+	s.HandleFunc("/api/agent/runs", h.HandleRunList)
 	s.HandleFunc("/api/agent/events", h.HandleEventList)
 	s.HandleFunc("/api/agent/topology", h.HandleTopology)
 	s.HandleFunc("/api/agent/spawn", h.HandleSpawn)
 	s.HandleFunc("/api/agent/cancel", h.HandleCancel)
-	s.HandleFunc("/api/agent/status", h.HandleTaskStatus)
-	s.HandleFunc("/api/agent/", h.HandleTaskStatusByID) // matches /api/agent/{id}/status
+	s.HandleFunc("/api/agent/status", h.HandleRunStatus)
+	s.HandleFunc("/api/agent/", h.HandleRunStatusByID) // matches /api/agent/{id}/status
 	s.HandleFunc("/api/events", h.HandleEvents)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
 	s.HandleFunc("/api/prompts", h.HandlePromptList)

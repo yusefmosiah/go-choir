@@ -16,13 +16,13 @@ import (
 // --- Spawn API Tests ---
 
 // testSpawnSetup creates a fresh Runtime and APIHandler for spawn tests,
-// including a parent work item that can be used for parent_id references.
+// including a parent run that can be used for parent_id references.
 func testSpawnSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	t.Helper()
 	rt, handler := testAPISetup(t)
 
 	// Create a parent task to use as parent_id in spawn tests.
-	parentRec, err := rt.SubmitTask(context.Background(), "parent objective", "user-alice")
+	parentRec, err := rt.StartRun(context.Background(), "parent objective", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}
@@ -30,7 +30,7 @@ func testSpawnSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	// Wait briefly for the parent task to start running.
 	time.Sleep(50 * time.Millisecond)
 
-	return rt, handler, parentRec.TaskID
+	return rt, handler, parentRec.RunID
 }
 
 // TestSpawnCreatesChildTask verifies that POST /api/agent/spawn creates a child
@@ -53,11 +53,11 @@ func TestSpawnCreatesChildTask(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.TaskID == "" {
-		t.Error("task_id should not be empty")
+	if resp.RunID == "" {
+		t.Error("run_id should not be empty")
 	}
-	if resp.State != types.TaskPending {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskPending)
+	if resp.State != types.RunPending {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
 	}
 	if resp.ParentID != parentID {
 		t.Errorf("parent_id: got %q, want %q", resp.ParentID, parentID)
@@ -70,9 +70,9 @@ func TestSpawnCreatesChildTask(t *testing.T) {
 	}
 }
 
-// TestSpawnChildInRegistry verifies the child task appears in the work registry
-// with the correct parent-child relationship (VAL-CHOIR-001, VAL-CHOIR-003, VAL-CHOIR-004).
-func TestSpawnChildInRegistry(t *testing.T) {
+// TestSpawnChildCarriesParentMetadata verifies the child run keeps the
+// parent relationship in its runtime metadata.
+func TestSpawnChildCarriesParentMetadata(t *testing.T) {
 	rt, handler, parentID := testSpawnSetup(t)
 
 	body := fmt.Sprintf(`{"parent_id":"%s","objective":"child task objective"}`, parentID)
@@ -90,24 +90,19 @@ func TestSpawnChildInRegistry(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	// Verify the work item exists in the registry.
 	ctx := context.Background()
-	item, err := rt.Store().GetWorkItem(ctx, resp.TaskID)
+	task, err := rt.Store().GetRun(ctx, resp.RunID)
 	if err != nil {
-		t.Fatalf("get work item from registry: %v", err)
+		t.Fatalf("get child run: %v", err)
 	}
-
-	if item.ParentID != parentID {
-		t.Errorf("work item parent_id: got %q, want %q", item.ParentID, parentID)
+	if task.OwnerID != "user-alice" {
+		t.Errorf("owner_id: got %q, want user-alice", task.OwnerID)
 	}
-	if item.State != types.TaskPending && item.State != types.TaskRunning {
-		t.Errorf("work item state: got %q, want pending or running", item.State)
+	if task.Prompt != "child task objective" {
+		t.Errorf("prompt: got %q, want %q", task.Prompt, "child task objective")
 	}
-	if item.OwnerID != "user-alice" {
-		t.Errorf("work item owner_id: got %q, want user-alice", item.OwnerID)
-	}
-	if item.Objective != "child task objective" {
-		t.Errorf("work item objective: got %q, want %q", item.Objective, "child task objective")
+	if got := task.Metadata["parent_id"]; got != parentID {
+		t.Errorf("parent_id metadata: got %v, want %q", got, parentID)
 	}
 }
 
@@ -193,11 +188,11 @@ func TestSpawnWithConstraints(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.TaskID == "" {
-		t.Error("task_id should not be empty")
+	if resp.RunID == "" {
+		t.Error("run_id should not be empty")
 	}
-	if resp.State != types.TaskPending {
-		t.Errorf("state: got %q, want %q", resp.State, types.TaskPending)
+	if resp.State != types.RunPending {
+		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
 	}
 }
 
@@ -283,36 +278,31 @@ func TestSpawnMultipleChildrenFromSameParent(t *testing.T) {
 			t.Fatalf("spawn %d: decode response: %v", i, err)
 		}
 
-		if childIDs[resp.TaskID] {
-			t.Errorf("spawn %d: duplicate task_id %q", i, resp.TaskID)
+		if childIDs[resp.RunID] {
+			t.Errorf("spawn %d: duplicate run_id %q", i, resp.RunID)
 		}
-		childIDs[resp.TaskID] = true
+		childIDs[resp.RunID] = true
 	}
 
 	if len(childIDs) != 3 {
 		t.Errorf("expected 3 unique child IDs, got %d", len(childIDs))
 	}
 
-	// Verify all children are listed under the parent in the work registry.
+	// Verify all children carry the correct parent linkage in runtime metadata.
 	ctx := context.Background()
-	children, err := rt.Store().ListWorkItemsByParent(ctx, parentID, 10)
-	if err != nil {
-		t.Fatalf("list children by parent: %v", err)
-	}
-
-	if len(children) != 3 {
-		t.Errorf("children count: got %d, want 3", len(children))
-	}
-
-	for _, child := range children {
-		if child.ParentID != parentID {
-			t.Errorf("child parent_id: got %q, want %q", child.ParentID, parentID)
+	for taskID := range childIDs {
+		child, err := rt.Store().GetRun(ctx, taskID)
+		if err != nil {
+			t.Fatalf("get child run %s: %v", taskID, err)
+		}
+		if child.Metadata["parent_id"] != parentID {
+			t.Errorf("child parent_id metadata: got %v, want %q", child.Metadata["parent_id"], parentID)
 		}
 	}
 }
 
 // TestSpawnCreatesRuntimeTask verifies that spawn also creates a runtime task
-// record (not just a work item) so it can be tracked via the status API.
+// record so it can be tracked via the status API.
 // We verify metadata rather than state since the task may have already
 // transitioned to running by the time we read it.
 func TestSpawnCreatesRuntimeTask(t *testing.T) {
@@ -335,7 +325,7 @@ func TestSpawnCreatesRuntimeTask(t *testing.T) {
 
 	// Verify the task exists in the runtime store.
 	ctx := context.Background()
-	task, err := rt.Store().GetTask(ctx, resp.TaskID)
+	task, err := rt.Store().GetRun(ctx, resp.RunID)
 	if err != nil {
 		t.Fatalf("get runtime task: %v", err)
 	}
@@ -357,12 +347,9 @@ func TestSpawnCreatesRuntimeTask(t *testing.T) {
 	}
 }
 
-// TestSpawnChildWorkItemAndTaskConsistent verifies that the work item and
-// runtime task share the same ID and owner. The task may have already
-// transitioned to running by the time we check, so we only verify ID and
-// owner consistency (not state, since the work item stays at pending until
-// the executor updates it).
-func TestSpawnChildWorkItemAndTaskConsistent(t *testing.T) {
+// TestSpawnChildMetadataAndTaskConsistent verifies the spawned run keeps its
+// parent linkage and owner on the canonical runtime record.
+func TestSpawnChildMetadataAndTaskConsistent(t *testing.T) {
 	rt, handler, parentID := testSpawnSetup(t)
 
 	body := fmt.Sprintf(`{"parent_id":"%s","objective":"consistency check"}`, parentID)
@@ -378,29 +365,23 @@ func TestSpawnChildWorkItemAndTaskConsistent(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Check work item.
-	item, err := rt.Store().GetWorkItem(ctx, resp.TaskID)
+	task, err := rt.Store().GetRun(ctx, resp.RunID)
 	if err != nil {
-		t.Fatalf("get work item: %v", err)
+		t.Fatalf("get child run: %v", err)
 	}
-
-	// Check task.
-	task, err := rt.Store().GetTask(ctx, resp.TaskID)
-	if err != nil {
-		t.Fatalf("get task: %v", err)
+	if task.RunID != resp.RunID {
+		t.Errorf("run_id: got %q, want %q", task.RunID, resp.RunID)
 	}
-
-	// They should have the same ID and owner.
-	if item.ID != task.TaskID {
-		t.Errorf("IDs don't match: work_item=%q, task=%q", item.ID, task.TaskID)
+	if task.OwnerID != "user-alice" {
+		t.Errorf("owner_id: got %q, want user-alice", task.OwnerID)
 	}
-	if item.OwnerID != task.OwnerID {
-		t.Errorf("owners don't match: work_item=%q, task=%q", item.OwnerID, task.OwnerID)
+	if task.Metadata["parent_id"] != parentID {
+		t.Errorf("parent_id metadata: got %v, want %q", task.Metadata["parent_id"], parentID)
 	}
 }
 
-// TestSpawnListedByParent verifies that spawned children can be listed
-// by their parent_id in the work registry (VAL-CHOIR-004).
+// TestSpawnListedByParent verifies that spawned children keep their parent_id
+// in runtime metadata (VAL-CHOIR-004).
 func TestSpawnListedByParent(t *testing.T) {
 	_, handler, parentID := testSpawnSetup(t)
 

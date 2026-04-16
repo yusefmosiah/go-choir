@@ -26,7 +26,7 @@ var ErrChannelClosed = errors.New("agent channel closed")
 type ChannelMessage = types.ChannelMessage
 
 // AgentChannel is a buffered, cursor-based message stream for a single
-// coordination context (typically keyed by work ID or task ID). Messages
+// coordination context (keyed by channel ID). Messages
 // are append-only and can be read incrementally using cursor positions.
 //
 // Adapted from Cogent's AgentChannel but simplified:
@@ -40,6 +40,16 @@ type AgentChannel struct {
 	messages []ChannelMessage
 	closed   bool
 	waiters  []chan struct{}
+}
+
+// Load appends already-persisted messages into the in-memory mirror without waking waiters.
+func (c *AgentChannel) Load(messages []ChannelMessage) {
+	if len(messages) == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.messages = append(c.messages, cloneChannelMessages(messages)...)
+	c.mu.Unlock()
 }
 
 // NewAgentChannel creates a new, open agent channel.
@@ -159,7 +169,7 @@ func (c *AgentChannel) IsClosed() bool {
 	return c.closed
 }
 
-// ChannelManager manages agent channels keyed by work/task identifiers.
+// ChannelManager manages agent channels keyed by channel identifiers.
 // It provides a central point for creating, looking up, and closing
 // channels, enabling the runtime to coordinate between the conductor,
 // scheduler, appagent, and worker components.
@@ -180,42 +190,42 @@ func NewChannelManager() *ChannelManager {
 	}
 }
 
-// Channel returns (or creates) the agent channel for the given work ID.
-// Returns an error if the work ID is empty.
-func (m *ChannelManager) Channel(workID string) (*AgentChannel, error) {
-	workID = strings.TrimSpace(workID)
-	if workID == "" {
-		return nil, fmt.Errorf("work_id must not be empty")
+// Channel returns (or creates) the agent channel for the given channel ID.
+// Returns an error if the channel ID is empty.
+func (m *ChannelManager) Channel(channelID string) (*AgentChannel, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return nil, fmt.Errorf("channel_id must not be empty")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if ch, ok := m.channels[workID]; ok {
+	if ch, ok := m.channels[channelID]; ok {
 		return ch, nil
 	}
 	ch := NewAgentChannel()
-	m.channels[workID] = ch
+	m.channels[channelID] = ch
 	return ch, nil
 }
 
-// Close closes and removes the channel for the given work ID.
-// Returns an error if the work ID has no channel.
-func (m *ChannelManager) Close(workID string) error {
+// Close closes and removes the channel for the given channel ID.
+// Returns an error if the channel ID has no channel.
+func (m *ChannelManager) Close(channelID string) error {
 	m.mu.Lock()
-	ch, ok := m.channels[workID]
+	ch, ok := m.channels[channelID]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("no channel for work_id %q", workID)
+		return fmt.Errorf("no channel for channel_id %q", channelID)
 	}
-	delete(m.channels, workID)
+	delete(m.channels, channelID)
 	m.mu.Unlock()
 
 	ch.Close()
 	return nil
 }
 
-// ListChannels returns the work IDs of all active channels.
+// ListChannels returns the channel IDs of all active channels.
 func (m *ChannelManager) ListChannels() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -227,12 +237,12 @@ func (m *ChannelManager) ListChannels() []string {
 	return ids
 }
 
-// PostToChannel is a convenience method that posts a message to the channel
-// for the given work ID, creating the channel if needed. It also emits a
+// PostToChannel is a convenience method that posts a message to the in-memory
+// mirror for the given channel ID, creating the channel if needed. It also emits a
 // channel.message event through the provided emit function, making
 // inter-agent coordination observable through the runtime event stream.
-func (m *ChannelManager) PostToChannel(workID string, message ChannelMessage, emit EventEmitFunc) (uint64, error) {
-	ch, err := m.Channel(workID)
+func (m *ChannelManager) PostToChannel(channelID string, message ChannelMessage, emit EventEmitFunc) (uint64, error) {
+	ch, err := m.Channel(channelID)
 	if err != nil {
 		return 0, err
 	}
@@ -245,7 +255,7 @@ func (m *ChannelManager) PostToChannel(workID string, message ChannelMessage, em
 	// Emit observable event for the channel message.
 	if emit != nil {
 		payload, _ := json.Marshal(map[string]any{
-			"work_id":     workID,
+			"channel_id":  channelID,
 			"from":        message.From,
 			"role":        message.Role,
 			"content_len": len(message.Content),
@@ -269,22 +279,50 @@ func cloneChannelMessages(messages []ChannelMessage) []ChannelMessage {
 
 // --- Channel-aware Runtime integration ---
 
+func (rt *Runtime) hydrateChannel(ctx context.Context, channelID string, ch *AgentChannel) error {
+	messages, err := rt.store.ListChannelMessages(ctx, stringFromToolContext(ctx, toolCtxOwnerID), channelID, int64(ch.Cursor()), 500)
+	if err != nil {
+		return err
+	}
+	ch.Load(messages)
+	return nil
+}
+
 // ChannelPost posts a message to the runtime's channel manager and emits
 // a corresponding event. This is the primary way for runtime components
 // (conductor, scheduler, workers) to send coordination messages that
 // are observable through the event stream.
-func (rt *Runtime) ChannelPost(ctx context.Context, workID, from, role, content string) (uint64, error) {
+func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, content string) (uint64, error) {
+	ch, err := rt.channelMgr.Channel(channelID)
+	if err != nil {
+		return 0, err
+	}
 	message := ChannelMessage{
+		ChannelID: channelID,
+		FromAgentID: stringFromToolContext(ctx, toolCtxAgentID),
+		FromRunID: stringFromToolContext(ctx, toolCtxRunID),
 		From:      from,
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 	}
+	ownerID := stringFromToolContext(ctx, toolCtxOwnerID)
+	if ownerID == "" && message.FromRunID != "" {
+		if rec, err := rt.store.GetRun(context.Background(), message.FromRunID); err == nil {
+			ownerID = rec.OwnerID
+		}
+	}
+	if err := rt.store.AppendChannelMessage(ctx, &message, ownerID); err != nil {
+		return 0, err
+	}
 
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		evRec := &types.EventRecord{
 			EventID:   uuid.New().String(),
-			TaskID:    workID,
+			RunID:    message.FromRunID,
+			AgentID:  message.FromAgentID,
+			ChannelID: channelID,
+			OwnerID:  ownerID,
 			Timestamp: time.Now().UTC(),
 			Kind:      kind,
 			Payload:   payload,
@@ -299,24 +337,40 @@ func (rt *Runtime) ChannelPost(ctx context.Context, workID, from, role, content 
 		})
 	}
 
-	return rt.channelMgr.PostToChannel(workID, message, emit)
+	if _, err := ch.Post(message); err != nil {
+		return 0, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"channel_id":  channelID,
+		"from":        message.From,
+		"role":        message.Role,
+		"content_len": len(message.Content),
+	})
+	emit(types.EventChannelMessage, "channel", payload)
+	return uint64(message.Seq), nil
 }
 
-// ChannelRead reads messages from the channel for the given work ID since
+// ChannelRead reads messages from the channel for the given channel ID since
 // the provided cursor position. Returns the messages and the new cursor.
-func (rt *Runtime) ChannelRead(workID string, cursor uint64) ([]ChannelMessage, uint64, error) {
-	ch, err := rt.channelMgr.Channel(workID)
+func (rt *Runtime) ChannelRead(channelID string, cursor uint64) ([]ChannelMessage, uint64, error) {
+	ch, err := rt.channelMgr.Channel(channelID)
 	if err != nil {
+		return nil, cursor, err
+	}
+	if err := rt.hydrateChannel(context.Background(), channelID, ch); err != nil {
 		return nil, cursor, err
 	}
 	return ch.ReadSince(cursor)
 }
 
-// ChannelWait waits for new messages on the channel for the given work ID
+// ChannelWait waits for new messages on the channel for the given channel ID
 // after the provided cursor position.
-func (rt *Runtime) ChannelWait(ctx context.Context, workID string, cursor uint64) ([]ChannelMessage, uint64, error) {
-	ch, err := rt.channelMgr.Channel(workID)
+func (rt *Runtime) ChannelWait(ctx context.Context, channelID string, cursor uint64) ([]ChannelMessage, uint64, error) {
+	ch, err := rt.channelMgr.Channel(channelID)
 	if err != nil {
+		return nil, cursor, err
+	}
+	if err := rt.hydrateChannel(ctx, channelID, ch); err != nil {
 		return nil, cursor, err
 	}
 	return ch.Wait(ctx, cursor)
@@ -325,12 +379,12 @@ func (rt *Runtime) ChannelWait(ctx context.Context, workID string, cursor uint64
 // --- Parent-Child Channel Helpers ---
 
 // ensureParentChildChannels creates channels for both the parent and child
-// task IDs, enabling immediate bidirectional communication. The parent
-// channel is keyed by the parent task ID, and the child channel is keyed
-// by the child task ID. Children post results to the parent's channel,
+// run IDs, enabling immediate bidirectional communication. The parent
+// channel is keyed by the parent run ID, and the child channel is keyed
+// by the child run ID. Children post results to the parent's channel,
 // and the parent can wait/read from either channel.
 //
-// This is called automatically during SpawnTask to ensure channels are
+// This is called automatically during StartChildRun to ensure channels are
 // available without explicit setup.
 func (m *ChannelManager) ensureParentChildChannels(parentID, childID string) error {
 	if _, err := m.Channel(parentID); err != nil {
@@ -343,28 +397,37 @@ func (m *ChannelManager) ensureParentChildChannels(parentID, childID string) err
 }
 
 // PostChildResult is a convenience method that posts a result message from
-// a child task to its parent's channel. The message is tagged with
-// role="result" and the child's task ID as the sender. This is the primary
+// a child run to its parent's channel. The message is tagged with
+// role="result" and the child's run ID as the sender. This is the primary
 // way for child workers to report completion to their parent
 // (VAL-CHOIR-006).
-func (rt *Runtime) PostChildResult(ctx context.Context, parentID, childID, result string) (uint64, error) {
-	return rt.ChannelPost(ctx, parentID, childID, "result", result)
+func (rt *Runtime) PostChildResult(ctx context.Context, parentChannelID, childRunID, result string) (uint64, error) {
+	if stringFromToolContext(ctx, toolCtxRunID) == "" && strings.TrimSpace(childRunID) != "" {
+		ctx = context.WithValue(ctx, toolCtxRunID, childRunID)
+	}
+	return rt.ChannelPost(ctx, parentChannelID, childRunID, "result", result)
 }
 
 // PostChildError is a convenience method that posts an error message from
-// a child task to its parent's channel. The message is tagged with
-// role="error" and the child's task ID as the sender. This enables parents
+// a child run to its parent's channel. The message is tagged with
+// role="error" and the child's run ID as the sender. This enables parents
 // to receive error notifications from failed children (VAL-CHOIR-009).
-func (rt *Runtime) PostChildError(ctx context.Context, parentID, childID, errMsg string) (uint64, error) {
-	return rt.ChannelPost(ctx, parentID, childID, "error", errMsg)
+func (rt *Runtime) PostChildError(ctx context.Context, parentChannelID, childRunID, errMsg string) (uint64, error) {
+	if stringFromToolContext(ctx, toolCtxRunID) == "" && strings.TrimSpace(childRunID) != "" {
+		ctx = context.WithValue(ctx, toolCtxRunID, childRunID)
+	}
+	return rt.ChannelPost(ctx, parentChannelID, childRunID, "error", errMsg)
 }
 
 // PostChildProgress is a convenience method that posts a progress message
-// from a child task to its parent's channel. The message is tagged with
-// role="status" and the child's task ID as the sender. This enables parents
-// to track child task progress (VAL-CHOIR-011).
-func (rt *Runtime) PostChildProgress(ctx context.Context, parentID, childID, progress string) (uint64, error) {
-	return rt.ChannelPost(ctx, parentID, childID, "status", progress)
+// from a child run to its parent's channel. The message is tagged with
+// role="status" and the child's run ID as the sender. This enables parents
+// to track child progress (VAL-CHOIR-011).
+func (rt *Runtime) PostChildProgress(ctx context.Context, parentChannelID, childRunID, progress string) (uint64, error) {
+	if stringFromToolContext(ctx, toolCtxRunID) == "" && strings.TrimSpace(childRunID) != "" {
+		ctx = context.WithValue(ctx, toolCtxRunID, childRunID)
+	}
+	return rt.ChannelPost(ctx, parentChannelID, childRunID, "status", progress)
 }
 
 // WaitForChildResult waits for messages from a specific child on the parent's

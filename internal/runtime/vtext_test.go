@@ -618,7 +618,7 @@ func TestVTextAPICitationsMetadataRoundTrip(t *testing.T) {
 // ----- Agent revision tests -----
 
 // vtextAPISetupWithRuntime creates a test setup with a started runtime
-// so that tasks actually execute and complete.
+// so that runs actually execute and complete.
 func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime) {
 	t.Helper()
 	dir := filepath.Join(os.TempDir(), "go-choir-m3-vtext-test")
@@ -648,11 +648,11 @@ func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime
 	}
 
 	bus := events.NewEventBus()
-	// Use a short-delay stub provider so tasks complete quickly in tests.
+	// Use a short-delay stub provider so runs complete quickly in tests.
 	provider := NewStubProvider(50 * time.Millisecond)
 	rt := New(cfg, s, bus, provider)
 
-	// Start the runtime so tasks execute.
+	// Start the runtime so runs execute.
 	ctx := context.Background()
 	rt.Start(ctx)
 	t.Cleanup(func() { rt.Stop() })
@@ -696,17 +696,17 @@ func createDocWithUserRevision(t *testing.T, h *APIHandler) (string, string) {
 
 // waitForTaskCompletion polls the task status until it reaches a terminal
 // state or the timeout expires.
-func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout time.Duration) types.TaskState {
+func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout time.Duration) types.RunState {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		req := vtextRequest(t, http.MethodGet, "/api/agent/status?task_id="+taskID, nil)
+		req := vtextRequest(t, http.MethodGet, "/api/agent/status?run_id="+taskID, nil)
 		w := httptest.NewRecorder()
-		h.HandleTaskStatus(w, req)
+		h.HandleRunStatus(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("get task status: status = %d", w.Code)
 		}
-		var resp taskStatusResponse
+		var resp runStatusResponse
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		if resp.State.Terminal() {
 			return resp.State
@@ -739,17 +739,17 @@ func TestVTextAgentRevisionCreatesCanonicalRevision(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.TaskID == "" {
-		t.Error("TaskID is empty")
+	if resp.RunID == "" {
+		t.Error("RunID is empty")
 	}
 	if resp.DocID != docID {
 		t.Errorf("DocID = %q, want %q", resp.DocID, docID)
 	}
 
 	// Wait for the task to complete and the revision to be created.
-	state := waitForTaskCompletion(t, h, resp.TaskID, 5*time.Second)
-	if state != types.TaskCompleted {
-		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
 	}
 
 	// Verify that a canonical appagent-authored revision was created.
@@ -826,9 +826,9 @@ func TestVTextAgentRevisionPreservesUserAndAppAgentAttribution(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
-	state := waitForTaskCompletion(t, h, resp.TaskID, 5*time.Second)
-	if state != types.TaskCompleted {
-		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
 	}
 
 	// Make another user edit after the agent revision.
@@ -891,9 +891,9 @@ func TestVTextAgentRevisionNoWorkerAuthorship(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
-	state := waitForTaskCompletion(t, h, resp.TaskID, 5*time.Second)
-	if state != types.TaskCompleted {
-		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
 	}
 
 	// Verify that no "worker" author kind exists in the history.
@@ -937,14 +937,14 @@ func TestVTextAgentRevisionNoDuplicateOnRenewalRetry(t *testing.T) {
 	}
 
 	// The retry should return the same task ID (idempotent).
-	if resp2.TaskID != resp1.TaskID {
-		t.Errorf("retry returned different task ID: %q vs %q — should be idempotent (VAL-CROSS-122)", resp2.TaskID, resp1.TaskID)
+	if resp2.RunID != resp1.RunID {
+		t.Errorf("retry returned different task ID: %q vs %q — should be idempotent (VAL-CROSS-122)", resp2.RunID, resp1.RunID)
 	}
 
 	// Wait for the task to complete.
-	state := waitForTaskCompletion(t, h, resp1.TaskID, 5*time.Second)
-	if state != types.TaskCompleted {
-		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
+	state := waitForTaskCompletion(t, h, resp1.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
 	}
 
 	// Verify only one appagent revision was created (no duplicate).
@@ -1001,7 +1001,7 @@ func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 	// Create an agent mutation record.
 	mutation := store.AgentMutation{
 		DocID:     "doc-mutation-test",
-		TaskID:    "task-mutation-test",
+		RunID:    "task-mutation-test",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1011,11 +1011,11 @@ func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 	}
 
 	// Create a completed task record with vtext agent revision metadata.
-	taskRec := &types.TaskRecord{
-		TaskID:    "task-mutation-test",
+	taskRec := &types.RunRecord{
+		RunID:    "task-mutation-test",
 		OwnerID:   "user-1",
 		SandboxID: "sandbox-vtext-test",
-		State:     types.TaskCompleted,
+		State:     types.RunCompleted,
 		Prompt:    "Revise the document",
 		Result:    "Revised content",
 		CreatedAt: time.Now().UTC(),
@@ -1027,9 +1027,9 @@ func TestVTextAgentRevisionMutationCompletedOnlyOnce(t *testing.T) {
 		},
 	}
 
-	// Call handleTaskCompletion twice to simulate duplicate processing.
-	rt.handleTaskCompletion(ctx, taskRec)
-	rt.handleTaskCompletion(ctx, taskRec)
+	// Call handleRunCompletion twice to simulate duplicate processing.
+	rt.handleRunCompletion(ctx, taskRec)
+	rt.handleRunCompletion(ctx, taskRec)
 
 	// Verify only one appagent revision was created.
 	revs, err := s.ListRevisionsByDoc(ctx, "doc-mutation-test", "user-1", 10)
@@ -1068,13 +1068,13 @@ func TestVTextAgentRevisionProgressEvents(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	// Wait for completion.
-	state := waitForTaskCompletion(t, h, resp.TaskID, 5*time.Second)
-	if state != types.TaskCompleted {
-		t.Fatalf("task state = %q, want %q", state, types.TaskCompleted)
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
 	}
 
 	// Check that vtext agent revision events were persisted.
-	events, err := bus.ListEvents(context.Background(), resp.TaskID, 200)
+	events, err := bus.ListEvents(context.Background(), resp.RunID, 200)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
@@ -1136,7 +1136,7 @@ func TestVTextAgentRevisionAcceptsReviseEventWithoutPrompt(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	task, err := rt.GetTask(context.Background(), resp.TaskID, "user-1")
+	task, err := rt.GetRun(context.Background(), resp.RunID, "user-1")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}

@@ -225,7 +225,7 @@ test('VAL-GATEWAY-001: Gateway end-to-end flow', async ({ browser }) => {
       testResults.steps[5].observed = 'Task runner UI not visible, trying direct API';
 
       const taskRes = await page.evaluate(async (baseURL) => {
-        const res = await fetch(`${baseURL}/api/agent/task`, {
+        const res = await fetch(`${baseURL}/api/agent/run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',

@@ -20,8 +20,8 @@ type Provider interface {
 	// Execute runs the task to completion, emitting incremental events via
 	// the callback. Returns nil on success or an error describing the failure.
 	// The runtime transitions the task to failed/blocked on error and remains
-	// available for later tasks (VAL-RUNTIME-008).
-	Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error
+	// available for later runs (VAL-RUNTIME-008).
+	Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error
 
 	// ProviderName returns the name of the provider for observability
 	// (e.g., "stub", "bedrock", "zai"). This is used in health responses
@@ -58,9 +58,9 @@ func (p *StubProvider) ProviderName() string { return "stub" }
 
 // Execute simulates task execution by sleeping for the configured delay,
 // emitting progress events, and returning the configured result or error.
-func (p *StubProvider) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
+func (p *StubProvider) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
 	// Emit a progress event at the start.
-	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"stub"}`))
+	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started","provider":"stub"}`))
 
 	// Simulate work in increments.
 	deadline := time.After(p.Delay)
@@ -74,7 +74,7 @@ func (p *StubProvider) Execute(ctx context.Context, task *types.TaskRecord, emit
 		case <-deadline:
 			goto done
 		case <-tick.C:
-			emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"working","provider":"stub"}`))
+			emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"working","provider":"stub"}`))
 		}
 	}
 
@@ -83,7 +83,7 @@ done:
 		return p.FailErr
 	}
 
-	emit(types.EventTaskDelta, "execution",
+	emit(types.EventRunDelta, "execution",
 		json.RawMessage(`{"text":"`+p.Result+`","provider":"stub"}`))
 
 	return nil

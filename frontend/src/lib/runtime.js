@@ -2,54 +2,54 @@
  * Runtime API client for the go-choir shell prompt UI.
  *
  * Communicates with the runtime through the same-origin proxy routes only:
- *   POST /api/agent/task      — submit a prompt
- *   GET  /api/agent/status    — poll task status
+ *   POST /api/agent/run       — submit a prompt
+ *   GET  /api/agent/status    — poll run status
  *   GET  /api/events          — SSE event stream
  *
  * All requests use cookie-backed auth via fetchWithRenewal so that:
  *   - expired access tokens are silently renewed before retry
  *   - the shell never falls back to guest auth mid-submission
- *   - renewal/retry does not duplicate task submission (VAL-CROSS-111)
+ *   - renewal/retry does not duplicate run submission (VAL-CROSS-111)
  *
  * Reattachment across reload/new-tab (VAL-CROSS-121):
- *   - The active task ID is stored in sessionStorage as 'go-choir-active-task'
- *   - On mount, the UI checks for an in-flight task and reattaches instead
+ *   - The active run ID is stored in sessionStorage as 'go-choir-active-run'
+ *   - On mount, the UI checks for an in-flight run and reattaches instead
  *     of resubmitting
- *   - The stored task ID is cleared when the task reaches a terminal state
+ *   - The stored run ID is cleared when the run reaches a terminal state
  */
 
 import { fetchWithRenewal, AuthRequiredError } from './auth.js';
 
 // ---------------------------------------------------------------------------
-// Task submission
+// Run submission
 // ---------------------------------------------------------------------------
 
 /**
  * Submits a prompt to the runtime API.
  *
  * Uses fetchWithRenewal so that if the access JWT is expired, the request
- * is retried after silent renewal rather than failing outright. The task is
- * only submitted once because the server generates the task ID at acceptance
- * time — a renewed retry of the same POST creates a second task only if the
+ * is retried after silent renewal rather than failing outright. The run is
+ * only submitted once because the server generates the run ID at acceptance
+ * time — a renewed retry of the same POST creates a second run only if the
  * first request never reached the server. The client-side guard below
  * prevents this edge case.
  *
  * @param {string} prompt - The user prompt text.
- * @returns {Promise<{task_id: string, state: string, owner_id: string, created_at: string}>}
+ * @returns {Promise<{run_id: string, state: string, owner_id: string, created_at: string}>}
  * @throws {AuthRequiredError} If auth renewal fails.
  * @throws {Error} If the server rejects the request.
  */
-export async function submitTask(prompt) {
-  // Guard: refuse to submit if there is already an in-flight active task.
+export async function submitRun(prompt) {
+  // Guard: refuse to submit if there is already an in-flight active run.
   // This prevents duplicate submission during renewal retry (VAL-CROSS-111).
-  const activeTask = getActiveTask();
-  if (activeTask && !isTerminalState(activeTask.state)) {
-    // There is already an in-flight task — return its info instead of
+  const activeRun = getActiveRun();
+  if (activeRun && !isTerminalState(activeRun.state)) {
+    // There is already an in-flight run — return its info instead of
     // submitting a new one.
-    return activeTask;
+    return activeRun;
   }
 
-  const res = await fetchWithRenewal('/api/agent/task', {
+  const res = await fetchWithRenewal('/api/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
@@ -57,51 +57,51 @@ export async function submitTask(prompt) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Task submission failed (${res.status})`);
+    throw new Error(err.error || `Run submission failed (${res.status})`);
   }
 
-  const taskInfo = await res.json();
+  const runInfo = await res.json();
 
-  // Store the active task so we can reattach after reload (VAL-CROSS-121).
-  setActiveTask({
-    task_id: taskInfo.task_id,
-    state: taskInfo.state,
-    owner_id: taskInfo.owner_id,
-    created_at: taskInfo.created_at,
+  // Store the active run so we can reattach after reload (VAL-CROSS-121).
+  setActiveRun({
+    run_id: runInfo.run_id,
+    state: runInfo.state,
+    owner_id: runInfo.owner_id,
+    created_at: runInfo.created_at,
     prompt,
   });
 
-  return taskInfo;
+  return runInfo;
 }
 
 // ---------------------------------------------------------------------------
-// Task status
+// Run status
 // ---------------------------------------------------------------------------
 
 /**
- * Fetches the current status of a task.
+ * Fetches the current status of a run.
  *
- * @param {string} taskId - The stable task handle.
- * @returns {Promise<object>} The task status record.
+ * @param {string} runId - The stable run handle.
+ * @returns {Promise<object>} The run status record.
  * @throws {AuthRequiredError} If auth renewal fails.
- * @throws {Error} If the task is not found.
+ * @throws {Error} If the run is not found.
  */
-export async function fetchTaskStatus(taskId) {
-  const res = await fetchWithRenewal(`/api/agent/status?task_id=${encodeURIComponent(taskId)}`, {
+export async function fetchRunStatus(runId) {
+  const res = await fetchWithRenewal(`/api/agent/status?run_id=${encodeURIComponent(runId)}`, {
     method: 'GET',
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Status fetch failed (${res.status})`);
+    throw new Error(err.error || `Run status fetch failed (${res.status})`);
   }
 
   const status = await res.json();
 
-  // Update the stored active task state so reattachment picks up the latest.
-  const active = getActiveTask();
-  if (active && active.task_id === taskId) {
-    setActiveTask({ ...active, state: status.state, result: status.result, error: status.error });
+  // Update the stored active run state so reattachment picks up the latest.
+  const active = getActiveRun();
+  if (active && active.run_id === runId) {
+    setActiveRun({ ...active, state: status.state, result: status.result, error: status.error });
   }
 
   return status;
@@ -154,34 +154,34 @@ export function connectEventStream(onEvent, options = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Active task persistence (reattachment, VAL-CROSS-121)
+// Active run persistence (reattachment, VAL-CROSS-121)
 // ---------------------------------------------------------------------------
 
-const ACTIVE_TASK_KEY = 'go-choir-active-task';
+const ACTIVE_RUN_KEY = 'go-choir-active-run';
 
 /**
- * Stores the active task info in sessionStorage so it survives page reload
+ * Stores the active run info in sessionStorage so it survives page reload
  * but not closing the browser tab entirely. This supports reattachment
  * across reload and new-tab within the same session (VAL-CROSS-121).
  *
- * Note: sessionStorage is used here because the task ID is not a secret —
+ * Note: sessionStorage is used here because the run ID is not a secret —
  * it is a server-generated UUID that is already exposed through the API.
- * Auth tokens are never stored here; only the task handle for reattachment.
+ * Auth tokens are never stored here; only the run handle for reattachment.
  */
-export function setActiveTask(taskInfo) {
+export function setActiveRun(runInfo) {
   try {
-    sessionStorage.setItem(ACTIVE_TASK_KEY, JSON.stringify(taskInfo));
+    sessionStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(runInfo));
   } catch (_err) {
     // sessionStorage may be unavailable in some contexts.
   }
 }
 
 /**
- * Returns the stored active task info, or null if none.
+ * Returns the stored active run info, or null if none.
  */
-export function getActiveTask() {
+export function getActiveRun() {
   try {
-    const raw = sessionStorage.getItem(ACTIVE_TASK_KEY);
+    const raw = sessionStorage.getItem(ACTIVE_RUN_KEY);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch (_err) {
@@ -190,53 +190,53 @@ export function getActiveTask() {
 }
 
 /**
- * Clears the stored active task info.
+ * Clears the stored active run info.
  */
-export function clearActiveTask() {
+export function clearActiveRun() {
   try {
-    sessionStorage.removeItem(ACTIVE_TASK_KEY);
+    sessionStorage.removeItem(ACTIVE_RUN_KEY);
   } catch (_err) {
     // Ignore.
   }
 }
 
 /**
- * Returns true if the given task state is terminal (completed, failed, cancelled).
+ * Returns true if the given run state is terminal (completed, failed, cancelled).
  */
 export function isTerminalState(state) {
   return state === 'completed' || state === 'failed' || state === 'cancelled';
 }
 
 /**
- * Attempts to reattach to an in-flight task.
+ * Attempts to reattach to an in-flight run.
  *
  * On mount (or reload), the UI should call this to check whether there is
- * an active task that is still in-flight. If so, it returns the task status
- * so the UI can resume showing progress. If the task has already completed,
- * it returns the final status. If there is no active task, returns null.
+ * an active run that is still in-flight. If so, it returns the run status
+ * so the UI can resume showing progress. If the run has already completed,
+ * it returns the final status. If there is no active run, returns null.
  *
- * @returns {Promise<object|null>} The task status, or null if no active task.
+ * @returns {Promise<object|null>} The run status, or null if no active run.
  */
-export async function reattachToActiveTask() {
-  const active = getActiveTask();
-  if (!active || !active.task_id) {
+export async function reattachToActiveRun() {
+  const active = getActiveRun();
+  if (!active || !active.run_id) {
     return null;
   }
 
   try {
-    const status = await fetchTaskStatus(active.task_id);
+    const status = await fetchRunStatus(active.run_id);
     if (isTerminalState(status.state)) {
-      // Task already finished — clear the stored handle.
-      clearActiveTask();
+      // Run already finished — clear the stored handle.
+      clearActiveRun();
     } else {
-      // Task is still in-flight — update the stored state.
-      setActiveTask({ ...active, state: status.state });
+      // Run is still in-flight — update the stored state.
+      setActiveRun({ ...active, state: status.state });
     }
     return status;
   } catch (_err) {
-    // Status fetch failed — the task may have been cleaned up or auth
+    // Status fetch failed — the run may have been cleaned up or auth
     // expired. Clear the stored handle so the UI doesn't get stuck.
-    clearActiveTask();
+    clearActiveRun();
     return null;
   }
 }

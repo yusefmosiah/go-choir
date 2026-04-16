@@ -17,7 +17,7 @@ import (
 // --- Parent-Child Channel Integration Tests ---
 //
 // These tests verify channel-based communication between parent and child
-// tasks (VAL-CHOIR-006, VAL-CHOIR-015). The feature requirements are:
+// runs (VAL-CHOIR-006, VAL-CHOIR-015). The feature requirements are:
 //
 //   - Child task can send message to parent via channel
 //   - Parent can subscribe to messages from specific child
@@ -56,7 +56,7 @@ func testParentChildSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	})
 
 	// Create a parent task.
-	parentRec, err := rt.SubmitTask(context.Background(), "parent objective", "user-alice")
+	parentRec, err := rt.StartRun(context.Background(), "parent objective", "user-alice")
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}
@@ -64,7 +64,7 @@ func testParentChildSetup(t *testing.T) (*Runtime, *APIHandler, string) {
 	// Wait for parent task to start running.
 	time.Sleep(50 * time.Millisecond)
 
-	return rt, handler, parentRec.TaskID
+	return rt, handler, parentRec.RunID
 }
 
 // dbPathForTest returns a unique database path for the test.
@@ -169,7 +169,7 @@ func TestParentChildChannel_ScopedToRelationship(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a second parent task.
-	parent2Rec, err := rt.SubmitTask(ctx, "second parent objective", "user-bob")
+	parent2Rec, err := rt.StartRun(ctx, "second parent objective", "user-bob")
 	if err != nil {
 		t.Fatalf("create second parent: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestParentChildChannel_ScopedToRelationship(t *testing.T) {
 	}
 
 	// Post a message to the second parent's channel.
-	_, err = rt.ChannelPost(ctx, parent2Rec.TaskID, "worker-2", "status", "Message for parent 2")
+	_, err = rt.ChannelPost(ctx, parent2Rec.RunID, "worker-2", "status", "Message for parent 2")
 	if err != nil {
 		t.Fatalf("post to parent 2 channel: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestParentChildChannel_ScopedToRelationship(t *testing.T) {
 	}
 
 	// Verify parent 2 only sees its own messages.
-	msgs2, _, err := rt.ChannelRead(parent2Rec.TaskID, 0)
+	msgs2, _, err := rt.ChannelRead(parent2Rec.RunID, 0)
 	if err != nil {
 		t.Fatalf("parent 2 read: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestParentChildChannel_CrossChannelIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a second parent with a different channel.
-	parentB, err := rt.SubmitTask(ctx, "parent B objective", "user-bob")
+	parentB, err := rt.StartRun(ctx, "parent B objective", "user-bob")
 	if err != nil {
 		t.Fatalf("create parent B: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestParentChildChannel_CrossChannelIsolation(t *testing.T) {
 	// Start a waiter on parent B's channel.
 	bReceived := make(chan []ChannelMessage, 1)
 	go func() {
-		msgs, _, err := rt.ChannelWait(ctx, parentB.TaskID, 0)
+		msgs, _, err := rt.ChannelWait(ctx, parentB.RunID, 0)
 		if err != nil {
 			t.Errorf("parent B wait: %v", err)
 			return
@@ -334,7 +334,7 @@ func TestParentChildChannel_CrossChannelIsolation(t *testing.T) {
 	}
 
 	// Now post to parent B's channel — this should wake the waiter.
-	_, err = rt.ChannelPost(ctx, parentB.TaskID, "worker-B", "status", "For parent B")
+	_, err = rt.ChannelPost(ctx, parentB.RunID, "worker-B", "status", "For parent B")
 	if err != nil {
 		t.Fatalf("post to parent B: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestParentChildChannel_ChannelClosureIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a second parent.
-	parentB, err := rt.SubmitTask(ctx, "parent B objective", "user-bob")
+	parentB, err := rt.StartRun(ctx, "parent B objective", "user-bob")
 	if err != nil {
 		t.Fatalf("create parent B: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestParentChildChannel_ChannelClosureIsolation(t *testing.T) {
 
 	// Post to both channels.
 	_, _ = rt.ChannelPost(ctx, parentAID, "worker", "status", "A msg")
-	_, _ = rt.ChannelPost(ctx, parentB.TaskID, "worker", "status", "B msg")
+	_, _ = rt.ChannelPost(ctx, parentB.RunID, "worker", "status", "B msg")
 
 	// Close parent A's channel — this removes it from the manager.
 	mgr := rt.ChannelManager()
@@ -379,7 +379,7 @@ func TestParentChildChannel_ChannelClosureIsolation(t *testing.T) {
 	}
 
 	// Verify closing parent A does not affect parent B's channel.
-	msgs, _, err := rt.ChannelRead(parentB.TaskID, 0)
+	msgs, _, err := rt.ChannelRead(parentB.RunID, 0)
 	if err != nil {
 		t.Fatalf("parent B read after closing parent A: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestParentChildChannel_ChannelClosureIsolation(t *testing.T) {
 	}
 
 	// Verify parent B can still post new messages.
-	_, err = rt.ChannelPost(ctx, parentB.TaskID, "worker", "status", "B msg 2")
+	_, err = rt.ChannelPost(ctx, parentB.RunID, "worker", "status", "B msg 2")
 	if err != nil {
 		t.Fatalf("parent B post after closing parent A: %v", err)
 	}
@@ -447,13 +447,13 @@ func TestParentChildChannel_EventEmission(t *testing.T) {
 		if ev.Cause != events.CauseChannelMessage {
 			t.Errorf("cause: got %q, want channel_message", ev.Cause)
 		}
-		// Verify payload contains work_id and from.
+		// Verify payload contains channel_id and from.
 		var payload map[string]any
 		if err := json.Unmarshal(ev.Record.Payload, &payload); err != nil {
 			t.Fatalf("unmarshal payload: %v", err)
 		}
-		if payload["work_id"] != parentID {
-			t.Errorf("payload work_id: got %v, want %q", payload["work_id"], parentID)
+		if payload["channel_id"] != parentID {
+			t.Errorf("payload channel_id: got %v, want %q", payload["channel_id"], parentID)
 		}
 		if payload["from"] != "worker-1" {
 			t.Errorf("payload from: got %v, want worker-1", payload["from"])
@@ -488,7 +488,7 @@ func TestParentChildChannel_SpawnedChildPostsToParentChannel(t *testing.T) {
 		t.Fatalf("decode spawn response: %v", err)
 	}
 
-	childID := resp.TaskID
+	childID := resp.RunID
 
 	// Simulate the child worker posting a result to the parent's channel.
 	// The child posts to the parent's channel (keyed by parentID).
@@ -555,7 +555,7 @@ func TestParentChildChannel_MultipleSpawnedChildrenPostResults(t *testing.T) {
 		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 			t.Fatalf("decode %d: %v", i, err)
 		}
-		childIDs[i] = resp.TaskID
+		childIDs[i] = resp.RunID
 	}
 
 	// Wait for children to complete (auto-post results).
@@ -620,7 +620,7 @@ func TestParentChildChannel_ParentWaitsForChildResult(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	childID := resp.TaskID
+	childID := resp.RunID
 
 	// Parent waits for the child's result. The child task auto-posts
 	// its result on completion (~10ms with the test stub provider).
@@ -660,7 +660,7 @@ func TestParentChildChannel_ParentWaitsForChildResult(t *testing.T) {
 func TestParentChildChannel_ChannelAutoCreatedOnSpawn(t *testing.T) {
 	_, handler, parentID := testParentChildSetup(t)
 
-	// Before spawning, the parent should have a channel (created by SubmitTask).
+	// Before spawning, the parent should have a channel (created by StartRun).
 	mgr := NewChannelManager() // fresh manager to test auto-creation
 
 	// Spawn a child — this should auto-create a channel for the parent
@@ -760,7 +760,7 @@ func TestParentChildChannel_IncrementalRead(t *testing.T) {
 }
 
 // TestParentChildChannel_MessageFormat verifies that messages conform to
-// the expected format with from, to (via work_id), type (role), and payload
+// the expected format with from, to (via channel_id), type (role), and payload
 // (content) fields (feature expected behavior #5).
 func TestParentChildChannel_MessageFormat(t *testing.T) {
 	rt, _, parentID := testParentChildSetup(t)
@@ -1026,22 +1026,23 @@ func TestParentChildChannel_ChannelsAutoCreatedOnSpawn(t *testing.T) {
 	mgr := rt.ChannelManager()
 	channels := mgr.ListChannels()
 
-	// Both parent and child should have channels.
+	// The parent/family channel should be auto-created on spawn, and any
+	// explicit child channel should also exist.
 	hasParent := false
-	hasChild := false
+	hasChildChannel := resp.ChannelID == ""
 	for _, ch := range channels {
 		if ch == parentID {
 			hasParent = true
 		}
-		if ch == resp.TaskID {
-			hasChild = true
+		if ch == resp.ChannelID {
+			hasChildChannel = true
 		}
 	}
 
 	if !hasParent {
 		t.Error("parent channel should be auto-created on spawn")
 	}
-	if !hasChild {
-		t.Error("child channel should be auto-created on spawn")
+	if !hasChildChannel {
+		t.Error("spawned run channel should be auto-created on spawn")
 	}
 }

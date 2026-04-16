@@ -89,8 +89,8 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 	}
 	gbp := NewGatewayBridgeProvider(mock)
 
-	task := &types.TaskRecord{
-		TaskID: "task-1",
+	task := &types.RunRecord{
+		RunID: "task-1",
 		Prompt: "Say hello",
 	}
 
@@ -140,10 +140,10 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		t.Fatalf("expected 1 user message, got: %+v", mock.lastReq.Messages)
 	}
 
-	// Verify a task.delta event was emitted during streaming.
+	// Verify a run.delta event was emitted during streaming.
 	hasDelta := false
 	for _, e := range emitted {
-		if e.kind == types.EventTaskDelta {
+		if e.kind == types.EventRunDelta {
 			hasDelta = true
 			if !strings.Contains(e.payload, "Hello from the gateway!") {
 				t.Fatalf("delta event should contain streamed text, got: %s", e.payload)
@@ -151,7 +151,7 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		}
 	}
 	if !hasDelta {
-		t.Error("expected task.delta event from streaming gateway bridge")
+		t.Error("expected run.delta event from streaming gateway bridge")
 	}
 }
 
@@ -163,8 +163,8 @@ func TestGatewayBridgeProviderExecuteFailure(t *testing.T) {
 	}
 	gbp := NewGatewayBridgeProvider(mock)
 
-	task := &types.TaskRecord{
-		TaskID: "task-2",
+	task := &types.RunRecord{
+		RunID: "task-2",
 		Prompt: "This should fail",
 	}
 
@@ -179,7 +179,7 @@ func TestGatewayBridgeProviderExecuteFailure(t *testing.T) {
 	}
 
 	// Provider failures must be structured errors, not panics.
-	// The runtime should remain available for later tasks (VAL-RUNTIME-008).
+	// The runtime should remain available for later runs (VAL-RUNTIME-008).
 	if task.Result != "" {
 		t.Fatalf("task result should be empty on failure, got: %s", task.Result)
 	}
@@ -193,7 +193,7 @@ func TestGatewayBridgeProviderExecuteCancelledContext(t *testing.T) {
 	}
 	gbp := NewGatewayBridgeProvider(mock)
 
-	task := &types.TaskRecord{TaskID: "task-ctx", Prompt: "cancelled"}
+	task := &types.RunRecord{RunID: "task-ctx", Prompt: "cancelled"}
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
 
 	err := gbp.Execute(context.Background(), task, emit)

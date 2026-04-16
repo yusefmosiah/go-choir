@@ -459,8 +459,8 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 
 	bridge := NewBridgeProvider(mock)
 
-	task := &types.TaskRecord{
-		TaskID:  "task-1",
+	task := &types.RunRecord{
+		RunID:  "task-1",
 		OwnerID: "user-1",
 		Prompt:  "What is the meaning of life?",
 	}
@@ -515,7 +515,7 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 	// Delta event should contain the response text (emitted during streaming).
 	var foundDelta bool
 	for _, ev := range events {
-		if ev.kind == types.EventTaskDelta {
+		if ev.kind == types.EventRunDelta {
 			var deltaPayload map[string]string
 			if err := json.Unmarshal(ev.payload, &deltaPayload); err != nil {
 				t.Fatalf("unmarshal delta event: %v", err)
@@ -531,7 +531,7 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 		}
 	}
 	if !foundDelta {
-		t.Error("expected task.delta event from streaming bridge provider")
+		t.Error("expected run.delta event from streaming bridge provider")
 	}
 }
 
@@ -544,8 +544,8 @@ func TestBridgeProviderExecuteFailure(t *testing.T) {
 
 	bridge := NewBridgeProvider(mock)
 
-	task := &types.TaskRecord{
-		TaskID:  "task-2",
+	task := &types.RunRecord{
+		RunID:  "task-2",
 		OwnerID: "user-1",
 		Prompt:  "This should fail",
 	}
@@ -601,7 +601,7 @@ func TestBridgeProviderEventsDistinguishRealFromStub(t *testing.T) {
 	}
 
 	bridge := NewBridgeProvider(mock)
-	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	task := &types.RunRecord{RunID: "t1", Prompt: "test"}
 	var collected []map[string]string
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
 		var m map[string]string
@@ -1846,8 +1846,8 @@ func TestBridgeProviderStreamingEmitsMultipleDeltas(t *testing.T) {
 	}
 
 	bridge := NewBridgeProvider(inner)
-	task := &types.TaskRecord{
-		TaskID: "task-stream-1",
+	task := &types.RunRecord{
+		RunID: "task-stream-1",
 		Prompt: "Say hello",
 	}
 
@@ -1875,7 +1875,7 @@ func TestBridgeProviderStreamingEmitsMultipleDeltas(t *testing.T) {
 	// Count delta events.
 	deltaCount := 0
 	for _, ev := range emitted {
-		if ev.kind == types.EventTaskDelta {
+		if ev.kind == types.EventRunDelta {
 			deltaCount++
 		}
 	}
@@ -1886,7 +1886,7 @@ func TestBridgeProviderStreamingEmitsMultipleDeltas(t *testing.T) {
 	// Verify each delta contains the expected chunk text.
 	var deltaTexts []string
 	for _, ev := range emitted {
-		if ev.kind == types.EventTaskDelta {
+		if ev.kind == types.EventRunDelta {
 			var payload map[string]string
 			if err := json.Unmarshal(ev.payload, &payload); err == nil {
 				deltaTexts = append(deltaTexts, payload["text"])
@@ -1913,7 +1913,7 @@ func TestBridgeProviderStreamingUsesStreamMethod(t *testing.T) {
 	}
 
 	bridge := NewBridgeProvider(tracker)
-	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	task := &types.RunRecord{RunID: "t1", Prompt: "test"}
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
 
 	err := bridge.Execute(context.Background(), task, emit)
@@ -1940,7 +1940,7 @@ func TestBridgeProviderStreamingRequestHasStreamTrue(t *testing.T) {
 	}
 
 	bridge := NewBridgeProvider(tracker)
-	task := &types.TaskRecord{TaskID: "t1", Prompt: "test"}
+	task := &types.RunRecord{RunID: "t1", Prompt: "test"}
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
 
 	err := bridge.Execute(context.Background(), task, emit)

@@ -610,9 +610,9 @@ type vtextAgentRevisionRequest struct {
 // submission. It returns the stable task handle so the client can track
 // progress through the event stream (VAL-ETEXT-004).
 type vtextAgentRevisionResponse struct {
-	TaskID    string          `json:"task_id"`
+	RunID    string          `json:"run_id"`
 	DocID     string          `json:"doc_id"`
-	State     types.TaskState `json:"state"`
+	State     types.RunState `json:"state"`
 	CreatedAt string          `json:"created_at"`
 }
 
@@ -661,28 +661,44 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 	}
 
 	// Check for an existing pending agent mutation on this document.
-	// If one exists, return the existing task ID instead of creating a new
+	// If one exists, return the existing run ID instead of creating a new
 	// mutation. This prevents duplicate canonical revisions when
 	// renewal/retry occurs mid-mutation (VAL-CROSS-122).
 	existing, err := h.rt.Store().GetPendingAgentMutationByDoc(r.Context(), docID, ownerID)
 	if err != nil {
 		log.Printf("vtext api: check pending mutation: %v", err)
 	} else if existing != nil {
-		// Return the existing task — idempotent response.
+		// Return the existing run — idempotent response.
 		writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
-			TaskID:    existing.TaskID,
+			RunID:    existing.RunID,
 			DocID:     docID,
-			State:     types.TaskPending,
+			State:     types.RunPending,
 			CreatedAt: existing.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
 		})
 		return
 	}
 
+	rec, err := h.rt.submitVTextAgentRevisionRun(r.Context(), doc, ownerID, req, "")
+	if err != nil {
+		log.Printf("vtext api: submit agent revision run: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
+		return
+	}
+
+	writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
+		RunID:    rec.RunID,
+		DocID:     docID,
+		State:     rec.State,
+		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+	})
+}
+
+func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Document, ownerID string, req vtextAgentRevisionRequest, parentRunID string) (*types.RunRecord, error) {
 	// Build the backend-owned vtext revision request from current document state.
 	var currentRevision types.Revision
 	var currentRevisionLoaded bool
 	if doc.CurrentRevisionID != "" {
-		rev, err := h.rt.Store().GetRevision(r.Context(), doc.CurrentRevisionID, ownerID)
+		rev, err := rt.Store().GetRevision(ctx, doc.CurrentRevisionID, ownerID)
 		if err == nil {
 			currentRevision = rev
 			currentRevisionLoaded = true
@@ -691,7 +707,7 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 	metadata := decodeRevisionMetadata(currentRevision.Metadata)
 	var previousRevision *types.Revision
 	if currentRevisionLoaded && currentRevision.ParentRevisionID != "" {
-		prev, err := h.rt.Store().GetRevision(r.Context(), currentRevision.ParentRevisionID, ownerID)
+		prev, err := rt.Store().GetRevision(ctx, currentRevision.ParentRevisionID, ownerID)
 		if err == nil {
 			previousRevision = &prev
 		}
@@ -699,42 +715,50 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 
 	diffSummary := ""
 	if currentRevisionLoaded && previousRevision != nil {
-		if diff, err := h.rt.Store().GetDiff(r.Context(), previousRevision.RevisionID, currentRevision.RevisionID, ownerID); err == nil {
+		if diff, err := rt.Store().GetDiff(ctx, previousRevision.RevisionID, currentRevision.RevisionID, ownerID); err == nil {
 			diffSummary = summarizeDiffResult(diff)
 		}
 	}
 
 	agentPrompt := buildAgentRevisionRequest(currentRevision, previousRevision, metadata, req, diffSummary)
 
-	// Create the runtime task with vtext agent revision metadata.
+	// Create the runtime run with vtext agent revision metadata.
 	// Carry forward durable context keys from the current head revision
 	// so they survive into appagent revision metadata.
-	taskMetadata := map[string]any{
+	runMetadata := map[string]any{
 		"type":                "vtext_agent_revision",
 		"agent_profile":       AgentProfileVText,
 		"agent_role":          AgentProfileVText,
-		"doc_id":              docID,
+		"agent_id":            "vtext:" + doc.DocID,
+		"channel_id":          doc.DocID,
+		"doc_id":              doc.DocID,
 		"current_revision_id": doc.CurrentRevisionID,
 		"request_intent":      strings.TrimSpace(req.Intent),
 		"original_prompt":     strings.TrimSpace(req.Prompt),
 	}
 	for _, key := range durableMetadataKeys {
 		if val := metadataString(metadata, key); val != "" {
-			taskMetadata[key] = val
+			runMetadata[key] = val
 		}
 	}
 
-	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, taskMetadata)
+	var (
+		rec *types.RunRecord
+		err error
+	)
+	if strings.TrimSpace(parentRunID) != "" {
+		rec, err = rt.StartChildRun(ctx, parentRunID, agentPrompt, ownerID, runMetadata)
+	} else {
+		rec, err = rt.StartRunWithMetadata(ctx, agentPrompt, ownerID, runMetadata)
+	}
 	if err != nil {
-		log.Printf("vtext api: submit agent revision task: %v", err)
-		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
-		return
+		return nil, err
 	}
 
 	// Record the agent mutation for idempotency tracking (VAL-CROSS-122).
-	if err := h.rt.Store().CreateAgentMutation(r.Context(), store.AgentMutation{
-		DocID:     docID,
-		TaskID:    rec.TaskID,
+	if err := rt.Store().CreateAgentMutation(ctx, store.AgentMutation{
+		DocID:     doc.DocID,
+		RunID:    rec.RunID,
 		OwnerID:   ownerID,
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -744,18 +768,13 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 
 	// Emit the vtext-specific agent revision started event.
 	startedPayload, _ := json.Marshal(map[string]string{
-		"doc_id":  docID,
-		"task_id": rec.TaskID,
+		"doc_id":  doc.DocID,
+		"run_id": rec.RunID,
 	})
-	h.rt.emitVTextAgentEvent(r.Context(), rec, types.EventVTextAgentRevisionStarted,
+	rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionStarted,
 		events.CauseTaskLifecycle, startedPayload)
 
-	writeAPIJSON(w, http.StatusAccepted, vtextAgentRevisionResponse{
-		TaskID:    rec.TaskID,
-		DocID:     docID,
-		State:     rec.State,
-		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-	})
+	return rec, nil
 }
 
 // buildAgentRevisionRequest constructs the backend-owned vtext revision
@@ -785,9 +804,9 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 		b.WriteString(sourcePath)
 		b.WriteString(". Preserve the file-backed structure while producing the next version.")
 	}
-	if conductorTaskID := metadataString(metadata, "conductor_task_id"); conductorTaskID != "" {
+	if conductorRunID := metadataString(metadata, "conductor_run_id"); conductorRunID != "" {
 		b.WriteString("\nConductor task: ")
-		b.WriteString(conductorTaskID)
+		b.WriteString(conductorRunID)
 		b.WriteString(".")
 	}
 	if current.RevisionID != "" {
@@ -887,11 +906,11 @@ func summarizeDiffResult(diff types.DiffResult) string {
 // emitVTextAgentEvent is a helper that emits an vtext-specific agent revision
 // event, carrying the doc_id in the payload so the frontend can correlate
 // progress to the open document (VAL-ETEXT-004).
-func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.TaskRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
+func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
 	rt.bus.Publish(events.RuntimeEvent{
 		Record: types.EventRecord{
 			EventID:   uuid.New().String(),
-			TaskID:    rec.TaskID,
+			RunID:    rec.RunID,
 			OwnerID:   rec.OwnerID,
 			Timestamp: time.Now().UTC(),
 			Kind:      kind,
@@ -904,7 +923,7 @@ func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.TaskRecor
 	// Also persist for catch-up.
 	if err := rt.store.AppendEvent(ctx, &types.EventRecord{
 		EventID:   uuid.New().String(),
-		TaskID:    rec.TaskID,
+		RunID:    rec.RunID,
 		OwnerID:   rec.OwnerID,
 		Timestamp: time.Now().UTC(),
 		Kind:      kind,

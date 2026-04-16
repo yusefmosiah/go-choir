@@ -27,7 +27,7 @@ type streamingProvider struct {
 	called  bool
 }
 
-func (p *streamingProvider) Execute(ctx context.Context, task *types.TaskRecord, emit EventEmitFunc) error {
+func (p *streamingProvider) Execute(ctx context.Context, task *types.RunRecord, emit EventEmitFunc) error {
 	p.mu.Lock()
 	p.called = true
 	p.mu.Unlock()
@@ -37,7 +37,7 @@ func (p *streamingProvider) Execute(ctx context.Context, task *types.TaskRecord,
 	}
 
 	// Emit a started progress event.
-	emit(types.EventTaskProgress, "execution", json.RawMessage(`{"status":"started","provider":"`+p.name+`","streaming":true}`))
+	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started","provider":"`+p.name+`","streaming":true}`))
 
 	// Emit a delta event for each chunk, simulating real SSE streaming.
 	for _, chunk := range p.chunks {
@@ -50,7 +50,7 @@ func (p *streamingProvider) Execute(ctx context.Context, task *types.TaskRecord,
 			"text":     chunk,
 			"provider": p.name,
 		})
-		emit(types.EventTaskDelta, "execution", deltaPayload)
+		emit(types.EventRunDelta, "execution", deltaPayload)
 		// Small delay to simulate real streaming latency.
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -101,7 +101,7 @@ func testStreamingRuntime(t *testing.T, provider Provider) (*Runtime, *store.Sto
 // --- Streaming Tests ---
 
 // TestStreamingProviderEmitsMultipleDeltas verifies that a streaming provider
-// emits multiple task.delta events during task execution, one for each text
+// emits multiple run.delta events during run execution, one for each text
 // chunk. This is the core behavior that enables real-time SSE streaming from
 // provider → runtime → browser (VAL-LLM-008).
 func TestStreamingProviderEmitsMultipleDeltas(t *testing.T) {
@@ -114,7 +114,7 @@ func TestStreamingProviderEmitsMultipleDeltas(t *testing.T) {
 	rt, s := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "stream test", "user-stream")
+	rec, err := rt.StartRun(ctx, "stream test", "user-stream")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -123,11 +123,11 @@ func TestStreamingProviderEmitsMultipleDeltas(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Verify task completed successfully.
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-stream")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-stream")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
+	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}
 
@@ -138,14 +138,14 @@ func TestStreamingProviderEmitsMultipleDeltas(t *testing.T) {
 	}
 
 	// Verify delta events were persisted for each chunk.
-	evts, err := s.ListEvents(ctx, rec.TaskID, 50)
+	evts, err := s.ListEvents(ctx, rec.RunID, 50)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
 	deltaCount := 0
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta {
+		if ev.Kind == types.EventRunDelta {
 			deltaCount++
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
@@ -183,7 +183,7 @@ func TestStreamingDeltaEventsReceivedOnBus(t *testing.T) {
 	ch := rt.EventBus().Subscribe()
 	defer rt.EventBus().Unsubscribe(ch)
 
-	_, err := rt.SubmitTask(ctx, "bus test", "user-bus")
+	_, err := rt.StartRun(ctx, "bus test", "user-bus")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -206,7 +206,7 @@ done:
 	// Count delta events received via the bus.
 	deltaCount := 0
 	for _, ev := range received {
-		if ev.Record.Kind == types.EventTaskDelta {
+		if ev.Record.Kind == types.EventRunDelta {
 			deltaCount++
 		}
 	}
@@ -222,18 +222,18 @@ done:
 	}
 
 	// submitted should come first.
-	if len(kinds) == 0 || kinds[0] != types.EventTaskSubmitted {
-		t.Errorf("first event: got %v, want task.submitted", kinds)
+	if len(kinds) == 0 || kinds[0] != types.EventRunSubmitted {
+		t.Errorf("first event: got %v, want run.submitted", kinds)
 	}
 
 	// deltas should come before completed.
 	deltaIdx := -1
 	completedIdx := -1
 	for i, k := range kinds {
-		if k == types.EventTaskDelta && deltaIdx == -1 {
+		if k == types.EventRunDelta && deltaIdx == -1 {
 			deltaIdx = i
 		}
-		if k == types.EventTaskCompleted {
+		if k == types.EventRunCompleted {
 			completedIdx = i
 		}
 	}
@@ -255,14 +255,14 @@ func TestStreamingEventsContainChunkText(t *testing.T) {
 	rt, s := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "text test", "user-text")
+	rec, err := rt.StartRun(ctx, "text test", "user-text")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	time.Sleep(300 * time.Millisecond)
 
-	evts, err := s.ListEvents(ctx, rec.TaskID, 50)
+	evts, err := s.ListEvents(ctx, rec.RunID, 50)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestStreamingEventsContainChunkText(t *testing.T) {
 	// Collect the text from each delta event.
 	var deltaTexts []string
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskDelta {
+		if ev.Kind == types.EventRunDelta {
 			var payload map[string]string
 			if err := json.Unmarshal(ev.Payload, &payload); err == nil {
 				deltaTexts = append(deltaTexts, payload["text"])
@@ -290,7 +290,7 @@ func TestStreamingEventsContainChunkText(t *testing.T) {
 }
 
 // TestStreamingCompletesWithProperTermination verifies that a streaming task
-// properly terminates with a task.completed event after all chunks are
+// properly terminates with a run.completed event after all chunks are
 // emitted. This ensures the stream lifecycle is complete and the browser
 // receives a clear completion signal (VAL-LLM-008, VAL-LLM-009).
 func TestStreamingCompletesWithProperTermination(t *testing.T) {
@@ -303,7 +303,7 @@ func TestStreamingCompletesWithProperTermination(t *testing.T) {
 	rt, s := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "termination test", "user-term")
+	rec, err := rt.StartRun(ctx, "termination test", "user-term")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -311,31 +311,31 @@ func TestStreamingCompletesWithProperTermination(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Verify task completed.
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-term")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-term")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
+	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}
 	if stored.FinishedAt == nil {
 		t.Error("finished_at should be set for completed streaming task")
 	}
 
-	// Verify a task.completed event was emitted.
-	evts, err := s.ListEvents(ctx, rec.TaskID, 50)
+	// Verify a run.completed event was emitted.
+	evts, err := s.ListEvents(ctx, rec.RunID, 50)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
 	hasCompleted := false
 	for _, ev := range evts {
-		if ev.Kind == types.EventTaskCompleted {
+		if ev.Kind == types.EventRunCompleted {
 			hasCompleted = true
 		}
 	}
 	if !hasCompleted {
-		t.Error("expected task.completed event for streaming task")
+		t.Error("expected run.completed event for streaming run")
 	}
 }
 
@@ -351,7 +351,7 @@ func TestStreamingFailureEmitsErrorEvents(t *testing.T) {
 	rt, _ := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "stream failure test", "user-fail")
+	rec, err := rt.StartRun(ctx, "stream failure test", "user-fail")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
@@ -359,15 +359,15 @@ func TestStreamingFailureEmitsErrorEvents(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify task failed.
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-fail")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-fail")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskFailed {
+	if stored.State != types.RunFailed {
 		t.Fatalf("state: got %q, want failed", stored.State)
 	}
 
-	// Runtime should still be healthy for new tasks.
+	// Runtime should still be healthy for new runs.
 	if rt.HealthState() == types.HealthFailed {
 		t.Error("runtime should not be in failed state after streaming provider error")
 	}
@@ -393,12 +393,12 @@ func TestStreamingCancellationStopsEmission(t *testing.T) {
 	ch := rt.EventBus().Subscribe()
 	defer rt.EventBus().Unsubscribe(ch)
 
-	_, err := rt.SubmitTask(ctx, "cancel test", "user-cancel")
+	_, err := rt.StartRun(ctx, "cancel test", "user-cancel")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	// Let a few chunks emit, then stop the runtime (which cancels all tasks).
+	// Let a few chunks emit, then stop the runtime (which cancels all runs).
 	time.Sleep(100 * time.Millisecond)
 	rt.Stop()
 
@@ -408,7 +408,7 @@ func TestStreamingCancellationStopsEmission(t *testing.T) {
 	for {
 		select {
 		case ev := <-ch:
-			if ev.Record.Kind == types.EventTaskDelta {
+			if ev.Record.Kind == types.EventRunDelta {
 				deltaCount++
 			}
 		case <-timer:
@@ -436,18 +436,18 @@ func TestStreamingWithEmptyChunks(t *testing.T) {
 	rt, _ := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "empty chunks test", "user-empty")
+	rec, err := rt.StartRun(ctx, "empty chunks test", "user-empty")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	time.Sleep(300 * time.Millisecond)
 
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-empty")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-empty")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
+	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}
 
@@ -481,18 +481,18 @@ func TestStreamingLargePayload(t *testing.T) {
 	rt, _ := testStreamingRuntime(t, provider)
 	ctx := context.Background()
 
-	rec, err := rt.SubmitTask(ctx, "large payload test", "user-large")
+	rec, err := rt.StartRun(ctx, "large payload test", "user-large")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	time.Sleep(500 * time.Millisecond)
 
-	stored, err := rt.GetTask(ctx, rec.TaskID, "user-large")
+	stored, err := rt.GetRun(ctx, rec.RunID, "user-large")
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if stored.State != types.TaskCompleted {
+	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}
 	if stored.Result != longText {

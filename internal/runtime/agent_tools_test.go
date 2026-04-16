@@ -79,9 +79,9 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 		t.Fatalf("install default agent tools: %v", err)
 	}
 
-	parent, err := rt.SubmitTaskWithMetadata(context.Background(), "coordinate work", "user-alice", map[string]any{
-		taskMetadataAgentProfile: AgentProfileSuper,
-		taskMetadataAgentRole:    AgentProfileSuper,
+	parent, err := rt.StartRunWithMetadata(context.Background(), "coordinate work", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileSuper,
+		runMetadataAgentRole:    AgentProfileSuper,
 	})
 	if err != nil {
 		t.Fatalf("submit parent task: %v", err)
@@ -92,16 +92,16 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 	spawnRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), parent), "spawn_agent", json.RawMessage(`{
 		"objective":"research the codebase and report back",
 		"role":"researcher",
-		"work_id":"shared-work"
+		"channel_id":"shared-work"
 	}`))
 	if err != nil {
 		t.Fatalf("spawn_agent: %v", err)
 	}
 
 	var spawnResp struct {
-		TaskID  string `json:"task_id"`
-		WorkID  string `json:"work_id"`
-		Profile string `json:"profile"`
+		RunID     string `json:"run_id"`
+		ChannelID string `json:"channel_id"`
+		Profile   string `json:"profile"`
 	}
 	if err := json.Unmarshal([]byte(spawnRaw), &spawnResp); err != nil {
 		t.Fatalf("decode spawn response: %v", err)
@@ -109,23 +109,23 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 	if spawnResp.Profile != AgentProfileResearcher {
 		t.Fatalf("spawned profile = %q, want %q", spawnResp.Profile, AgentProfileResearcher)
 	}
-	if spawnResp.WorkID != "shared-work" {
-		t.Fatalf("spawned work_id = %q, want shared-work", spawnResp.WorkID)
+	if spawnResp.ChannelID != "shared-work" {
+		t.Fatalf("spawned channel_id = %q, want shared-work", spawnResp.ChannelID)
 	}
 
-	child, err := s.GetTask(context.Background(), spawnResp.TaskID)
+	child, err := s.GetRun(context.Background(), spawnResp.RunID)
 	if err != nil {
 		t.Fatalf("get child task: %v", err)
 	}
-	if got := child.Metadata[taskMetadataAgentProfile]; got != AgentProfileResearcher {
+	if got := child.Metadata[runMetadataAgentProfile]; got != AgentProfileResearcher {
 		t.Fatalf("child agent_profile = %v, want %q", got, AgentProfileResearcher)
 	}
-	if got := child.Metadata[taskMetadataWorkID]; got != "shared-work" {
-		t.Fatalf("child work_id = %v, want shared-work", got)
+	if child.ChannelID != "shared-work" {
+		t.Fatalf("child channel_id = %q, want shared-work", child.ChannelID)
 	}
 
 	postRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), parent), "post_message", json.RawMessage(`{
-		"work_id":"shared-work",
+		"channel_id":"shared-work",
 		"content":"please inspect the runtime tool wiring"
 	}`))
 	if err != nil {
@@ -140,7 +140,7 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 
 	researchRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
 	readRaw, err := researchRegistry.Execute(WithToolExecutionContext(context.Background(), &child), "read_messages", json.RawMessage(`{
-		"work_id":"shared-work"
+		"channel_id":"shared-work"
 	}`))
 	if err != nil {
 		t.Fatalf("read_messages: %v", err)
@@ -156,14 +156,14 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 	}
 
 	if _, err := researchRegistry.Execute(WithToolExecutionContext(context.Background(), &child), "post_message", json.RawMessage(`{
-		"work_id":"shared-work",
+		"channel_id":"shared-work",
 		"content":"runtime looks good; proceeding with structured findings"
 	}`)); err != nil {
 		t.Fatalf("researcher post_message: %v", err)
 	}
 
 	waitRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), parent), "wait_for_message", json.RawMessage(`{
-		"work_id":"shared-work",
+		"channel_id":"shared-work",
 		"cursor":1,
 		"timeout_ms":50
 	}`))
@@ -191,16 +191,16 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("install default agent tools: %v", err)
 	}
 
-	vtextTask, err := rt.SubmitTaskWithMetadata(context.Background(), "revise document", "user-alice", map[string]any{
-		taskMetadataAgentProfile: AgentProfileVText,
-		taskMetadataAgentRole:    AgentProfileVText,
+	vtextTask, err := rt.StartRunWithMetadata(context.Background(), "revise document", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileVText,
+		runMetadataAgentRole:    AgentProfileVText,
 	})
 	if err != nil {
 		t.Fatalf("submit vtext task: %v", err)
 	}
-	superTask, err := rt.SubmitTaskWithMetadata(context.Background(), "coordinate execution", "user-alice", map[string]any{
-		taskMetadataAgentProfile: AgentProfileSuper,
-		taskMetadataAgentRole:    AgentProfileSuper,
+	superTask, err := rt.StartRunWithMetadata(context.Background(), "coordinate execution", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileSuper,
+		runMetadataAgentRole:    AgentProfileSuper,
 	})
 	if err != nil {
 		t.Fatalf("submit super task: %v", err)
@@ -208,11 +208,27 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	vtextRegistry := rt.ToolRegistryForProfile(AgentProfileVText)
-	if _, err := vtextRegistry.Execute(WithToolExecutionContext(context.Background(), vtextTask), "spawn_agent", json.RawMessage(`{
-		"objective":"try to create a privileged executor",
-		"role":"super"
-	}`)); err == nil {
-		t.Fatalf("vtext should not be allowed to spawn super")
+	superSpawnRaw, err := vtextRegistry.Execute(WithToolExecutionContext(context.Background(), vtextTask), "spawn_agent", json.RawMessage(`{
+		"objective":"handle execution-heavy follow-up",
+		"role":"super",
+		"channel_id":"doc-exec-work"
+	}`))
+	if err != nil {
+		t.Fatalf("vtext spawn super: %v", err)
+	}
+	var superSpawn struct {
+		RunID     string `json:"run_id"`
+		Profile   string `json:"profile"`
+		ChannelID string `json:"channel_id"`
+	}
+	if err := json.Unmarshal([]byte(superSpawnRaw), &superSpawn); err != nil {
+		t.Fatalf("decode super spawn: %v", err)
+	}
+	if superSpawn.Profile != AgentProfileSuper {
+		t.Fatalf("super spawn profile = %q, want %q", superSpawn.Profile, AgentProfileSuper)
+	}
+	if superSpawn.ChannelID != "doc-exec-work" {
+		t.Fatalf("super spawn channel_id = %q, want doc-exec-work", superSpawn.ChannelID)
 	}
 
 	superRegistry := rt.ToolRegistryForProfile(AgentProfileSuper)
@@ -224,7 +240,7 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("super spawn co-super: %v", err)
 	}
 	var coSuperSpawn struct {
-		TaskID  string `json:"task_id"`
+		RunID  string `json:"run_id"`
 		Profile string `json:"profile"`
 	}
 	if err := json.Unmarshal([]byte(coSuperRaw), &coSuperSpawn); err != nil {
@@ -234,7 +250,7 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("co-super profile = %q, want %q", coSuperSpawn.Profile, AgentProfileCoSuper)
 	}
 
-	child, err := s.GetTask(context.Background(), coSuperSpawn.TaskID)
+	child, err := s.GetRun(context.Background(), coSuperSpawn.RunID)
 	if err != nil {
 		t.Fatalf("get co-super task: %v", err)
 	}
@@ -246,9 +262,9 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("co-super should not be allowed to spawn super")
 	}
 
-	researcherTask, err := rt.SubmitTaskWithMetadata(context.Background(), "gather evidence", "user-alice", map[string]any{
-		taskMetadataAgentProfile: AgentProfileResearcher,
-		taskMetadataAgentRole:    AgentProfileResearcher,
+	researcherTask, err := rt.StartRunWithMetadata(context.Background(), "gather evidence", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
 	})
 	if err != nil {
 		t.Fatalf("submit researcher task: %v", err)
@@ -288,9 +304,9 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 		t.Fatalf("install default agent tools: %v", err)
 	}
 
-	conductorTask, err := rt.SubmitTaskWithMetadata(context.Background(), "route this request", "user-alice", map[string]any{
-		taskMetadataAgentProfile: AgentProfileConductor,
-		taskMetadataAgentRole:    AgentProfileConductor,
+	conductorTask, err := rt.StartRunWithMetadata(context.Background(), "route this request", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileConductor,
+		runMetadataAgentRole:    AgentProfileConductor,
 	})
 	if err != nil {
 		t.Fatalf("submit conductor task: %v", err)
@@ -301,15 +317,15 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	vtextSpawnRaw, err := conductorRegistry.Execute(WithToolExecutionContext(context.Background(), conductorTask), "spawn_agent", json.RawMessage(`{
 		"objective":"create v0 and own the document",
 		"role":"vtext",
-		"work_id":"doc-work"
+		"channel_id":"doc-work"
 	}`))
 	if err != nil {
 		t.Fatalf("conductor spawn vtext: %v", err)
 	}
 	var vtextSpawn struct {
-		TaskID  string `json:"task_id"`
-		Profile string `json:"profile"`
-		WorkID  string `json:"work_id"`
+		RunID     string `json:"run_id"`
+		Profile   string `json:"profile"`
+		ChannelID string `json:"channel_id"`
 	}
 	if err := json.Unmarshal([]byte(vtextSpawnRaw), &vtextSpawn); err != nil {
 		t.Fatalf("decode vtext spawn: %v", err)
@@ -317,7 +333,7 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	if vtextSpawn.Profile != AgentProfileVText {
 		t.Fatalf("vtext spawn profile = %q, want %q", vtextSpawn.Profile, AgentProfileVText)
 	}
-	vtextTask, err := s.GetTask(context.Background(), vtextSpawn.TaskID)
+	vtextTask, err := s.GetRun(context.Background(), vtextSpawn.RunID)
 	if err != nil {
 		t.Fatalf("get vtext task: %v", err)
 	}
@@ -326,15 +342,15 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	researchSpawnRaw, err := vtextRegistry.Execute(WithToolExecutionContext(context.Background(), &vtextTask), "spawn_agent", json.RawMessage(`{
 		"objective":"research background facts for the document",
 		"role":"researcher",
-		"work_id":"doc-work"
+		"channel_id":"doc-work"
 	}`))
 	if err != nil {
 		t.Fatalf("vtext spawn researcher: %v", err)
 	}
 	var researchSpawn struct {
-		TaskID  string `json:"task_id"`
-		Profile string `json:"profile"`
-		WorkID  string `json:"work_id"`
+		RunID     string `json:"run_id"`
+		Profile   string `json:"profile"`
+		ChannelID string `json:"channel_id"`
 	}
 	if err := json.Unmarshal([]byte(researchSpawnRaw), &researchSpawn); err != nil {
 		t.Fatalf("decode researcher spawn: %v", err)
@@ -342,8 +358,8 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	if researchSpawn.Profile != AgentProfileResearcher {
 		t.Fatalf("research spawn profile = %q, want %q", researchSpawn.Profile, AgentProfileResearcher)
 	}
-	if researchSpawn.WorkID != "doc-work" {
-		t.Fatalf("research spawn work_id = %q, want doc-work", researchSpawn.WorkID)
+	if researchSpawn.ChannelID != "doc-work" {
+		t.Fatalf("research spawn channel_id = %q, want doc-work", researchSpawn.ChannelID)
 	}
 }
 

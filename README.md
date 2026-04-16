@@ -61,8 +61,8 @@ Prior milestones still in place:
 - Go unit tests (all packages passing)
 
 Next:
-- make `vtext` UX and orchestration coherent
 - make trace/debugging readable enough to inspect delegation
+- converge on singleton-per-user `super` runtime ownership
 - finish embedded Dolt stabilization
 - then return to `vmctl` and microVM deepening
 
@@ -74,10 +74,11 @@ This is the live prompt path today:
 2. `frontend/src/lib/Desktop.svelte` handles that event
 3. The desktop always submits top-level input to `conductor` via `frontend/src/lib/conductor.js`
 4. The desktop waits for the conductor decision JSON and then either shows a toast or opens the chosen app
-5. When the conductor opens `vtext`, the decision seeds `v0`
-6. Inside `vtext`, the Revise button saves a user revision and submits a plain revise event to `/api/vtext/documents/{id}/agent-revision`
-7. The runtime compiles the backend-owned `vtext` request from the current document, revision metadata, and diff context in `internal/runtime/vtext.go`
-8. Role system prompts load from editable sandbox prompt files with per-user overrides through `internal/runtime/prompt_store.go`
+5. When conductor opens `vtext`, the runtime materializes a real document, writes a user-authored `v0`, and spawns the first `vtext` child run
+6. The `vtext` window opens on that real `doc_id`, watches the initial run, and surfaces recent worker/delegation activity inline
+7. The `vtext` agent writes canonical later revisions, while the Revise button saves one user-authored revision and submits a plain revise event to `/api/vtext/documents/{id}/agent-revision`
+8. The runtime compiles each backend-owned `vtext` request from document state, revision metadata, and diff context in `internal/runtime/vtext.go`
+9. Role system prompts load from editable sandbox prompt files with per-user overrides through `internal/runtime/prompt_store.go`
 
 This means prompt policy now lives in the sandbox, and conductor owns the route result that the desktop follows.
 

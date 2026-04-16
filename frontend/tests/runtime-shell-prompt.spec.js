@@ -57,9 +57,9 @@ test('shell includes a prompt input for runtime task submission', async ({
 });
 
 // ---------------------------------------------------------------
-// Test: submitting a prompt sends POST /api/agent/task
+// Test: submitting a prompt sends POST /api/agent/run
 // ---------------------------------------------------------------
-test('submitting a prompt sends POST /api/agent/task', async ({
+test('submitting a prompt sends POST /api/agent/run', async ({
   page,
   authenticator,
 }) => {
@@ -70,7 +70,7 @@ test('submitting a prompt sends POST /api/agent/task', async ({
   let taskSubmitted = false;
   page.on('request', (req) => {
     const url = new URL(req.url());
-    if (url.pathname === '/api/agent/task' && req.method() === 'POST') {
+    if (url.pathname === '/api/agent/run' && req.method() === 'POST') {
       taskSubmitted = true;
     }
   });
@@ -194,7 +194,7 @@ test('reload during in-flight work reattaches without resubmitting', async ({
   let submissionCount = 0;
   page.on('request', (req) => {
     const url = new URL(req.url());
-    if (url.pathname === '/api/agent/task' && req.method() === 'POST') {
+    if (url.pathname === '/api/agent/run' && req.method() === 'POST') {
       submissionCount++;
     }
   });
@@ -319,7 +319,7 @@ test('renewal and retries do not duplicate runtime task submission', async ({
   const submissionDetails = [];
   page.on('request', (req) => {
     const url = new URL(req.url());
-    if (url.pathname === '/api/agent/task' && req.method() === 'POST') {
+    if (url.pathname === '/api/agent/run' && req.method() === 'POST') {
       submissionCount++;
       submissionDetails.push({
         timestamp: new Date().toISOString(),

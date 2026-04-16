@@ -39,7 +39,7 @@ import { chromium } from '@playwright/test';
   console.log('\n\nTrying to submit a task...');
   const taskResponse = await page.evaluate(async () => {
     try {
-      const res = await fetch('https://draft.choir-ip.com/api/agent/task', {
+      const res = await fetch('https://draft.choir-ip.com/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'Say hello world' })

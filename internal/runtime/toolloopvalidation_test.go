@@ -218,21 +218,21 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 	defer rt.EventBus().Unsubscribe(ch)
 
 	// Submit task that should trigger file_read.
-	rec, err := rt.SubmitTask(context.Background(),
+	rec, err := rt.StartRun(context.Background(),
 		"Read the file os-release and tell me what OS this is", "user-toolloop-test")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Wait for completion with timeout.
-	waitForToolLoopTask(t, s, rec.TaskID, 5*time.Second)
+	waitForToolLoopTask(t, s, rec.RunID, 5*time.Second)
 
 	// Verify the task completed successfully.
-	fetched, err := s.GetTask(context.Background(), rec.TaskID)
+	fetched, err := s.GetRun(context.Background(), rec.RunID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if fetched.State != types.TaskCompleted {
+	if fetched.State != types.RunCompleted {
 		t.Fatalf("task state: got %q, want completed (error: %s)", fetched.State, fetched.Error)
 	}
 
@@ -261,7 +261,7 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		evts, err = s.ListEvents(context.Background(), rec.TaskID, 100)
+		evts, err = s.ListEvents(context.Background(), rec.RunID, 100)
 		if err != nil {
 			t.Fatalf("list events: %v", err)
 		}
@@ -293,7 +293,7 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 						t.Error("tool.result should not be an error")
 					}
 				}
-			case types.EventTaskCompleted:
+			case types.EventRunCompleted:
 				taskCompleted = true
 			}
 		}
@@ -311,7 +311,7 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 		t.Error("expected persisted tool.result event")
 	}
 	if !taskCompleted {
-		t.Error("expected persisted task.completed event")
+		t.Error("expected persisted run.completed event")
 	}
 
 	// Also verify tool events were published to the live event bus.
@@ -320,7 +320,7 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 	for !liveInvoked || !liveResult {
 		select {
 		case ev := <-ch:
-			if ev.Record.TaskID != rec.TaskID {
+			if ev.Record.RunID != rec.RunID {
 				continue
 			}
 			if ev.Record.Kind == types.EventToolInvoked {
@@ -641,7 +641,7 @@ func TestToolLoopMultiToolSequential(t *testing.T) {
 }
 
 // TestToolLoopEndToEndWithRuntime validates the complete integration:
-// SubmitTask → tool_use → file_read execution → tool result → final response.
+// StartRun → tool_use → file_read execution → tool result → final response.
 // This is the full end-to-end validation that the feature requires.
 func TestToolLoopEndToEndWithRuntime(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -684,22 +684,22 @@ func TestToolLoopEndToEndWithRuntime(t *testing.T) {
 	defer rt.Stop()
 
 	// Submit the task.
-	rec, err := rt.SubmitTask(context.Background(),
+	rec, err := rt.StartRun(context.Background(),
 		"Read file version.txt and summarize what you find", "user-e2e-test")
 	if err != nil {
 		t.Fatalf("submit task: %v", err)
 	}
 
 	// Wait for completion.
-	waitForToolLoopTask(t, s, rec.TaskID, 5*time.Second)
+	waitForToolLoopTask(t, s, rec.RunID, 5*time.Second)
 
 	// Fetch and validate the task.
-	fetched, err := s.GetTask(context.Background(), rec.TaskID)
+	fetched, err := s.GetRun(context.Background(), rec.RunID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
 
-	if fetched.State != types.TaskCompleted {
+	if fetched.State != types.RunCompleted {
 		t.Fatalf("task state: got %q, want completed (error: %s)", fetched.State, fetched.Error)
 	}
 
@@ -710,18 +710,18 @@ func TestToolLoopEndToEndWithRuntime(t *testing.T) {
 	}
 
 	// Validate all expected events were emitted.
-	evts, err := s.ListEvents(context.Background(), rec.TaskID, 100)
+	evts, err := s.ListEvents(context.Background(), rec.RunID, 100)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 
 	expectedKinds := map[types.EventKind]bool{
-		types.EventTaskSubmitted: false,
-		types.EventTaskStarted:   false,
+		types.EventRunSubmitted: false,
+		types.EventRunStarted:   false,
 		types.EventToolInvoked:   false,
 		types.EventToolResult:    false,
-		types.EventTaskProgress:  false,
-		types.EventTaskCompleted: false,
+		types.EventRunProgress:  false,
+		types.EventRunCompleted: false,
 	}
 
 	for _, ev := range evts {
@@ -862,7 +862,7 @@ func waitForToolLoopTask(t *testing.T, s *store.Store, taskID string, timeout ti
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		rec, err := s.GetTask(context.Background(), taskID)
+		rec, err := s.GetRun(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("get task during wait: %v", err)
 		}
