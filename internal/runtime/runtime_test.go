@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +27,9 @@ func testRuntime(t *testing.T) (*Runtime, *store.Store) {
 		t.Fatalf("create temp dir: %v", err)
 	}
 	dbPath := filepath.Join(dir, t.Name()+".db")
+	promptRoot := filepath.Join(dir, t.Name()+"-prompts")
 	_ = os.Remove(dbPath)
+	_ = os.RemoveAll(promptRoot)
 
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -38,6 +41,7 @@ func testRuntime(t *testing.T) (*Runtime, *store.Store) {
 	cfg := Config{
 		SandboxID:           "sandbox-test",
 		StorePath:           dbPath,
+		PromptRoot:          promptRoot,
 		ProviderTimeout:     50 * time.Millisecond,
 		SupervisionInterval: 1 * time.Hour, // don't run supervisor in most tests
 	}
@@ -50,6 +54,7 @@ func testRuntime(t *testing.T) (*Runtime, *store.Store) {
 		rt.Stop()
 		_ = s.Close()
 		_ = os.Remove(dbPath)
+		_ = os.RemoveAll(promptRoot)
 	})
 
 	return rt, s
@@ -114,9 +119,9 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 	rec, err := rt.SubmitTaskWithMetadata(ctx, "hi", "user-alice", map[string]any{
 		taskMetadataAgentProfile: "conductor",
 		taskMetadataAgentRole:    "conductor",
-		"input_source":          "prompt_bar",
-		"requested_app":         "vtext",
-		"seed_prompt":           "hi",
+		"input_source":           "prompt_bar",
+		"requested_app":          "vtext",
+		"seed_prompt":            "hi",
 		"initial_document_title": "hi",
 	})
 	if err != nil {
@@ -158,6 +163,30 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 	}
 	if !result.CreateInitialVersion {
 		t.Fatal("create_initial_version: got false, want true")
+	}
+}
+
+func TestProviderPromptUsesPromptOverride(t *testing.T) {
+	rt, _ := testRuntime(t)
+	if _, err := rt.PromptStore().Save("user-alice", AgentProfileConductor, "Custom conductor prompt"); err != nil {
+		t.Fatalf("save prompt override: %v", err)
+	}
+
+	rec := &types.TaskRecord{
+		TaskID:   "task-1",
+		OwnerID:  "user-alice",
+		Prompt:   "route this request",
+		Metadata: map[string]any{taskMetadataAgentProfile: AgentProfileConductor},
+	}
+	prompt, err := rt.providerPromptForTask(rec)
+	if err != nil {
+		t.Fatalf("providerPromptForTask: %v", err)
+	}
+	if !strings.Contains(prompt, "Custom conductor prompt") {
+		t.Fatalf("provider prompt should include prompt override, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "route this request") {
+		t.Fatalf("provider prompt should include task prompt, got %q", prompt)
 	}
 }
 
@@ -911,5 +940,79 @@ func TestHealthReportsActiveProvider(t *testing.T) {
 	// The runtime's provider should report its name.
 	if rt.provider.ProviderName() != "bedrock" {
 		t.Errorf("provider name: got %q, want bedrock", rt.provider.ProviderName())
+	}
+}
+
+// TestBuildAppagentRevisionMetadataPreservesDurableKeys verifies that
+// appagent revisions carry forward seed_prompt, source_path, and
+// conductor_task_id from the parent revision metadata so subsequent
+// revise requests retain the original user context.
+func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
+	_, s := testRuntime(t)
+
+	ctx := context.Background()
+	ownerID := "test-user"
+
+	// Create a document with a user-authored revision that has durable metadata.
+	doc := types.Document{
+		DocID:   "doc-meta-test",
+		OwnerID: ownerID,
+		Title:   "metadata test",
+	}
+	if err := s.CreateDocument(ctx, doc); err != nil {
+		t.Fatalf("create document: %v", err)
+	}
+
+	parentMeta, _ := json.Marshal(map[string]any{
+		"seed_prompt":       "write a haiku about cats",
+		"source_path":       "/notes/cats.md",
+		"conductor_task_id": "task-original-conductor",
+	})
+	parentRev := types.Revision{
+		RevisionID: "rev-parent-meta",
+		DocID:      "doc-meta-test",
+		OwnerID:    ownerID,
+		AuthorKind: types.AuthorUser,
+		Content:    "cats are great",
+		Citations:  json.RawMessage("[]"),
+		Metadata:   parentMeta,
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := s.CreateRevision(ctx, parentRev); err != nil {
+		t.Fatalf("create parent revision: %v", err)
+	}
+
+	// Point the document at the parent revision.
+	doc.CurrentRevisionID = parentRev.RevisionID
+
+	// Build appagent metadata with a task record that has no durable keys.
+	rec := &types.TaskRecord{
+		TaskID:   "task-agent-1",
+		Metadata: map[string]any{"type": "vtext_agent_revision"},
+	}
+
+	result := buildAppagentRevisionMetadata(rec, doc, ownerID, s)
+	var resultMap map[string]any
+	if err := json.Unmarshal(result, &resultMap); err != nil {
+		t.Fatalf("unmarshal result metadata: %v", err)
+	}
+
+	// Verify durable keys are carried forward.
+	if resultMap["seed_prompt"] != "write a haiku about cats" {
+		t.Errorf("seed_prompt: got %v, want 'write a haiku about cats'", resultMap["seed_prompt"])
+	}
+	if resultMap["source_path"] != "/notes/cats.md" {
+		t.Errorf("source_path: got %v, want '/notes/cats.md'", resultMap["source_path"])
+	}
+	if resultMap["conductor_task_id"] != "task-original-conductor" {
+		t.Errorf("conductor_task_id: got %v, want 'task-original-conductor'", resultMap["conductor_task_id"])
+	}
+
+	// Verify agent-specific fields are also present.
+	if resultMap["source"] != "agent_revision" {
+		t.Errorf("source: got %v, want 'agent_revision'", resultMap["source"])
+	}
+	if resultMap["task_id"] != "task-agent-1" {
+		t.Errorf("task_id: got %v, want 'task-agent-1'", resultMap["task_id"])
 	}
 }

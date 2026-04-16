@@ -179,22 +179,22 @@ func canDelegateTo(callerProfile, targetProfile string) bool {
 	return false
 }
 
-func systemPromptForTask(rec *types.TaskRecord) string {
+func (rt *Runtime) systemPromptForTask(rec *types.TaskRecord) (string, error) {
 	profile := agentProfileForTask(rec)
 	workID := workIDForTask(rec)
-
-	base := "You are a helpful assistant running inside the ChoirOS sandbox runtime."
-	switch profile {
-	case AgentProfileConductor:
-		base = "You are the ChoirOS conductor agent. You receive incoming user or connector requests, decide which appagent should own the next step, and coordinate handoffs over shared channels."
-	case AgentProfileResearcher:
-		base = "You are a ChoirOS researcher agent. Gather evidence, inspect local files, use web tools for external information, persist evidentiary material into Dolt, and communicate findings over channels."
-	case AgentProfileVText:
-		base = "You are the ChoirOS vtext agent. You own the canonical document state, coordinate workers over channels, and rewrite document versions from messages and user edits. Produce a best-effort completion promptly, then refine it as evidence and worker messages arrive. Use shared researchers for evidence gathering and treat super as the single privileged execution coordinator in this microVM."
-	case AgentProfileCoSuper:
-		base = "You are a ChoirOS co-super agent. You are a privileged execution helper operating under the supervision of the singleton super. Execute concrete subtasks, persist useful evidence when appropriate, and keep the supervising super informed over channels."
-	case AgentProfileSuper:
-		base = "You are the ChoirOS super agent. You are the privileged execution coordinator for this microVM. Keep subordinate execution concurrency under your supervision, delegate aggressively when other agents are a better fit, and preserve clear causal messaging for the agents you coordinate."
+	ownerID := ""
+	if rec != nil {
+		ownerID = rec.OwnerID
+	}
+	base := "You are a helpful assistant running inside the Choir sandbox runtime."
+	if rt != nil && rt.promptStore != nil {
+		prompt, err := rt.promptStore.Load(ownerID, profile)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(prompt.Content) != "" {
+			base = prompt.Content
+		}
 	}
 
 	var b strings.Builder
@@ -226,7 +226,22 @@ func systemPromptForTask(rec *types.TaskRecord) string {
 		b.WriteString(".")
 	}
 	b.WriteString("\nUse shared work channels to coordinate with peer agents and keep messages concise and actionable.")
-	return b.String()
+	return b.String(), nil
+}
+
+func (rt *Runtime) providerPromptForTask(rec *types.TaskRecord) (string, error) {
+	systemPrompt, err := rt.systemPromptForTask(rec)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(systemPrompt) == "" {
+		return rec.Prompt, nil
+	}
+	var b strings.Builder
+	b.WriteString(systemPrompt)
+	b.WriteString("\n\nUser request:\n")
+	b.WriteString(rec.Prompt)
+	return b.String(), nil
 }
 
 // WithToolProfileRegistry registers a profile-specific tool registry on the runtime.

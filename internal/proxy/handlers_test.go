@@ -686,6 +686,36 @@ func TestHandleAPIReturnsNotFoundForUnknownRoutes(t *testing.T) {
 	}
 }
 
+// TestHandleAPIForwardsPromptRoutes verifies that /api/prompts and
+// /api/prompts/{role} are forwarded to the sandbox through the proxy
+// rather than hitting the generic 404 fallback.
+func TestHandleAPIForwardsPromptRoutes(t *testing.T) {
+	h, priv, _ := testProxyEnv(t)
+	accessToken := issueTestAccessJWT(priv, "user-123")
+
+	paths := []string{"/api/prompts", "/api/prompts/conductor"}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.AddCookie(&http.Cookie{
+				Name:  "choir_access",
+				Value: accessToken,
+			})
+			w := httptest.NewRecorder()
+			h.HandleAPI(w, req)
+
+			// The sandbox mock doesn't handle /api/prompts, so we'll get
+			// a 404 or 502 from the sandbox rather than the proxy's own
+			// auth-gated 404. The key assertion is that we do NOT get the
+			// proxy's 404 JSON body, meaning the request was forwarded.
+			body := w.Body.String()
+			if w.Code == http.StatusNotFound && strings.Contains(body, `"error":"not found"`) {
+				t.Errorf("%s was NOT forwarded to sandbox; proxy returned its own 404", path)
+			}
+		})
+	}
+}
+
 // --- Edge cases ---
 
 func TestBootstrapWithEmptyCookieValue(t *testing.T) {

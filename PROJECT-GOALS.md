@@ -203,31 +203,31 @@ These are the real next tasks, in order.
 
 #### Phase 1. Move prompt and context ownership into the sandbox
 
-- [ ] Remove frontend context engineering such as `buildAgentPrompt()`.
-- [ ] Make the frontend send only user intent / revise events, not synthesized agent instructions.
-- [ ] Load role prompts from editable text files in the sandbox at runtime.
-- [ ] Make backend prompt assembly the single source of truth for `conductor`, `vtext`, `researcher`, `super`, and later `co-super`.
-- [ ] Make prompt files editable without rebuilding the binary.
-- [ ] Keep prompt style subtle and positive rather than full of prohibitions.
+- [x] Remove frontend context engineering such as `buildAgentPrompt()`.
+- [x] Make the frontend send only user intent / revise events, not synthesized agent instructions.
+- [x] Load role prompts from editable text files in the sandbox at runtime.
+- [x] Make backend prompt assembly the single source of truth for `conductor`, `vtext`, `researcher`, `super`, and later `co-super`.
+- [x] Make prompt files editable without rebuilding the binary.
+- [x] Keep prompt style subtle and positive rather than full of prohibitions.
 
 #### Phase 2. Make prompt management a real sandbox-owned feature
 
-- [ ] Add per-user prompt storage/state inside the sandbox.
-- [ ] Expose prompt management inside Choir as a proper app surface.
-- [ ] Let users inspect and edit:
+- [x] Add per-user prompt storage/state inside the sandbox.
+- [x] Expose prompt management inside Choir as a proper app surface.
+- [x] Let users inspect and edit:
   - `conductor` prompting
   - `vtext` prompting
   - worker-role prompting
-  - later app-specific prompts and policies
-- [ ] Ensure the frontend never becomes the source of truth for prompt policy again.
+  - [ ] later app-specific prompts and policies
+- [x] Ensure the frontend never becomes the source of truth for prompt policy again.
 
 #### Phase 3. Make `conductor` authoritative
 
 - [x] Remove deterministic prompt-bar dispatch in the frontend.
 - [x] The prompt bar should always submit to `conductor`.
-- [ ] If the user gets a toast, that should be because `conductor` chose that outcome.
+- [x] If the user gets a toast, that should be because `conductor` chose that outcome.
 - [x] Default route should be: spawn `appagent=vtext`.
-- [ ] Opening `vtext` should happen from conductor output, not from a frontend shortcut.
+- [x] Opening `vtext` should happen from conductor output, not from a frontend shortcut.
 
 #### Phase 4. Make `vtext` UX coherent
 

@@ -38,6 +38,7 @@ func main() {
 	rtCfg := runtime.Config{
 		SandboxID:           cfg.SandboxID,
 		StorePath:           cfg.StorePath,
+		PromptRoot:          rtRuntimeCfg.PromptRoot,
 		ProviderTimeout:     rtRuntimeCfg.ProviderTimeout,
 		SupervisionInterval: rtRuntimeCfg.SupervisionInterval,
 		ResearcherCount:     rtRuntimeCfg.ResearcherCount,

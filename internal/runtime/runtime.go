@@ -21,10 +21,11 @@ import (
 // the store so that task handles and events survive sandbox process restarts
 // (VAL-RUNTIME-010).
 type Runtime struct {
-	cfg      Config
-	store    *store.Store
-	bus      *events.EventBus
-	provider Provider
+	cfg         Config
+	store       *store.Store
+	bus         *events.EventBus
+	provider    Provider
+	promptStore *PromptStore
 
 	mu      sync.Mutex
 	health  types.RuntimeHealthState
@@ -41,19 +42,25 @@ type Runtime struct {
 // If a tool registry is provided, the runtime will use the tool-calling
 // loop for task execution instead of the simple provider bridge path.
 func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, opts ...RuntimeOption) *Runtime {
+	cfg = normalizeConfig(cfg)
 	rt := &Runtime{
-		cfg:        cfg,
-		store:      s,
-		bus:        bus,
-		provider:   provider,
-		health:     types.HealthReady,
-		running:    make(map[string]context.CancelFunc),
-		channelMgr: NewChannelManager(),
+		cfg:         cfg,
+		store:       s,
+		bus:         bus,
+		provider:    provider,
+		health:      types.HealthReady,
+		running:     make(map[string]context.CancelFunc),
+		channelMgr:  NewChannelManager(),
+		promptStore: NewPromptStore(cfg.PromptRoot),
 	}
 	for _, opt := range opts {
 		opt(rt)
 	}
 	return rt
+}
+
+func (rt *Runtime) PromptStore() *PromptStore {
+	return rt.promptStore
 }
 
 // RuntimeOption configures optional Runtime components.
@@ -522,7 +529,11 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 	})
 	initialMessages = append(initialMessages, userMsg)
 
-	systemPrompt := systemPromptForTask(rec)
+	systemPrompt, err := rt.systemPromptForTask(rec)
+	if err != nil {
+		rt.handleExecutionError(ctx, rec, err)
+		return
+	}
 	ctx = WithToolExecutionContext(ctx, rec)
 
 	text, usage, err := RunToolLoop(ctx, tlp, registry, initialMessages, systemPrompt, 4096, emit)
@@ -586,11 +597,19 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.TaskRecor
 func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.TaskRecord, emit EventEmitFunc) {
 	// Execute through the provider. The provider may set rec.Result
 	// directly (e.g., BridgeProvider sets it from the LLM response text).
-	err := rt.provider.Execute(ctx, rec, emit)
+	execRec := *rec
+	execPrompt, err := rt.providerPromptForTask(rec)
 	if err != nil {
 		rt.handleExecutionError(ctx, rec, err)
 		return
 	}
+	execRec.Prompt = execPrompt
+	err = rt.provider.Execute(ctx, &execRec, emit)
+	if err != nil {
+		rt.handleExecutionError(ctx, rec, err)
+		return
+	}
+	rec.Result = execRec.Result
 
 	// Transition to completed.
 	now := time.Now().UTC()
@@ -794,6 +813,11 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 		}
 	}
 
+	// Build revision metadata that preserves durable context keys from
+	// the parent revision so that subsequent revise requests can still
+	// read seed_prompt, source_path, conductor_task_id, etc.
+	revMeta := buildAppagentRevisionMetadata(rec, doc, ownerID, rt.store)
+
 	now := time.Now().UTC()
 	rev := types.Revision{
 		RevisionID:       uuid.New().String(),
@@ -803,7 +827,7 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 		AuthorLabel:      "appagent",
 		Content:          content,
 		Citations:        json.RawMessage("[]"),
-		Metadata:         json.RawMessage(`{"source":"agent_revision","task_id":"` + rec.TaskID + `"}`),
+		Metadata:         revMeta,
 		ParentRevisionID: parentID,
 		CreatedAt:        now,
 	}
@@ -837,6 +861,54 @@ func (rt *Runtime) handleTaskCompletion(ctx context.Context, rec *types.TaskReco
 		events.CauseTaskLifecycle, completedPayload)
 
 	log.Printf("runtime: vtext agent revision task %s: created canonical revision %s for doc %s", rec.TaskID, rev.RevisionID, docID)
+}
+
+// durableMetadataKeys lists the revision metadata keys that must survive
+// across appagent revisions so that subsequent revise requests retain
+// the original user context (seed_prompt, source_path, etc.).
+var durableMetadataKeys = []string{
+	"seed_prompt",
+	"source_path",
+	"conductor_task_id",
+}
+
+// buildAppagentRevisionMetadata constructs the metadata JSON for an
+// appagent-authored revision, carrying forward durable context keys
+// from the parent revision so they remain available on the next revise.
+func buildAppagentRevisionMetadata(rec *types.TaskRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
+	meta := map[string]any{
+		"source":  "agent_revision",
+		"task_id": rec.TaskID,
+	}
+
+	// Carry forward durable keys from the parent revision metadata.
+	if doc.CurrentRevisionID != "" {
+		if parentRev, err := s.GetRevision(context.Background(), doc.CurrentRevisionID, ownerID); err == nil {
+			parentMeta := decodeRevisionMetadata(parentRev.Metadata)
+			for _, key := range durableMetadataKeys {
+				if val, ok := parentMeta[key]; ok && val != nil && val != "" {
+					meta[key] = val
+				}
+			}
+		}
+	}
+
+	// Also carry forward from task metadata (the initial agent revision
+	// request sets these directly).
+	if rec.Metadata != nil {
+		for _, key := range durableMetadataKeys {
+			if val, ok := rec.Metadata[key]; ok && val != nil && val != "" {
+				// Task metadata takes precedence over parent revision.
+				meta[key] = val
+			}
+		}
+	}
+
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return json.RawMessage(`{"source":"agent_revision","task_id":"` + rec.TaskID + `"}`)
+	}
+	return data
 }
 
 // handleExecutionError transitions a task to failed/blocked and emits the

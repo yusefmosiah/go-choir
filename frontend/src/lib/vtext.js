@@ -187,11 +187,11 @@ export async function getBlame(revisionId) {
   return res.json();
 }
 
-export async function createAgentRevision(docId, prompt) {
+export async function createAgentRevision(docId, payload = {}) {
   const res = await fetchWithRenewal(vtextPath(`/documents/${encodeURIComponent(docId)}/agent-revision`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -201,8 +201,8 @@ export async function createAgentRevision(docId, prompt) {
   return res.json();
 }
 
-export async function submitAgentRevision(docId, prompt) {
-  return createAgentRevision(docId, prompt);
+export async function submitAgentRevision(docId, payload = {}) {
+  return createAgentRevision(docId, payload);
 }
 
 export async function getAgentRevisionStatus(taskId) {

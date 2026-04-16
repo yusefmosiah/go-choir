@@ -24,17 +24,23 @@ func vtextAPISetup(t *testing.T) (*APIHandler, *store.Store) {
 		t.Fatalf("create temp dir: %v", err)
 	}
 	dbPath := filepath.Join(dir, t.Name()+".db")
+	promptRoot := filepath.Join(dir, t.Name()+"-prompts")
 	_ = os.Remove(dbPath)
+	_ = os.RemoveAll(promptRoot)
 
 	s, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open vtext api test store: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() {
+		_ = s.Close()
+		_ = os.RemoveAll(promptRoot)
+	})
 
 	cfg := Config{
 		SandboxID:           "sandbox-vtext-test",
 		StorePath:           dbPath,
+		PromptRoot:          promptRoot,
 		ProviderTimeout:     2 * time.Second,
 		SupervisionInterval: 5 * time.Second,
 	}
@@ -620,17 +626,23 @@ func vtextAPISetupWithRuntime(t *testing.T) (*APIHandler, *store.Store, *Runtime
 		t.Fatalf("create temp dir: %v", err)
 	}
 	dbPath := filepath.Join(dir, t.Name()+".db")
+	promptRoot := filepath.Join(dir, t.Name()+"-prompts")
 	_ = os.Remove(dbPath)
+	_ = os.RemoveAll(promptRoot)
 
 	s, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open vtext api test store: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() {
+		_ = s.Close()
+		_ = os.RemoveAll(promptRoot)
+	})
 
 	cfg := Config{
 		SandboxID:           "sandbox-vtext-test",
 		StorePath:           dbPath,
+		PromptRoot:          promptRoot,
 		ProviderTimeout:     5 * time.Second,
 		SupervisionInterval: 5 * time.Second,
 	}
@@ -1102,20 +1114,37 @@ func TestVTextAgentRevisionProgressEvents(t *testing.T) {
 	}
 }
 
-// TestVTextAgentRevisionEmptyPromptRejected verifies that an empty prompt
-// is rejected with a bad request.
-func TestVTextAgentRevisionEmptyPromptRejected(t *testing.T) {
-	h, _, _ := vtextAPISetupWithRuntime(t)
+// TestVTextAgentRevisionAcceptsReviseEventWithoutPrompt verifies that the
+// frontend can submit a plain revise event and let the backend compile the
+// effective vtext request from document state.
+func TestVTextAgentRevisionAcceptsReviseEventWithoutPrompt(t *testing.T) {
+	h, _, rt := vtextAPISetupWithRuntime(t)
 
 	docID, _ := createDocWithUserRevision(t, h)
 
 	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
-		map[string]string{"prompt": ""})
+		map[string]string{"intent": "revise"})
 	w := httptest.NewRecorder()
 	h.HandleVTextAgentRevision(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var resp vtextAgentRevisionResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	task, err := rt.GetTask(context.Background(), resp.TaskID, "user-1")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if !strings.Contains(task.Prompt, "A revise event was triggered") {
+		t.Fatalf("compiled prompt missing revise event context: %q", task.Prompt)
+	}
+	if !strings.Contains(task.Prompt, "Hello, world!") {
+		t.Fatalf("compiled prompt missing current document content: %q", task.Prompt)
 	}
 }
 

@@ -685,6 +685,8 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/agent/", h.HandleTaskStatusByID) // matches /api/agent/{id}/status
 	s.HandleFunc("/api/events", h.HandleEvents)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
+	s.HandleFunc("/api/prompts", h.HandlePromptList)
+	s.HandleFunc("/api/prompts/", h.HandlePromptRole)
 
 	// VText document/revision/history/diff/blame APIs.
 	// All routes are dispatched from a single prefix handler that inspects

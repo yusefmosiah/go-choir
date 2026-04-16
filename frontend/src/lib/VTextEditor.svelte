@@ -145,34 +145,6 @@
     return revision;
   }
 
-  function buildAgentPrompt() {
-    const parts = [];
-
-    if (appContext.seedPrompt?.trim()) {
-      parts.push(`Original user request:\n${appContext.seedPrompt.trim()}`);
-    }
-
-    if (appContext.sourcePath) {
-      parts.push(`This is a file-backed document from ${appContext.sourcePath}. Preserve the file's structure and return the complete revised contents.`);
-    }
-
-    parts.push(
-      'Treat the latest document text as canonical. Incorporate any inline instructions, corrections, TODOs, edits, or meta-prompts that the user has added into the next document version.'
-    );
-
-    parts.push(
-      'Write the next document version promptly as a best-effort completion that reflects the current state and your priors. If the request depends on up-to-date facts, external sources, or research, delegate to researcher agents and refine the document again when their findings arrive.'
-    );
-
-    parts.push(
-      'You are the canonical writer. Workers can read the document and send findings, but only you produce canonical document versions.'
-    );
-
-    parts.push('Output only the complete next document version.');
-
-    return parts.join('\n\n');
-  }
-
   async function pollAgentRevision(taskId) {
     for (;;) {
       const status = await getAgentRevisionStatus(taskId);
@@ -256,9 +228,11 @@
     try {
       await writeThroughToFile(editorValue);
       await saveUserVersion();
-      saveStatus = 'Submitting to vtext agent…';
+      saveStatus = 'Submitting revise event…';
 
-      const submitted = await submitAgentRevision(currentDoc.doc_id, buildAgentPrompt());
+      const submitted = await submitAgentRevision(currentDoc.doc_id, {
+        intent: 'revise',
+      });
       await pollAgentRevision(submitted.task_id);
     } catch (err) {
       if (err instanceof AuthRequiredError) {
@@ -353,7 +327,7 @@
     on:click={handlePrompt}
     disabled={loading || prompting || isViewingHistorical}
   >
-    {prompting ? 'Prompting…' : 'Prompt'}
+    {prompting ? 'Revising…' : 'Revise'}
   </button>
 
   {#if error}

@@ -15,7 +15,9 @@ package runtime
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -43,6 +45,9 @@ type Config struct {
 	// StorePath is the path to the SQLite database for task/event persistence.
 	StorePath string
 
+	// PromptRoot is the sandbox-owned filesystem root for editable role prompts.
+	PromptRoot string
+
 	// ProviderTimeout is the simulated work duration for the stub provider.
 	ProviderTimeout time.Duration
 
@@ -56,13 +61,32 @@ type Config struct {
 
 // LoadConfig resolves runtime configuration from environment variables.
 func LoadConfig() Config {
+	storePath := envOr("RUNTIME_STORE_PATH", DefaultStorePath)
 	return Config{
 		SandboxID:           envOr("SANDBOX_ID", "sandbox-dev"),
-		StorePath:           envOr("RUNTIME_STORE_PATH", DefaultStorePath),
+		StorePath:           storePath,
+		PromptRoot:          envOr("RUNTIME_PROMPT_ROOT", defaultPromptRoot(storePath)),
 		ProviderTimeout:     durationOr("RUNTIME_PROVIDER_TIMEOUT", DefaultProviderTimeout),
 		SupervisionInterval: durationOr("RUNTIME_SUPERVISION_INTERVAL", DefaultSupervisionInterval),
 		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
 	}
+}
+
+func normalizeConfig(cfg Config) Config {
+	if strings.TrimSpace(cfg.StorePath) == "" {
+		cfg.StorePath = DefaultStorePath
+	}
+	if strings.TrimSpace(cfg.PromptRoot) == "" {
+		cfg.PromptRoot = defaultPromptRoot(cfg.StorePath)
+	}
+	return cfg
+}
+
+func defaultPromptRoot(storePath string) string {
+	if strings.TrimSpace(storePath) == "" {
+		storePath = DefaultStorePath
+	}
+	return filepath.Join(filepath.Dir(storePath), "prompts")
 }
 
 func envOr(key, fallback string) string {

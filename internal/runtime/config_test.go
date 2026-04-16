@@ -17,6 +17,9 @@ func TestLoadConfigDefaultsResearcherCount(t *testing.T) {
 	if cfg.ResearcherCount != DefaultResearcherCount {
 		t.Fatalf("researcher_count = %d, want %d", cfg.ResearcherCount, DefaultResearcherCount)
 	}
+	if cfg.PromptRoot == "" {
+		t.Fatal("prompt_root should not be empty")
+	}
 }
 
 func TestLoadConfigReadsResearcherCount(t *testing.T) {
@@ -33,6 +36,9 @@ func TestLoadConfigReadsResearcherCount(t *testing.T) {
 	}
 	if cfg.ProviderTimeout != 3*time.Second {
 		t.Fatalf("provider timeout = %s, want 3s", cfg.ProviderTimeout)
+	}
+	if cfg.PromptRoot == "" {
+		t.Fatal("prompt_root should not be empty")
 	}
 }
 

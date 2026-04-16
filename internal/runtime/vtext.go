@@ -602,7 +602,8 @@ func (h *APIHandler) HandleVTextBlame(w http.ResponseWriter, r *http.Request) {
 // creates a new canonical revision attributable to the appagent
 // (VAL-ETEXT-003).
 type vtextAgentRevisionRequest struct {
-	Prompt string `json:"prompt"`
+	Intent string `json:"intent,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // vtextAgentRevisionResponse is the JSON response for agent revision
@@ -652,11 +653,6 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "prompt is required"})
-		return
-	}
-
 	// Verify the document exists and belongs to this owner.
 	doc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
 	if err != nil {
@@ -682,28 +678,53 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Build the prompt for the provider, including current document content.
-	var currentContent string
+	// Build the backend-owned vtext revision request from current document state.
+	var currentRevision types.Revision
+	var currentRevisionLoaded bool
 	if doc.CurrentRevisionID != "" {
 		rev, err := h.rt.Store().GetRevision(r.Context(), doc.CurrentRevisionID, ownerID)
 		if err == nil {
-			currentContent = rev.Content
+			currentRevision = rev
+			currentRevisionLoaded = true
+		}
+	}
+	metadata := decodeRevisionMetadata(currentRevision.Metadata)
+	var previousRevision *types.Revision
+	if currentRevisionLoaded && currentRevision.ParentRevisionID != "" {
+		prev, err := h.rt.Store().GetRevision(r.Context(), currentRevision.ParentRevisionID, ownerID)
+		if err == nil {
+			previousRevision = &prev
 		}
 	}
 
-	agentPrompt := buildAgentRevisionPrompt(currentContent, req.Prompt)
+	diffSummary := ""
+	if currentRevisionLoaded && previousRevision != nil {
+		if diff, err := h.rt.Store().GetDiff(r.Context(), previousRevision.RevisionID, currentRevision.RevisionID, ownerID); err == nil {
+			diffSummary = summarizeDiffResult(diff)
+		}
+	}
+
+	agentPrompt := buildAgentRevisionRequest(currentRevision, previousRevision, metadata, req, diffSummary)
 
 	// Create the runtime task with vtext agent revision metadata.
-	metadata := map[string]any{
+	// Carry forward durable context keys from the current head revision
+	// so they survive into appagent revision metadata.
+	taskMetadata := map[string]any{
 		"type":                "vtext_agent_revision",
 		"agent_profile":       AgentProfileVText,
 		"agent_role":          AgentProfileVText,
 		"doc_id":              docID,
 		"current_revision_id": doc.CurrentRevisionID,
-		"original_prompt":     req.Prompt,
+		"request_intent":      strings.TrimSpace(req.Intent),
+		"original_prompt":     strings.TrimSpace(req.Prompt),
+	}
+	for _, key := range durableMetadataKeys {
+		if val := metadataString(metadata, key); val != "" {
+			taskMetadata[key] = val
+		}
 	}
 
-	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, metadata)
+	rec, err := h.rt.SubmitTaskWithMetadata(r.Context(), agentPrompt, ownerID, taskMetadata)
 	if err != nil {
 		log.Printf("vtext api: submit agent revision task: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
@@ -737,26 +758,129 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// buildAgentRevisionPrompt constructs the prompt for the provider that
-// includes the current document content and the user's revision request.
-func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
+// buildAgentRevisionRequest constructs the backend-owned vtext revision
+// request sent as the user turn for the vtext appagent.
+func buildAgentRevisionRequest(current types.Revision, previous *types.Revision, metadata map[string]any, req vtextAgentRevisionRequest, diffSummary string) string {
 	var b strings.Builder
-	b.WriteString("You are the ChoirOS vtext agent, responsible for creating the next canonical document version.\n\n")
-	b.WriteString("The current document is canonical input state.\n")
-	b.WriteString("Produce the next document version promptly as a best-effort completion.\n")
-	b.WriteString("If the request needs current facts, external sources, or specialist investigation, delegate to researchers and refine the document again when their findings arrive.\n")
-	b.WriteString("Workers may read the document and send findings, but only you produce canonical document versions.\n")
-	b.WriteString("Your final answer must be the complete next document version only.\n\n")
-	b.WriteString("The user has requested the following change:\n\n")
-	b.WriteString(userPrompt)
-	b.WriteString("\n\nCurrent document content:\n---\n")
-	if currentContent != "" {
-		b.WriteString(currentContent)
+	b.WriteString("A revise event was triggered for the current vtext document.")
+
+	intent := strings.TrimSpace(req.Intent)
+	if intent == "" {
+		intent = "revise"
+	}
+	b.WriteString("\nIntent: ")
+	b.WriteString(intent)
+	b.WriteString(".")
+
+	if seedPrompt := metadataString(metadata, "seed_prompt"); seedPrompt != "" {
+		b.WriteString("\n\nOriginal user request:\n")
+		b.WriteString(seedPrompt)
+	}
+	if legacyPrompt := strings.TrimSpace(req.Prompt); legacyPrompt != "" {
+		b.WriteString("\n\nAdditional user instruction:\n")
+		b.WriteString(legacyPrompt)
+	}
+	if sourcePath := metadataString(metadata, "source_path"); sourcePath != "" {
+		b.WriteString("\n\nSource path: ")
+		b.WriteString(sourcePath)
+		b.WriteString(". Preserve the file-backed structure while producing the next version.")
+	}
+	if conductorTaskID := metadataString(metadata, "conductor_task_id"); conductorTaskID != "" {
+		b.WriteString("\nConductor task: ")
+		b.WriteString(conductorTaskID)
+		b.WriteString(".")
+	}
+	if current.RevisionID != "" {
+		b.WriteString("\n\nCurrent head revision: ")
+		b.WriteString(current.RevisionID)
+		b.WriteString(" (")
+		b.WriteString(string(current.AuthorKind))
+		b.WriteString(" by ")
+		b.WriteString(current.AuthorLabel)
+		b.WriteString(").")
+	}
+	if previous != nil {
+		b.WriteString("\nPrevious revision: ")
+		b.WriteString(previous.RevisionID)
+		b.WriteString(".")
+	}
+	if diffSummary != "" {
+		b.WriteString("\n\nLatest revision diff/context:\n")
+		b.WriteString(diffSummary)
+	}
+
+	b.WriteString("\n\nCurrent canonical document content:\n---\n")
+	if current.Content != "" {
+		b.WriteString(current.Content)
 	} else {
 		b.WriteString("(empty document)")
 	}
-	b.WriteString("\n---\n\n")
-	b.WriteString("If the request is local-only editing, revise directly. If it requires research or current facts, write the best next version you can now and improve it again after delegated findings arrive. Output only the revised document content, with no commentary or explanation.")
+	b.WriteString("\n---\n")
+	if current.AuthorKind == types.AuthorUser {
+		b.WriteString("\nTreat this latest user-authored revision as the canonical input for the next version.")
+	}
+	b.WriteString("\nProduce the next canonical document version.")
+	return b.String()
+}
+
+func decodeRevisionMetadata(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func summarizeDiffResult(diff types.DiffResult) string {
+	if len(diff.Sections) == 0 {
+		return "No line-level changes were detected."
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Added lines: %d. Removed lines: %d.", diff.AddedLines, diff.RemovedLines))
+	changesShown := 0
+	for _, section := range diff.Sections {
+		if section.Type == "unchanged" {
+			continue
+		}
+		if changesShown >= 4 {
+			b.WriteString("\n- Additional changed sections omitted for brevity.")
+			break
+		}
+		var snippet string
+		switch section.Type {
+		case "added":
+			snippet = strings.TrimSpace(section.ToContent)
+		case "removed":
+			snippet = strings.TrimSpace(section.FromContent)
+		default:
+			snippet = strings.TrimSpace(section.ToContent)
+			if snippet == "" {
+				snippet = strings.TrimSpace(section.FromContent)
+			}
+		}
+		if snippet == "" {
+			snippet = "(empty change block)"
+		}
+		if len(snippet) > 240 {
+			snippet = snippet[:240] + "..."
+		}
+		b.WriteString("\n- ")
+		b.WriteString(section.Type)
+		b.WriteString(": ")
+		b.WriteString(snippet)
+		changesShown++
+	}
 	return b.String()
 }
 

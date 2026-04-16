@@ -339,6 +339,12 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// injected.
 		h.HandleProtectedAPI(w, r)
 		return
+	case path == "/api/prompts" || strings.HasPrefix(path, "/api/prompts/"):
+		// Prompt management API: auth-gated at the proxy level and
+		// forwarded to the sandbox for per-user prompt inspection,
+		// editing, and reset.
+		h.HandleProtectedAPI(w, r)
+		return
 	case strings.HasPrefix(path, "/api/files"):
 		// File browser API: auth-gated at the proxy level and forwarded
 		// to the sandbox for file/directory listing, creation, and

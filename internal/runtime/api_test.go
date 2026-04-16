@@ -28,7 +28,9 @@ func testAPISetup(t *testing.T) (*Runtime, *APIHandler) {
 		t.Fatalf("create temp dir: %v", err)
 	}
 	dbPath := filepath.Join(dir, t.Name()+".db")
+	promptRoot := filepath.Join(dir, t.Name()+"-prompts")
 	_ = os.Remove(dbPath)
+	_ = os.RemoveAll(promptRoot)
 
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -40,6 +42,7 @@ func testAPISetup(t *testing.T) (*Runtime, *APIHandler) {
 	cfg := Config{
 		SandboxID:           "sandbox-test",
 		StorePath:           dbPath,
+		PromptRoot:          promptRoot,
 		ProviderTimeout:     50 * time.Millisecond,
 		SupervisionInterval: 1 * time.Hour,
 	}
@@ -53,6 +56,7 @@ func testAPISetup(t *testing.T) (*Runtime, *APIHandler) {
 		rt.Stop()
 		_ = s.Close()
 		_ = os.Remove(dbPath)
+		_ = os.RemoveAll(promptRoot)
 	})
 
 	return rt, handler

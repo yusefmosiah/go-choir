@@ -32,6 +32,7 @@
   import FileBrowser from './FileBrowser.svelte';
   import BrowserApp from './BrowserApp.svelte';
   import TerminalApp from './TerminalApp.svelte';
+  import PromptManager from './PromptManager.svelte';
   import {
     windows,
     activeWindowId,
@@ -484,6 +485,10 @@
             {:else if win.appId === 'terminal'}
               <div class="app-content terminal-content" data-terminal-app>
                 <TerminalApp windowId={win.windowId} />
+              </div>
+            {:else if win.appId === 'settings'}
+              <div class="app-content settings-content" data-settings-window>
+                <PromptManager on:authexpired={() => dispatch('authexpired')} />
               </div>
             {:else if win.appId === 'vtext'}
               <div class="app-content vtext-content" data-vtext-app>

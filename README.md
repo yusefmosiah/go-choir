@@ -72,23 +72,23 @@ This is the live prompt path today:
 
 1. Bottom bar input emits `promptsubmit` from `frontend/src/lib/BottomBar.svelte`
 2. `frontend/src/lib/Desktop.svelte` handles that event
-3. Trivial prompts like `hi` become a toast only
-4. Non-trivial prompts submit a real conductor task via `frontend/src/lib/conductor.js`
-5. The desktop then still opens `vtext` directly and seeds `v0`
-6. Inside `vtext`, the Prompt button saves a user revision and submits `/api/vtext/documents/{id}/agent-revision`
-7. The runtime builds the canonical backend prompt in `internal/runtime/vtext.go`
-8. The task runs through the tool loop in `internal/runtime/runtime.go` with profile system prompts from `internal/runtime/tool_profiles.go`
+3. The desktop always submits top-level input to `conductor` via `frontend/src/lib/conductor.js`
+4. The desktop waits for the conductor decision JSON and then either shows a toast or opens the chosen app
+5. When the conductor opens `vtext`, the decision seeds `v0`
+6. Inside `vtext`, the Revise button saves a user revision and submits a plain revise event to `/api/vtext/documents/{id}/agent-revision`
+7. The runtime compiles the backend-owned `vtext` request from the current document, revision metadata, and diff context in `internal/runtime/vtext.go`
+8. Role system prompts load from editable sandbox prompt files with per-user overrides through `internal/runtime/prompt_store.go`
 
-This means conductor exists, but it is not yet the true routing owner in practice.
+This means prompt policy now lives in the sandbox, and conductor owns the route result that the desktop follows.
 
 ## Main Editable Prompt Surfaces
 
-- `frontend/src/lib/conductor.js`
-- `frontend/src/lib/VTextEditor.svelte` via `buildAgentPrompt()`
-- `internal/runtime/vtext.go` via `buildAgentRevisionPrompt(...)`
-- `internal/runtime/tool_profiles.go` via `systemPromptForTask(...)`
+- sandbox prompt files under the runtime prompt root, loaded by `internal/runtime/prompt_store.go`
+- `frontend/src/lib/PromptManager.svelte` and `/api/prompts` for in-product prompt editing
+- `internal/runtime/vtext.go` for backend `vtext` revise request compilation
+- `internal/runtime/tool_profiles.go` for role-aware system prompt composition around the sandbox prompt files
 
-Those are the main places to edit when you want to change orchestration behavior.
+Those are the main places to edit when you want to change orchestration behavior without pushing prompt policy back into the frontend.
 
 ## Development Setup
 

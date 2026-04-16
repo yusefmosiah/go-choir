@@ -24,7 +24,7 @@ export const APP_REGISTRY = [
   { id: 'files', name: 'Files', icon: '📁', description: 'File Browser' },
   { id: 'browser', name: 'Browser', icon: '🌐', description: 'Web Browser' },
   { id: 'terminal', name: 'Terminal', icon: '💻', description: 'Terminal' },
-  { id: 'settings', name: 'Settings', icon: '⚙️', description: 'Settings' },
+  { id: 'settings', name: 'Settings', icon: '⚙️', description: 'Prompt management' },
   { id: 'vtext', name: 'VText', icon: '📝', description: 'Versioned document editor' },
   { id: 'trace', name: 'Trace', icon: '🔎', description: 'Multiagent trace viewer' },
 ];
