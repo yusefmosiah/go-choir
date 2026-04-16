@@ -108,7 +108,7 @@ Cancel a spawned agent by its durable agent ID.
 
 ## Data Model
 
-### Core persistence tables — internal/store/store.go
+### Core persistence tables — internal/store/store.go (SQLite)
 
 ```
 agents
@@ -130,7 +130,7 @@ channel_messages
   from_run_id  from_agent_id  role  content  ts
 ```
 
-### VText tables — internal/store/vtext.go (separate Dolt DB file)
+### VText tables — internal/store/vtext.go (Dolt — version-native document storage)
 
 ```
 vtext_documents
@@ -354,10 +354,9 @@ Browser / Electron frontend  (frontend/dist/)
       ChannelManager (in-memory + durable channel_messages table)
       PromptStore (disk overrides + embedded defaults)
       EventBus (SSE fanout to connected clients)
-      Store (Dolt SQL)
-        core DB:  agents, runs, events, channel_messages
-        vtext DB: vtext_documents, vtext_revisions,
-                  vtext_agent_mutations, agent_evidence
+      SQLite store: agents, runs, events, channel_messages
+      Dolt store:   vtext_documents, vtext_revisions,
+                    vtext_agent_mutations, agent_evidence
 ```
 
 ---
