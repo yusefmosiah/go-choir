@@ -161,11 +161,11 @@
     );
 
     parts.push(
-      'If the request depends on up-to-date facts, external sources, or research, spawn one or more researcher agents first, collect their findings over the shared work channel, and only then rewrite the document.'
+      'Write the next document version promptly as a best-effort completion that reflects the current state and your priors. If the request depends on up-to-date facts, external sources, or research, delegate to researcher agents and refine the document again when their findings arrive.'
     );
 
     parts.push(
-      'You are the canonical writer. Workers can read the document and send findings, but they must not directly author the canonical text.'
+      'You are the canonical writer. Workers can read the document and send findings, but only you produce canonical document versions.'
     );
 
     parts.push('Output only the complete next document version.');

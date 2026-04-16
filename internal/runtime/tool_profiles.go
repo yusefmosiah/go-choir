@@ -16,6 +16,7 @@ import (
 const (
 	AgentProfileConductor  = "conductor"
 	AgentProfileSuper      = "super"
+	AgentProfileCoSuper    = "co-super"
 	AgentProfileResearcher = "researcher"
 	AgentProfileVText      = "vtext"
 )
@@ -32,6 +33,7 @@ type toolContextKey string
 
 const (
 	toolCtxTaskID    toolContextKey = "task_id"
+	toolCtxAgentID   toolContextKey = "agent_id"
 	toolCtxOwnerID   toolContextKey = "owner_id"
 	toolCtxProfile   toolContextKey = "agent_profile"
 	toolCtxRole      toolContextKey = "agent_role"
@@ -41,6 +43,7 @@ const (
 
 func WithToolExecutionContext(ctx context.Context, rec *types.TaskRecord) context.Context {
 	ctx = context.WithValue(ctx, toolCtxTaskID, rec.TaskID)
+	ctx = context.WithValue(ctx, toolCtxAgentID, agentIDForTask(rec))
 	ctx = context.WithValue(ctx, toolCtxOwnerID, rec.OwnerID)
 	ctx = context.WithValue(ctx, toolCtxProfile, agentProfileForTask(rec))
 	ctx = context.WithValue(ctx, toolCtxRole, agentRoleForTask(rec))
@@ -81,6 +84,18 @@ func agentRoleForTask(rec *types.TaskRecord) string {
 	return agentProfileForTask(rec)
 }
 
+func agentIDForTask(rec *types.TaskRecord) string {
+	if rec == nil {
+		return ""
+	}
+	if rec.Metadata != nil {
+		if agentID, _ := rec.Metadata[taskMetadataAgentID].(string); strings.TrimSpace(agentID) != "" {
+			return strings.TrimSpace(agentID)
+		}
+	}
+	return strings.TrimSpace(rec.TaskID)
+}
+
 func workIDForTask(rec *types.TaskRecord) string {
 	if rec == nil {
 		return ""
@@ -93,6 +108,77 @@ func workIDForTask(rec *types.TaskRecord) string {
 	return strings.TrimSpace(rec.TaskID)
 }
 
+type AgentRoleSpec struct {
+	Profile                string
+	AllowReadOnlyFiles     bool
+	AllowWritableFiles     bool
+	AllowResearchTools     bool
+	AllowEvidenceTools     bool
+	AllowCodingTools       bool
+	AllowCoAgentTools      bool
+	AllowedDelegateTargets []string
+}
+
+func roleSpec(profile string) AgentRoleSpec {
+	switch strings.TrimSpace(profile) {
+	case AgentProfileConductor:
+		return AgentRoleSpec{
+			Profile:                AgentProfileConductor,
+			AllowCoAgentTools:      true,
+			AllowedDelegateTargets: []string{AgentProfileVText, AgentProfileResearcher},
+		}
+	case AgentProfileResearcher:
+		return AgentRoleSpec{
+			Profile:                AgentProfileResearcher,
+			AllowReadOnlyFiles:     true,
+			AllowResearchTools:     true,
+			AllowEvidenceTools:     true,
+			AllowCoAgentTools:      true,
+			AllowedDelegateTargets: nil,
+		}
+	case AgentProfileVText:
+		return AgentRoleSpec{
+			Profile:                AgentProfileVText,
+			AllowEvidenceTools:     true,
+			AllowCoAgentTools:      true,
+			AllowedDelegateTargets: []string{AgentProfileResearcher},
+		}
+	case AgentProfileCoSuper:
+		return AgentRoleSpec{
+			Profile:                AgentProfileCoSuper,
+			AllowWritableFiles:     true,
+			AllowResearchTools:     true,
+			AllowEvidenceTools:     true,
+			AllowCodingTools:       true,
+			AllowCoAgentTools:      true,
+			AllowedDelegateTargets: []string{AgentProfileResearcher},
+		}
+	case AgentProfileSuper:
+		fallthrough
+	default:
+		return AgentRoleSpec{
+			Profile:                AgentProfileSuper,
+			AllowWritableFiles:     true,
+			AllowResearchTools:     true,
+			AllowEvidenceTools:     true,
+			AllowCodingTools:       true,
+			AllowCoAgentTools:      true,
+			AllowedDelegateTargets: []string{AgentProfileResearcher, AgentProfileCoSuper},
+		}
+	}
+}
+
+func canDelegateTo(callerProfile, targetProfile string) bool {
+	spec := roleSpec(callerProfile)
+	targetProfile = strings.TrimSpace(targetProfile)
+	for _, allowed := range spec.AllowedDelegateTargets {
+		if targetProfile == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 func systemPromptForTask(rec *types.TaskRecord) string {
 	profile := agentProfileForTask(rec)
 	workID := workIDForTask(rec)
@@ -100,13 +186,15 @@ func systemPromptForTask(rec *types.TaskRecord) string {
 	base := "You are a helpful assistant running inside the ChoirOS sandbox runtime."
 	switch profile {
 	case AgentProfileConductor:
-		base = "You are the ChoirOS conductor agent. You receive incoming user or connector requests, decide which appagent should own the work, and coordinate handoffs over shared channels. Spawn appagents like vtext rather than trying to do their job yourself."
+		base = "You are the ChoirOS conductor agent. You receive incoming user or connector requests, decide which appagent should own the next step, and coordinate handoffs over shared channels."
 	case AgentProfileResearcher:
-		base = "You are a ChoirOS researcher agent. Gather evidence, inspect local files, use web tools for external information, and communicate findings over channels. Do not use shell execution."
+		base = "You are a ChoirOS researcher agent. Gather evidence, inspect local files, use web tools for external information, persist evidentiary material into Dolt, and communicate findings over channels."
 	case AgentProfileVText:
-		base = "You are the ChoirOS vtext agent. You own the canonical document state, coordinate workers over channels, and rewrite document versions from messages and user edits. Do not perform shell execution or direct research yourself when a worker can do it."
+		base = "You are the ChoirOS vtext agent. You own the canonical document state, coordinate workers over channels, and rewrite document versions from messages and user edits. Produce a best-effort completion promptly, then refine it as evidence and worker messages arrive. Use shared researchers for evidence gathering and treat super as the single privileged execution coordinator in this microVM."
+	case AgentProfileCoSuper:
+		base = "You are a ChoirOS co-super agent. You are a privileged execution helper operating under the supervision of the singleton super. Execute concrete subtasks, persist useful evidence when appropriate, and keep the supervising super informed over channels."
 	case AgentProfileSuper:
-		base = "You are the ChoirOS super agent. You have the full tool surface for local execution, research, and coagent coordination. Delegate aggressively when other agents are a better fit."
+		base = "You are the ChoirOS super agent. You are the privileged execution coordinator for this microVM. Keep subordinate execution concurrency under your supervision, delegate aggressively when other agents are a better fit, and preserve clear causal messaging for the agents you coordinate."
 	}
 
 	var b strings.Builder
@@ -154,9 +242,45 @@ func WithToolProfileRegistry(profile string, registry *ToolRegistry) RuntimeOpti
 	}
 }
 
+func (rt *Runtime) buildRegistryForRole(spec AgentRoleSpec, cwd string, searchClient *search.SearchClient, httpClient *http.Client) (*ToolRegistry, error) {
+	registry := MustNewToolRegistry()
+	if spec.AllowWritableFiles {
+		if err := RegisterFileTools(registry, cwd); err != nil {
+			return nil, err
+		}
+	} else if spec.AllowReadOnlyFiles {
+		if err := RegisterReadOnlyFileTools(registry, cwd); err != nil {
+			return nil, err
+		}
+	}
+	if spec.AllowCodingTools {
+		if err := RegisterCodingTools(registry, cwd); err != nil {
+			return nil, err
+		}
+	}
+	if spec.AllowResearchTools {
+		if err := RegisterResearchTools(registry, searchClient, httpClient); err != nil {
+			return nil, err
+		}
+	}
+	if spec.AllowEvidenceTools {
+		if err := RegisterEvidenceTools(registry, rt); err != nil {
+			return nil, err
+		}
+	}
+	if spec.AllowCoAgentTools {
+		if err := RegisterCoAgentTools(registry, rt); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
+}
+
 // InstallDefaultAgentTools installs the default profile registries used by the
-// local MAS. Super gets the full tool surface; researcher gets research, file,
-// and coagent tools; conductor and vtext get coagent tools only.
+// local MAS. Capabilities are enforced by role spec, not by prompt warnings.
+// Super is the privileged execution root, co-super is its supervised helper,
+// researcher gets read-only local files plus research/evidence tools, and
+// conductor/vtext get lighter coordination-oriented registries.
 func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 	if strings.TrimSpace(cwd) == "" {
 		wd, err := os.Getwd()
@@ -169,38 +293,24 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 	searchClient := search.NewSearchClient()
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	superRegistry := MustNewToolRegistry()
-	if err := RegisterFileTools(superRegistry, cwd); err != nil {
+	superRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileSuper), cwd, searchClient, httpClient)
+	if err != nil {
 		return err
 	}
-	if err := RegisterCodingTools(superRegistry, cwd); err != nil {
+	coSuperRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileCoSuper), cwd, searchClient, httpClient)
+	if err != nil {
 		return err
 	}
-	if err := RegisterResearchTools(superRegistry, searchClient, httpClient); err != nil {
+	researcherRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileResearcher), cwd, searchClient, httpClient)
+	if err != nil {
 		return err
 	}
-	if err := RegisterCoAgentTools(superRegistry, rt); err != nil {
+	conductorRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileConductor), cwd, searchClient, httpClient)
+	if err != nil {
 		return err
 	}
-
-	researcherRegistry := MustNewToolRegistry()
-	if err := RegisterFileTools(researcherRegistry, cwd); err != nil {
-		return err
-	}
-	if err := RegisterResearchTools(researcherRegistry, searchClient, httpClient); err != nil {
-		return err
-	}
-	if err := RegisterCoAgentTools(researcherRegistry, rt); err != nil {
-		return err
-	}
-
-	conductorRegistry := MustNewToolRegistry()
-	if err := RegisterCoAgentTools(conductorRegistry, rt); err != nil {
-		return err
-	}
-
-	vtextRegistry := MustNewToolRegistry()
-	if err := RegisterCoAgentTools(vtextRegistry, rt); err != nil {
+	vtextRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileVText), cwd, searchClient, httpClient)
+	if err != nil {
 		return err
 	}
 
@@ -210,6 +320,7 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 	}
 	rt.toolProfiles[AgentProfileConductor] = conductorRegistry
 	rt.toolProfiles[AgentProfileSuper] = superRegistry
+	rt.toolProfiles[AgentProfileCoSuper] = coSuperRegistry
 	rt.toolProfiles[AgentProfileResearcher] = researcherRegistry
 	rt.toolProfiles[AgentProfileVText] = vtextRegistry
 	return nil

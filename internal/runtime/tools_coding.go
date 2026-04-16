@@ -30,6 +30,19 @@ func RegisterFileTools(registry *ToolRegistry, cwd string) error {
 	return nil
 }
 
+func RegisterReadOnlyFileTools(registry *ToolRegistry, cwd string) error {
+	for _, tool := range []Tool{
+		newReadFileTool(cwd),
+		newGlobTool(cwd),
+		newGrepTool(cwd),
+	} {
+		if err := registry.Register(tool); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func RegisterCodingTools(registry *ToolRegistry, cwd string) error {
 	for _, tool := range []Tool{
 		newBashTool(cwd),

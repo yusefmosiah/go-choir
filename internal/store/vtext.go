@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_doc ON vtext_agent_mutations(doc_id);
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_task ON vtext_agent_mutations(task_id);
+
+CREATE TABLE IF NOT EXISTS agent_evidence (
+	evidence_id    VARCHAR(255) PRIMARY KEY,
+	owner_id       VARCHAR(255) NOT NULL,
+	agent_id       VARCHAR(255) NOT NULL,
+	kind           VARCHAR(128) NOT NULL,
+	source_uri     LONGTEXT NOT NULL DEFAULT '',
+	title          LONGTEXT NOT NULL DEFAULT '',
+	content        LONGTEXT NOT NULL,
+	metadata_json  LONGTEXT NOT NULL DEFAULT '{}',
+	created_at     DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_evidence_owner_agent ON agent_evidence(owner_id, agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_evidence_owner_created ON agent_evidence(owner_id, created_at DESC);
 `
 
 // OpenVTextWorkspace opens (or creates) an embedded Dolt workspace for
@@ -864,6 +879,39 @@ func computeBlame(chain []types.Revision, head types.Revision) []types.BlameSect
 
 // ----- Scan helpers -----
 
+func scanEvidence(row interface{ Scan(...any) error }) (types.EvidenceRecord, error) {
+	var (
+		rec          types.EvidenceRecord
+		metadataJSON string
+		createdAtRaw string
+	)
+	if err := row.Scan(
+		&rec.EvidenceID,
+		&rec.OwnerID,
+		&rec.AgentID,
+		&rec.Kind,
+		&rec.SourceURI,
+		&rec.Title,
+		&rec.Content,
+		&metadataJSON,
+		&createdAtRaw,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.EvidenceRecord{}, ErrNotFound
+		}
+		return types.EvidenceRecord{}, fmt.Errorf("scan evidence record: %w", err)
+	}
+	if strings.TrimSpace(metadataJSON) != "" && metadataJSON != "{}" {
+		rec.Metadata = json.RawMessage(metadataJSON)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, createdAtRaw)
+	if err != nil {
+		return types.EvidenceRecord{}, fmt.Errorf("parse evidence created_at: %w", err)
+	}
+	rec.CreatedAt = createdAt.UTC()
+	return rec, nil
+}
+
 // scanDocument scans a document record from a single row.
 func scanDocument(row interface{ Scan(...any) error }) (types.Document, error) {
 	var doc types.Document
@@ -1056,6 +1104,92 @@ func (s *Store) FailAgentMutation(ctx context.Context, taskID string) error {
 		return fmt.Errorf("fail vtext agent mutation: %w", err)
 	}
 	return nil
+}
+
+// CreateEvidence inserts a durable evidence record into the embedded Dolt
+// workspace. Evidence is owner-scoped and associated with the capturing agent.
+func (s *Store) CreateEvidence(ctx context.Context, rec types.EvidenceRecord) error {
+	metadata := string(rec.Metadata)
+	if strings.TrimSpace(metadata) == "" {
+		metadata = "{}"
+	}
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT INTO agent_evidence (evidence_id, owner_id, agent_id, kind, source_uri, title, content, metadata_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.EvidenceID,
+		rec.OwnerID,
+		rec.AgentID,
+		rec.Kind,
+		rec.SourceURI,
+		rec.Title,
+		rec.Content,
+		metadata,
+		rec.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("insert agent evidence: %w", err)
+	}
+	return nil
+}
+
+// GetEvidence returns a single evidence record scoped to the given owner.
+func (s *Store) GetEvidence(ctx context.Context, evidenceID, ownerID string) (types.EvidenceRecord, error) {
+	row := s.vtextHandle().QueryRowContext(ctx,
+		`SELECT evidence_id, owner_id, agent_id, kind, source_uri, title, content, metadata_json, created_at
+		   FROM agent_evidence
+		  WHERE evidence_id = ? AND owner_id = ?`,
+		evidenceID, ownerID,
+	)
+	return scanEvidence(row)
+}
+
+// ListEvidenceByAgent returns recent evidence captured by an agent and scoped
+// to the given owner. If agentID is empty it returns recent evidence across all
+// of the owner's agents.
+func (s *Store) ListEvidenceByAgent(ctx context.Context, ownerID, agentID string, limit int) ([]types.EvidenceRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if strings.TrimSpace(agentID) == "" {
+		rows, err = s.vtextHandle().QueryContext(ctx,
+			`SELECT evidence_id, owner_id, agent_id, kind, source_uri, title, content, metadata_json, created_at
+			   FROM agent_evidence
+			  WHERE owner_id = ?
+			  ORDER BY created_at DESC
+			  LIMIT ?`,
+			ownerID, limit,
+		)
+	} else {
+		rows, err = s.vtextHandle().QueryContext(ctx,
+			`SELECT evidence_id, owner_id, agent_id, kind, source_uri, title, content, metadata_json, created_at
+			   FROM agent_evidence
+			  WHERE owner_id = ? AND agent_id = ?
+			  ORDER BY created_at DESC
+			  LIMIT ?`,
+			ownerID, agentID, limit,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query agent evidence: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []types.EvidenceRecord
+	for rows.Next() {
+		rec, err := scanEvidence(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agent evidence: %w", err)
+	}
+	return out, nil
 }
 
 // scanAgentMutation scans an agent mutation record from a single row.

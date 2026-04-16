@@ -19,13 +19,19 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	}
 
 	super := rt.ToolRegistryForProfile(AgentProfileSuper)
+	coSuper := rt.ToolRegistryForProfile(AgentProfileCoSuper)
 	conductor := rt.ToolRegistryForProfile(AgentProfileConductor)
 	researcher := rt.ToolRegistryForProfile(AgentProfileResearcher)
 	vtext := rt.ToolRegistryForProfile(AgentProfileVText)
 
-	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "post_message"} {
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "post_message", "save_evidence"} {
 		if _, ok := super.Lookup(name); !ok {
 			t.Fatalf("super missing tool %q", name)
+		}
+	}
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "post_message", "save_evidence"} {
+		if _, ok := coSuper.Lookup(name); !ok {
+			t.Fatalf("co-super missing tool %q", name)
 		}
 	}
 	for _, name := range []string{"spawn_agent", "post_message", "read_messages", "wait_for_message", "close_agent"} {
@@ -43,12 +49,18 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	if _, ok := researcher.Lookup("bash"); ok {
 		t.Fatalf("researcher should not have bash")
 	}
-	for _, name := range []string{"read_file", "web_search", "spawn_agent", "post_message", "wait_for_message"} {
+	if _, ok := researcher.Lookup("write_file"); ok {
+		t.Fatalf("researcher should not have write_file")
+	}
+	if _, ok := researcher.Lookup("edit_file"); ok {
+		t.Fatalf("researcher should not have edit_file")
+	}
+	for _, name := range []string{"read_file", "web_search", "spawn_agent", "post_message", "wait_for_message", "save_evidence"} {
 		if _, ok := researcher.Lookup(name); !ok {
 			t.Fatalf("researcher missing tool %q", name)
 		}
 	}
-	for _, name := range []string{"spawn_agent", "post_message", "read_messages", "wait_for_message", "close_agent"} {
+	for _, name := range []string{"spawn_agent", "post_message", "read_messages", "wait_for_message", "close_agent", "save_evidence", "read_evidence"} {
 		if _, ok := vtext.Lookup(name); !ok {
 			t.Fatalf("vtext missing tool %q", name)
 		}
@@ -170,6 +182,103 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 	}
 	if len(waitResp.Messages) != 1 || waitResp.Messages[0].Content != "runtime looks good; proceeding with structured findings" {
 		t.Fatalf("unexpected wait messages: %+v", waitResp.Messages)
+	}
+}
+
+func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
+	rt, s, cwd := testRuntimeWithTempCWD(t)
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	vtextTask, err := rt.SubmitTaskWithMetadata(context.Background(), "revise document", "user-alice", map[string]any{
+		taskMetadataAgentProfile: AgentProfileVText,
+		taskMetadataAgentRole:    AgentProfileVText,
+	})
+	if err != nil {
+		t.Fatalf("submit vtext task: %v", err)
+	}
+	superTask, err := rt.SubmitTaskWithMetadata(context.Background(), "coordinate execution", "user-alice", map[string]any{
+		taskMetadataAgentProfile: AgentProfileSuper,
+		taskMetadataAgentRole:    AgentProfileSuper,
+	})
+	if err != nil {
+		t.Fatalf("submit super task: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	vtextRegistry := rt.ToolRegistryForProfile(AgentProfileVText)
+	if _, err := vtextRegistry.Execute(WithToolExecutionContext(context.Background(), vtextTask), "spawn_agent", json.RawMessage(`{
+		"objective":"try to create a privileged executor",
+		"role":"super"
+	}`)); err == nil {
+		t.Fatalf("vtext should not be allowed to spawn super")
+	}
+
+	superRegistry := rt.ToolRegistryForProfile(AgentProfileSuper)
+	coSuperRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), superTask), "spawn_agent", json.RawMessage(`{
+		"objective":"handle execution subtree",
+		"role":"co-super"
+	}`))
+	if err != nil {
+		t.Fatalf("super spawn co-super: %v", err)
+	}
+	var coSuperSpawn struct {
+		TaskID  string `json:"task_id"`
+		Profile string `json:"profile"`
+	}
+	if err := json.Unmarshal([]byte(coSuperRaw), &coSuperSpawn); err != nil {
+		t.Fatalf("decode co-super spawn: %v", err)
+	}
+	if coSuperSpawn.Profile != AgentProfileCoSuper {
+		t.Fatalf("co-super profile = %q, want %q", coSuperSpawn.Profile, AgentProfileCoSuper)
+	}
+
+	child, err := s.GetTask(context.Background(), coSuperSpawn.TaskID)
+	if err != nil {
+		t.Fatalf("get co-super task: %v", err)
+	}
+	coSuperRegistry := rt.ToolRegistryForProfile(AgentProfileCoSuper)
+	if _, err := coSuperRegistry.Execute(WithToolExecutionContext(context.Background(), &child), "spawn_agent", json.RawMessage(`{
+		"objective":"try to escape supervision",
+		"role":"super"
+	}`)); err == nil {
+		t.Fatalf("co-super should not be allowed to spawn super")
+	}
+
+	researcherTask, err := rt.SubmitTaskWithMetadata(context.Background(), "gather evidence", "user-alice", map[string]any{
+		taskMetadataAgentProfile: AgentProfileResearcher,
+		taskMetadataAgentRole:    AgentProfileResearcher,
+	})
+	if err != nil {
+		t.Fatalf("submit researcher task: %v", err)
+	}
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	saveRaw, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "save_evidence", json.RawMessage(`{
+		"kind":"web_page",
+		"source_uri":"https://example.com",
+		"title":"Example",
+		"content":"captured evidence"
+	}`))
+	if err != nil {
+		t.Fatalf("save_evidence: %v", err)
+	}
+	var saveResp struct {
+		EvidenceID string `json:"evidence_id"`
+		AgentID    string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(saveRaw), &saveResp); err != nil {
+		t.Fatalf("decode save_evidence: %v", err)
+	}
+	if saveResp.AgentID == "" || saveResp.EvidenceID == "" {
+		t.Fatalf("unexpected save response: %+v", saveResp)
+	}
+	evidence, err := s.GetEvidence(context.Background(), saveResp.EvidenceID, "user-alice")
+	if err != nil {
+		t.Fatalf("get evidence: %v", err)
+	}
+	if evidence.Content != "captured evidence" {
+		t.Fatalf("evidence content = %q, want %q", evidence.Content, "captured evidence")
 	}
 }
 

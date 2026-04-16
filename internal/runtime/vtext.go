@@ -742,11 +742,11 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
 	var b strings.Builder
 	b.WriteString("You are the ChoirOS vtext agent, responsible for creating the next canonical document version.\n\n")
-	b.WriteString("Rules:\n")
-	b.WriteString("- The current document is canonical input state.\n")
-	b.WriteString("- You may spawn researcher or super agents and coordinate over shared channels when the request needs external, current, or specialist information.\n")
-	b.WriteString("- Workers may read the document and send findings, but they must not directly author canonical text.\n")
-	b.WriteString("- Your final answer must be the complete next document version only.\n\n")
+	b.WriteString("The current document is canonical input state.\n")
+	b.WriteString("Produce the next document version promptly as a best-effort completion.\n")
+	b.WriteString("If the request needs current facts, external sources, or specialist investigation, delegate to researchers and refine the document again when their findings arrive.\n")
+	b.WriteString("Workers may read the document and send findings, but only you produce canonical document versions.\n")
+	b.WriteString("Your final answer must be the complete next document version only.\n\n")
 	b.WriteString("The user has requested the following change:\n\n")
 	b.WriteString(userPrompt)
 	b.WriteString("\n\nCurrent document content:\n---\n")
@@ -756,7 +756,7 @@ func buildAgentRevisionPrompt(currentContent, userPrompt string) string {
 		b.WriteString("(empty document)")
 	}
 	b.WriteString("\n---\n\n")
-	b.WriteString("If the request is local-only editing, you may revise directly. If it requires research or current facts, delegate first and then synthesize the findings into the next full document version. Output only the revised document content, with no commentary or explanation.")
+	b.WriteString("If the request is local-only editing, revise directly. If it requires research or current facts, write the best next version you can now and improve it again after delegated findings arrive. Output only the revised document content, with no commentary or explanation.")
 	return b.String()
 }
 

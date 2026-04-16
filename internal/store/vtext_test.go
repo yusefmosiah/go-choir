@@ -247,6 +247,68 @@ func TestVTextRevisionOwnerScope(t *testing.T) {
 	}
 }
 
+func TestCreateAndGetEvidence(t *testing.T) {
+	s := vtextTestStore(t)
+	ctx := context.Background()
+
+	metadata, _ := json.Marshal(map[string]any{"mime_type": "text/html"})
+	rec := types.EvidenceRecord{
+		EvidenceID: "ev-1",
+		OwnerID:    "user-1",
+		AgentID:    "researcher-a",
+		Kind:       "web_page",
+		SourceURI:  "https://example.com",
+		Title:      "Example",
+		Content:    "<html>example</html>",
+		Metadata:   metadata,
+		CreatedAt:  time.Now().UTC().Truncate(time.Millisecond),
+	}
+	if err := s.CreateEvidence(ctx, rec); err != nil {
+		t.Fatalf("CreateEvidence: %v", err)
+	}
+
+	got, err := s.GetEvidence(ctx, "ev-1", "user-1")
+	if err != nil {
+		t.Fatalf("GetEvidence: %v", err)
+	}
+	if got.AgentID != "researcher-a" {
+		t.Errorf("AgentID = %q, want %q", got.AgentID, "researcher-a")
+	}
+	if got.SourceURI != "https://example.com" {
+		t.Errorf("SourceURI = %q, want %q", got.SourceURI, "https://example.com")
+	}
+	if got.Content != "<html>example</html>" {
+		t.Errorf("Content = %q, want %q", got.Content, "<html>example</html>")
+	}
+}
+
+func TestListEvidenceByAgentOwnerScoped(t *testing.T) {
+	s := vtextTestStore(t)
+	ctx := context.Background()
+
+	for _, rec := range []types.EvidenceRecord{
+		{EvidenceID: "ev-1", OwnerID: "user-1", AgentID: "researcher-a", Kind: "web_page", Content: "A", CreatedAt: time.Now().UTC()},
+		{EvidenceID: "ev-2", OwnerID: "user-1", AgentID: "researcher-a", Kind: "web_page", Content: "B", CreatedAt: time.Now().UTC().Add(1 * time.Second)},
+		{EvidenceID: "ev-3", OwnerID: "user-1", AgentID: "researcher-b", Kind: "web_page", Content: "C", CreatedAt: time.Now().UTC().Add(2 * time.Second)},
+		{EvidenceID: "ev-4", OwnerID: "user-2", AgentID: "researcher-a", Kind: "web_page", Content: "D", CreatedAt: time.Now().UTC().Add(3 * time.Second)},
+	} {
+		if err := s.CreateEvidence(ctx, rec); err != nil {
+			t.Fatalf("CreateEvidence(%s): %v", rec.EvidenceID, err)
+		}
+	}
+
+	got, err := s.ListEvidenceByAgent(ctx, "user-1", "researcher-a", 10)
+	if err != nil {
+		t.Fatalf("ListEvidenceByAgent: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	if got[0].EvidenceID != "ev-2" || got[1].EvidenceID != "ev-1" {
+		t.Fatalf("unexpected evidence order: %+v", got)
+	}
+}
+
 func TestVTextListRevisionsByDoc(t *testing.T) {
 	s := vtextTestStore(t)
 	ctx := context.Background()

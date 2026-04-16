@@ -55,9 +55,13 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 			if role == "" {
 				return "", fmt.Errorf("role must not be empty")
 			}
+			callerProfile := stringFromToolContext(ctx, toolCtxProfile)
 			profile := strings.TrimSpace(in.Profile)
 			if profile == "" {
 				profile = role
+			}
+			if !canDelegateTo(callerProfile, profile) {
+				return "", fmt.Errorf("%s cannot delegate to %s", callerProfile, profile)
 			}
 			constraints := map[string]any{
 				taskMetadataAgentRole:    role,

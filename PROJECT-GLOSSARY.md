@@ -68,6 +68,8 @@
 - (future) email, calendar, ebook, pdf reader, youtube or other video player, audio or podcast player, any app
 - upgrade trace app to appagent (agentic tracing, reviewing and analyzing and visualizing past trajectories)
 
+**Topology rule:** many appagents may coexist as peers in one user microVM, each with its own durable perspective.
+
 **Prior / nearby names:**
 - host agent
 - top-level app worker
@@ -83,6 +85,11 @@
 - can delegate further with coagent tools
 - can coordinate with researchers and appagents
 - (most agents lack bash tools; least privilege principle)
+
+**Topology rule:**
+- there should generally be one singleton `super` per user microVM
+- `super` is the privileged orchestration root for execution-heavy concurrency in that VM
+- future co-supers or execution descendants should remain under `super` by default rather than becoming free peers immediately
 
 **Prior / nearby names:**
 - supervisor
@@ -101,8 +108,11 @@
 **What it does:**
 - gathers current/external information
 - reads local context
+- persists evidentiary material into embedded Dolt
 - sends findings back over channels
 - does not own canonical document text
+
+**Topology rule:** researchers should usually come from a shared pool within a user microVM.
 
 **Prior / nearby names:**
 - research worker
@@ -166,7 +176,7 @@
 
 **Examples:**
 - `v0` = initial user-prompt-created document
-- `v1` = first appagent-produced version
+- `v1` = first appagent-produced best-effort completion from the `vtext` agent's current perspective
 
 **Important rule:** versions are the main state transitions, not chat turns.
 
@@ -189,6 +199,16 @@
 **Prior / nearby names:**
 - writer revision
 - appagent revision
+
+**Important rule:** the first agent-authored version should usually arrive promptly, even before worker evidence comes back. Later evidence can produce further agent-authored versions.
+
+---
+
+### `best-effort completion`
+
+**Definition:** The default mode where the `vtext` agent tries to complete the document objectively from currently available context, without waiting for all delegated work to finish first.
+
+**Important rule:** this is not the same as conversational self-reporting. The agent should generally complete the work as well as it can, then revise when more evidence arrives.
 
 ---
 
@@ -230,6 +250,8 @@
 **Prior / nearby names:**
 - co-agent tools
 - channel tools
+
+**Important rule:** role/tool matching should be enforced in code. If a role should not have shell, writable filesystem, or privileged delegation access, those tools should not be present.
 
 ---
 
@@ -296,6 +318,8 @@
 - eventually becomes a first-class app in the desktop
 
 **Important rule:** prompt configuration is per-user and belongs inside the sandbox, not as a host-global setting.
+
+**Prompting style rule:** prompts should be subtle. Prefer a few strong positive instructions over long negative rule lists.
 
 ---
 
