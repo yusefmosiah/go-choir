@@ -154,58 +154,64 @@
         ></textarea>
       </div>
 
-      <div class="details-grid">
-        <section class="detail-card">
-          <div class="section-title">Effective system prompt</div>
-          <div class="section-subtitle">
-            Role prompt + runtime-added policy + tool catalog.
-          </div>
-          <textarea
-            class="readonly-editor"
-            spellcheck="false"
-            readonly
-            value={activePrompt?.effective_system_prompt || ''}
-          ></textarea>
-        </section>
+      <details class="detail-section" open>
+        <summary class="section-title">Effective system prompt</summary>
+        <div class="section-subtitle">Role prompt + runtime-added policy + tool catalog.</div>
+        <textarea
+          class="readonly-editor"
+          spellcheck="false"
+          readonly
+          value={activePrompt?.effective_system_prompt || '(restart sandbox to load)'}
+        ></textarea>
+      </details>
 
-        <section class="detail-card">
-          <div class="section-title">Role policy</div>
-          <div class="policy-list">
-            <div><strong>Profile</strong> {activePrompt?.role_policy?.profile || selectedRole}</div>
-            <div><strong>Delegates to</strong> {activePrompt?.role_policy?.allowed_delegate_targets?.length ? activePrompt.role_policy.allowed_delegate_targets.join(', ') : 'none'}</div>
-            <div><strong>Read-only files</strong> {activePrompt?.role_policy?.allow_read_only_files ? 'yes' : 'no'}</div>
-            <div><strong>Writable files</strong> {activePrompt?.role_policy?.allow_writable_files ? 'yes' : 'no'}</div>
-            <div><strong>Research tools</strong> {activePrompt?.role_policy?.allow_research_tools ? 'yes' : 'no'}</div>
-            <div><strong>Evidence tools</strong> {activePrompt?.role_policy?.allow_evidence_tools ? 'yes' : 'no'}</div>
-            <div><strong>Coding tools</strong> {activePrompt?.role_policy?.allow_coding_tools ? 'yes' : 'no'}</div>
-            <div><strong>Co-agent tools</strong> {activePrompt?.role_policy?.allow_coagent_tools ? 'yes' : 'no'}</div>
-          </div>
-        </section>
-
-        <section class="detail-card">
-          <div class="section-title">Provider and model policy</div>
-          <div class="policy-list">
-            <div><strong>Active provider</strong> {activePrompt?.provider_policy?.active_provider || 'unknown'}</div>
-            <div><strong>Default model</strong> {activePrompt?.provider_policy?.default_model || 'provider default / not exposed'}</div>
-            <div><strong>Selection policy</strong> {activePrompt?.provider_policy?.model_selection || 'unknown'}</div>
-            <div><strong>Per-run model override</strong> {activePrompt?.provider_policy?.supports_per_run_model_override ? 'supported' : 'not supported'}</div>
-          </div>
-          {#if activePrompt?.provider_policy?.notes?.length}
-            <div class="policy-notes">
-              {#each activePrompt.provider_policy.notes as note}
-                <div class="policy-note">{note}</div>
-              {/each}
+      <div class="compact-grid">
+        <details class="detail-card" open>
+          <summary class="section-title">Role policy</summary>
+          {#if activePrompt?.role_policy?.profile}
+            <div class="policy-list">
+              <div><strong>Profile</strong> {activePrompt.role_policy.profile}</div>
+              <div><strong>Delegates to</strong> {activePrompt.role_policy.allowed_delegate_targets?.length ? activePrompt.role_policy.allowed_delegate_targets.join(', ') : 'none'}</div>
+              <div><strong>Read-only files</strong> {activePrompt.role_policy.allow_read_only_files ? 'yes' : 'no'}</div>
+              <div><strong>Writable files</strong> {activePrompt.role_policy.allow_writable_files ? 'yes' : 'no'}</div>
+              <div><strong>Research tools</strong> {activePrompt.role_policy.allow_research_tools ? 'yes' : 'no'}</div>
+              <div><strong>Evidence tools</strong> {activePrompt.role_policy.allow_evidence_tools ? 'yes' : 'no'}</div>
+              <div><strong>Coding tools</strong> {activePrompt.role_policy.allow_coding_tools ? 'yes' : 'no'}</div>
+              <div><strong>Co-agent tools</strong> {activePrompt.role_policy.allow_coagent_tools ? 'yes' : 'no'}</div>
             </div>
+          {:else}
+            <div class="empty-hint">Restart sandbox to load role policy.</div>
           {/if}
-        </section>
+        </details>
 
-        <section class="detail-card tools-card">
-          <div class="section-title">Tool definitions</div>
-          <div class="section-subtitle">
-            Read-only. Edit tool behavior in code, not here.
-          </div>
+        <details class="detail-card" open>
+          <summary class="section-title">Provider and model policy</summary>
+          {#if activePrompt?.provider_policy?.active_provider}
+            <div class="policy-list">
+              <div><strong>Active provider</strong> {activePrompt.provider_policy.active_provider}</div>
+              <div><strong>Default model</strong> {activePrompt.provider_policy.default_model || 'provider default'}</div>
+              <div><strong>Selection policy</strong> {activePrompt.provider_policy.model_selection || 'default'}</div>
+              <div><strong>Per-run model override</strong> {activePrompt.provider_policy.supports_per_run_model_override ? 'supported' : 'not supported'}</div>
+            </div>
+            {#if activePrompt.provider_policy.notes?.length}
+              <div class="policy-notes">
+                {#each activePrompt.provider_policy.notes as note}
+                  <div class="policy-note">{note}</div>
+                {/each}
+              </div>
+            {/if}
+          {:else}
+            <div class="empty-hint">Restart sandbox to load provider policy.</div>
+          {/if}
+        </details>
+      </div>
+
+      <details class="detail-section">
+        <summary class="section-title">Tool definitions <span class="tool-count">{(activePrompt?.tools || []).length} tools</span></summary>
+        <div class="section-subtitle">Read-only. Edit tool behavior in code, not here.</div>
+        {#if (activePrompt?.tools || []).length > 0}
           <div class="tool-list">
-            {#each activePrompt?.tools || [] as tool}
+            {#each activePrompt.tools as tool}
               <div class="tool-card">
                 <div class="tool-name">{tool.name}</div>
                 <div class="tool-description">{tool.description || 'No description.'}</div>
@@ -213,8 +219,10 @@
               </div>
             {/each}
           </div>
-        </section>
-      </div>
+        {:else}
+          <div class="empty-hint">Restart sandbox to load tool definitions.</div>
+        {/if}
+      </details>
     {/if}
 
     {#if error}
@@ -362,11 +370,22 @@
     font: 0.95rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
-  .details-grid {
+  .detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .detail-section > summary,
+  .detail-card > summary {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .compact-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.85rem;
-    padding-bottom: 0.25rem;
   }
 
   .detail-card {
@@ -391,9 +410,23 @@
   }
 
   .readonly-editor {
-    min-height: 260px;
+    min-height: 140px;
+    max-height: 360px;
     padding: 0.85rem;
     resize: vertical;
+  }
+
+  .empty-hint {
+    color: #6b7280;
+    font-size: 0.82rem;
+    font-style: italic;
+  }
+
+  .tool-count {
+    color: #6b7280;
+    font-size: 0.78rem;
+    font-weight: 400;
+    margin-left: 0.4rem;
   }
 
   .policy-list {
@@ -414,10 +447,6 @@
     color: #cbd5e1;
     font-size: 0.8rem;
     line-height: 1.45;
-  }
-
-  .tools-card {
-    grid-column: 1 / -1;
   }
 
   .tool-list {
@@ -476,12 +505,8 @@
       grid-template-columns: 1fr;
     }
 
-    .details-grid {
+    .compact-grid {
       grid-template-columns: 1fr;
-    }
-
-    .tools-card {
-      grid-column: auto;
     }
   }
 </style>
