@@ -1,7 +1,7 @@
 # go-choir Project State
 
-**Last Updated:** 2026-04-14  
-**Current Mission:** Local `vtext` + Dolt completion before `vmctl` deepening
+**Last Updated:** 2026-04-15  
+**Current Mission:** Make local `vtext` + MAS real before `vmctl` deepening
 
 ---
 
@@ -35,7 +35,7 @@ Cogent remains important as a source of runtime patterns and temporary bootstrap
 **Runtime Plane (Per-User MicroVM):**
 - One microVM per user with choir runtime services and appagents
 - One `super` agent per microVM coordinates execution work and may fan out via coagent tools
-- Worker roles include researcher and verification-style helpers, with configurable researcher count from day one
+- Worker roles include coding, researcher and verification-style helpers, with configurable researcher count from day one
 - **AppAgents** - `vtext` is the primary document appagent
 - Database direction: **DoltDB** for version-native document and work state
 
@@ -195,6 +195,83 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 
 ---
 
+## Current Prompt Flow
+
+This is the live prompt path today, not the intended path:
+
+1. **Bottom prompt bar**
+   - `frontend/src/lib/BottomBar.svelte` emits `promptsubmit`
+   - `frontend/src/lib/Desktop.svelte` handles it
+   - trivial prompts like `hi` are short-circuited to a toast
+   - non-trivial prompts call `submitConductorPrompt(...)` in `frontend/src/lib/conductor.js`
+
+2. **Conductor submission**
+   - `submitConductorPrompt(...)` posts to `/api/agent/task`
+   - metadata includes:
+     - `agent_profile=conductor`
+     - `agent_role=conductor`
+     - `requested_app=vtext`
+     - `seed_prompt=<prompt>`
+   - this creates a real conductor task in the runtime
+
+3. **But the UI still bypasses conductor results**
+   - after submission, `Desktop.svelte` immediately opens a new `vtext` window locally
+   - that window is seeded directly with the prompt text as `v0`
+   - conductor is therefore not yet the actual owner of app routing in practice
+
+4. **`vtext` prompt/apply**
+   - `frontend/src/lib/VTextEditor.svelte` saves a user revision
+   - then it calls `/api/vtext/documents/{id}/agent-revision`
+   - the backend builds the real provider prompt in `internal/runtime/vtext.go`
+
+5. **Runtime execution**
+   - `internal/runtime/runtime.go` runs the task through the tool loop when a tool registry exists
+   - `internal/runtime/tool_profiles.go` supplies:
+     - `conductor`: coagent tools only
+     - `vtext`: coagent tools only
+     - `researcher`: research + file + coagent tools
+     - `super`: coding + research + file + coagent tools
+   - the tool loop system prompt comes from `systemPromptForTask(...)`
+
+6. **Why the behavior still feels fake**
+   - conductor is not yet actually driving the desktop/app routing result
+   - `vtext` is still mostly instructed by prompt text alone, not by a strong structured orchestration contract
+   - the trace surface exists, but it is still too raw to make delegation legible at a glance
+   - as a result, the system can spawn agents in principle, but the user experience does not yet make that orchestration visible or reliable
+
+## Prompt Surfaces To Edit
+
+These are the important prompt/system-prompt surfaces right now:
+
+1. **Conductor user prompt payload**
+   - `frontend/src/lib/conductor.js`
+   - controls what metadata gets attached when the prompt bar submits a conductor task
+
+2. **Desktop routing behavior**
+   - `frontend/src/lib/Desktop.svelte`
+   - not a prompt, but it currently determines that prompt-bar input opens `vtext` directly instead of waiting for conductor output
+
+3. **`vtext` frontend agent prompt**
+   - `frontend/src/lib/VTextEditor.svelte`
+   - `buildAgentPrompt()`
+   - this is the first editable text telling the `vtext` agent how to behave
+
+4. **`vtext` backend revision prompt**
+   - `internal/runtime/vtext.go`
+   - `buildAgentRevisionPrompt(...)`
+   - this is the canonical backend prompt that wraps the current document and user request
+
+5. **Per-profile system prompts**
+   - `internal/runtime/tool_profiles.go`
+   - `systemPromptForTask(...)`
+   - this is where `conductor`, `vtext`, `researcher`, and `super` get their core role instructions
+
+6. **Tool surfaces**
+   - not prompts, but prompt behavior depends heavily on them:
+   - `internal/runtime/tools_coagent.go`
+   - `internal/runtime/tools_research.go`
+   - `internal/runtime/tools_coding.go`
+
 ## Current Issues & Blockers
 
 ### Production (Node B)
@@ -208,7 +285,9 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 3. ✅ **Not responsive** - Resolved (3 breakpoints, desktop-parity windowing on mobile-sized screens)
 4. ⏸️ **Settings app** - Deferred to Mission 7 (requires conductor agent)
 5. ⚠️ **Browser app** - Limited by iframe security (X-Frame-Options). Only sites allowing embedding (like Wikipedia) work. Full proxy solution deferred to Mission 7+ (requires server-side proxy with HTML rewriting).
-6. ⚠️ **VText UX** - Hard-cutover shell is in progress; complete locally before `vmctl`
+6. ⚠️ **VText UX + orchestration** - hard cutover is not actually coherent yet; complete locally before `vmctl`
+7. ⚠️ **Trace UX** - current trace is useful as raw instrumentation, but not yet readable enough to debug runs comfortably
+8. ⚠️ **Prompt flow mismatch** - conductor submits a real task, but the desktop still opens `vtext` directly rather than letting conductor route the work
 
 ### Testing
 - ✅ Unit tests pass (all Go packages)
@@ -227,25 +306,41 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 **Delivered:** 10/13 features (see Mission History above)
 
 ### Immediate Local Sequence (NEXT)
-**Goal:** Finish the local `vtext` core and version-native storage model before going deeper on `vmctl` / microVM lifecycle.
+**Goal:** Finish the local `vtext` core, make the MAS visibly real, then return to `vmctl` / microVM lifecycle.
 
 **Why this comes first:**
-1. The current `vtext` UI is still the wrong shape for the product.
-2. The floating prompt/version action was not actually wired to the appagent path.
-3. The historical `etext` name is still embedded in active runtime/store paths.
-4. The sandbox still persists document state in SQLite, while the architecture already assumes embedded Dolt.
-5. `vmctl` work should happen after the sandbox state model is the one we actually want to run inside VMs.
+1. The current `vtext` UI is still too rough and wastes space.
+2. The MAS exists in pieces, but the user cannot clearly see or trust delegation.
+3. The trace/debugging surface needs to make worker spawning, tool usage, and channel traffic legible.
+4. The sandbox state model should stabilize around embedded Dolt before deeper VM work.
+5. `vmctl` work should happen after the sandbox runtime and document model are the ones we actually want to run inside VMs.
 
 **Current local priority order:**
-1. `vtext` window becomes almost entirely the document surface
-2. floating prompt button + `<` / `>` version navigation
-3. prompt/apply calls the real `vtext` appagent path
-4. complete the active `etext` → `vtext` rename as a hard cutover, with no compatibility shims
-5. replace sandbox document storage with embedded Dolt
-6. then return to `vmctl` and x86 microVM validation
+1. Make `vtext` feel right:
+   - the window should essentially be the document
+   - floating prompt + version controls only
+   - no dead space, no misleading status chrome
+2. Make prompt routing honest:
+   - conductor should become the actual routing owner
+   - remove the “submit conductor, then just open `vtext` anyway” mismatch
+3. Make the MAS visibly real:
+   - `vtext` must reliably spawn researchers for current/external info
+   - `super` should appear when execution work is needed
+   - runs should produce understandable trace output
+4. Improve Trace:
+   - make it show runs/families clearly
+   - show which agent spawned which child
+   - show tool calls, channel messages, and final synthesis in a simpler narrative order
+5. Finish embedded Dolt integration:
+   - version history should be genuinely native to the sandbox state model
+   - document revisions and related metadata should feel like first-class persisted state
+6. Then return to `vmctl`:
+   - review current Go implementation
+   - compare against `choiros-rs`
+   - design the right user-VM / worker-VM lifecycle
 
-### Mission 7: MicroVM Architecture + Runtime Deepening (AFTER LOCAL `VTEXT`/DOLT)
-**Goal:** Properly integrate ChoirOS microVM patterns from `~/choiros-rs` with Cogent work graph from `~/cogent`, replacing stub implementations once the local `vtext` core is solid.
+### Mission 7: MicroVM Architecture + Runtime Deepening (AFTER LOCAL `VTEXT`/MAS/DOLT)
+**Goal:** Deepen `vmctl` and per-user microVM architecture once the local `vtext` + MAS loop is real and inspectable.
 
 **Doc:** `docs/mission-7-cogent-integration.md`
 
@@ -260,7 +355,37 @@ sqlite3 .cogent/cogent-private.db "SELECT title, content FROM private_notes WHER
 - `~/cogent/internal/adapters/native/` — Tool calling loop
 - `~/cogent/internal/service/` — Work graph orchestration
 
-**Implementation:** Use Cogent, not Factory Droid (context loss issues).
+**Implementation note:** Cogent is a reference and bootstrap donor, not the target control plane.
+
+## Technical Debt To Track Explicitly
+
+### Product / Runtime Debt
+1. **Conductor is not yet authoritative**
+   - desktop still shortcuts into `vtext`
+   - routing and execution are split between deterministic UI code and agent tasks
+2. **Trace app is not yet readable enough**
+   - current version is instrumentation-first, not operator-first
+   - needs better grouping, labels, and summaries
+3. **`vtext` orchestration is prompt-fragile**
+   - delegation currently depends too much on freeform prompt behavior
+   - it needs stronger policy and clearer worker plans
+4. **Prompt surfaces are scattered**
+   - frontend prompt text, backend prompt text, and profile system prompts all shape behavior
+   - this should eventually be rationalized into a more intentional prompt/config layout
+
+### Architecture / Infra Debt
+1. **`vmctl` is still under-validated**
+   - local host-process fallback exists
+   - real x86 Firecracker validation remains to be done
+2. **Docs are still partly aspirational**
+   - several mission docs still describe stale implementation paths
+3. **Factory Droid residue still exists**
+   - `.factory` bootstrap assumptions
+   - old mission artifacts and references
+   - stale comments and docs that imply Factory-era workflows
+4. **README is stale in a few important ways**
+   - it still describes the sandbox/runtime as more placeholder-oriented than the current repo
+   - it does not yet explain the current prompt flow / MAS debugging path clearly
 
 ### Mission 5 (revisit): Production Hardening (if needed)
 

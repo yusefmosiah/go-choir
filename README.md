@@ -1,6 +1,6 @@
 # go-choir
 
-Distributed multiagent operating system -- Go rewrite of ChoirOS, unified with Cogent. Five microservices, Caddy edge proxy, Svelte SPA, running on bare-metal NixOS.
+Distributed multiagent operating system -- Go rewrite of ChoirOS, informed by Cogent runtime patterns. Five microservices, Caddy edge proxy, Svelte SPA, running on bare-metal NixOS.
 
 ## Architecture
 
@@ -11,20 +11,20 @@ Browser --> Caddy (TLS, static assets, Svelte SPA)
              |-- /provider/*  --> gateway  (8084)
 
 vmctl (8083) -- manages VM ownership and lifecycle, using host-process fallback locally and Firecracker on Linux/KVM hosts
-sandbox (8085) -- host-process runtime fallback for local development; target runtime moves into per-user microVMs
+sandbox (8085) -- local runtime + desktop apps + agent/tool loop; host-process fallback locally, target runtime moves into per-user microVMs
 ```
 
 **Five services:**
 
 | Service   | Port | Role |
 |-----------|------|------|
-| auth      | 8081 | Email/password registration + login, JWT access + refresh token sessions, SQLite persistence |
+| auth      | 8081 | Email/passkey registration + login, JWT access + refresh token sessions, SQLite persistence |
 | proxy     | 8082 | Auth-gated HTTP and WebSocket proxying to the sandbox, user-context injection |
 | vmctl     | 8083 | VM ownership + lifecycle control, host-process fallback locally, Firecracker lifecycle on supported hosts |
 | gateway   | 8084 | Multi-provider LLM gateway (Fireworks, Z.AI, Bedrock) with SSE streaming |
-| sandbox   | 8085 | Placeholder shell bootstrap and WebSocket echo surface for Milestone 1 |
+| sandbox   | 8085 | Local runtime: desktop shell APIs, `vtext`, agent tool loop, files, terminal, and event streaming |
 
-**Frontend:** Svelte SPA with email auth UI, desktop shell, and the versioned document app (`vtext`) plus choir-in-choir controls.
+**Frontend:** Svelte SPA with email auth UI, desktop shell, `vtext`, and an early trace/debugging app for the MAS.
 
 All services expose a `/health` endpoint.
 
@@ -60,7 +60,35 @@ Prior milestones still in place:
 - Playwright e2e test suite (168+ tests passing)
 - Go unit tests (all packages passing)
 
-Next: finish the hard-cutover `vtext` + embedded Dolt local path, then return to `vmctl` and microVM deepening.
+Next:
+- make `vtext` UX and orchestration coherent
+- make trace/debugging readable enough to inspect delegation
+- finish embedded Dolt stabilization
+- then return to `vmctl` and microVM deepening
+
+## Current Prompt Flow
+
+This is the live prompt path today:
+
+1. Bottom bar input emits `promptsubmit` from `frontend/src/lib/BottomBar.svelte`
+2. `frontend/src/lib/Desktop.svelte` handles that event
+3. Trivial prompts like `hi` become a toast only
+4. Non-trivial prompts submit a real conductor task via `frontend/src/lib/conductor.js`
+5. The desktop then still opens `vtext` directly and seeds `v0`
+6. Inside `vtext`, the Prompt button saves a user revision and submits `/api/vtext/documents/{id}/agent-revision`
+7. The runtime builds the canonical backend prompt in `internal/runtime/vtext.go`
+8. The task runs through the tool loop in `internal/runtime/runtime.go` with profile system prompts from `internal/runtime/tool_profiles.go`
+
+This means conductor exists, but it is not yet the true routing owner in practice.
+
+## Main Editable Prompt Surfaces
+
+- `frontend/src/lib/conductor.js`
+- `frontend/src/lib/VTextEditor.svelte` via `buildAgentPrompt()`
+- `internal/runtime/vtext.go` via `buildAgentRevisionPrompt(...)`
+- `internal/runtime/tool_profiles.go` via `systemPromptForTask(...)`
+
+Those are the main places to edit when you want to change orchestration behavior.
 
 ## Development Setup
 
@@ -72,6 +100,7 @@ Next: finish the hard-cutover `vtext` + embedded Dolt local path, then return to
 
 ```sh
 # Install dependencies and generate local signing keys
+# Note: this still uses legacy .factory bootstrap scripts and should be cleaned up.
 bash .factory/init.sh
 
 # Start services (each in its own terminal)

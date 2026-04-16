@@ -1,215 +1,153 @@
-# Mission 7: Cogent Integration + MicroVM Architecture
+# Mission 7: VM Runtime Deepening After Local `vtext`
 
-**Goal:** Properly integrate ChoirOS microVM patterns from `~/choiros-rs` with Cogent work graph from `~/cogent`, replacing the stub implementations with production-ready architecture.
+**Goal:** Finish the local `vtext` + MAS loop first, then deepen `vmctl` and per-user microVM architecture using `~/choiros-rs` and `~/cogent` as references.
 
----
-
-## Mission 6 Post-Mortem: What Actually Works
-
-### ✅ Delivered (Working)
-1. **Desktop Shell** — Floating icons, bottom bar, floating windows, responsive layout
-2. **Terminal** — ghostty-web WASM, PTY WebSocket (fixed protocol issues)
-3. **Browser** — iframe-based (limited by X-Frame-Options, documented)
-4. **Cross-area integration** — All test selectors updated for M6 rewrite
-
-### ⚠️ Stub/Incorrect Implementations
-1. **File Browser** — Uses host directory (`/tmp/go-choir-files`). Should use per-user microVM filesystem.
-2. **Settings** — Not implemented. Should be per-user preferences in microVM, consumed by conductor agent.
-3. **Browser** — iframe approach hits X-Frame-Options. Needs server-side proxy with HTML rewriting.
+This doc replaces the older “Cogent as external control plane” framing. That is not the target architecture.
 
 ---
 
-## Architecture Source of Truth
+## Current Reality
 
-### `~/choiros-rs` (Rust reference — working microVMs)
-**Key patterns to port:**
-- Firecracker VM lifecycle management (vmctl equivalent)
-- Per-user microVM with isolated filesystem
-- Read-only shared filesystem mounting
-- Snapshot/restore for fast VM resume
-- VM-to-VM networking isolation
+Before `vmctl` becomes the main focus again, these local problems still dominate:
 
-**File locations to study:**
-- `dioxus-desktop/src/` — UI patterns already ported to Svelte
-- `sandbox/src/` — Actor runtime patterns (vm management, channels)
-- Internal VM spawn logic
+1. `vtext` is not yet a trustworthy product surface
+   - the generated content often feels generic or placeholder-like
+   - the MAS behavior is not yet legible to the user
 
-### `~/cogent` (Go work control plane)
-**Key patterns to integrate:**
-- Work graph (SQLite-backed DAG)
-- Agent session persistence
-- Tool calling loop
-- Work item state machine
-- Co-agent spawning
+2. Conductor is not yet the real owner of routing
+   - prompt-bar input submits a conductor task
+   - but the desktop still opens `vtext` directly rather than letting conductor drive the handoff
 
-**File locations to study:**
-- `internal/adapters/native/` — Tool loop implementation
-- `internal/service/` — Work graph orchestration
-- `internal/store/` — SQLite schema patterns
+3. Trace exists but is still too raw
+   - enough to expose tasks/events/messages
+   - not yet good enough for comfortable debugging of delegation behavior
+
+4. Embedded Dolt is now part of the local critical path
+   - sandbox state should stabilize around the storage model we actually want before deeper VM work
 
 ---
 
-## Mission 7 Deliverables
+## What Mission 7 Is Now
 
-### 1. MicroVM Filesystem (File Browser Done Right)
+Mission 7 is no longer “integrate Cogent as an external harness.”
 
-**Current (Wrong):**
-```
-Host: /tmp/go-choir-files/ (shared across all users)
-  ↓
-Sandbox API: GET /api/files → returns host directory listing
-```
+Mission 7 is:
+- deepen the microVM architecture
+- get `vmctl` right
+- structure user VM and worker VM patterns well
+- keep borrowing strong ideas from `~/choiros-rs` and `~/cogent` without inheriting their bad boundaries
 
-**Target (Correct):**
-```
-Per-user microVM: /home/user/ (isolated filesystem)
-  ↓
-vmctl spawns Firecracker VM per user
-  ↓
-Read-only shared mount: /shared/ (common tools, etc.)
-  ↓
-Sandbox inside VM: GET /api/files → returns VM filesystem
-```
+Cogent matters as:
+- a reference for tool loops
+- a reference for coagent tools
+- a reference for work graph/session patterns
+- a temporary bootstrap donor
 
-**Implementation:**
-- Port VM lifecycle from `~/choiros-rs`
-- Create base VM image with sandbox + filesystem
-- Per-user VM spawn on first request
-- File browser backend runs inside VM (not host)
-- Proxy routes file API to user's VM
-
-### 2. Browser Proxy (Browser Done Right)
-
-**Current (Limited):**
-```
-BrowserApp.svelte: <iframe src="https://example.com">
-  ↓
-Blocked by X-Frame-Options on most sites
-```
-
-**Target (Working):**
-```
-BrowserApp.svelte: <iframe src="/api/browser/proxy?url=example.com">
-  ↓
-Proxy endpoint: fetches URL, rewrites HTML
-  ↓
-Rewrites: URLs → /api/browser/proxy?url=..., cookies isolated per user
-  ↓
-Returns modified HTML that loads in iframe
-```
-
-**Implementation:**
-- New endpoint: `GET /api/browser/proxy?url=...`
-- HTML parsing/rewriting (goquery or similar)
-- URL rewriting: relative → absolute → proxy path
-- Cookie jar isolation per user
-- CSP header stripping
-
-### 3. Cogent Integration
-
-**Pattern:** Cogent is the work control plane, not inside Choir.
-
-```
-User request → Choir proxy → Cogent supervisor
-                    ↓
-              [Work graph: SQLite]
-                    ↓
-            Spawns workers in microVMs
-                    ↓
-              Results stream back
-```
-
-**Integration points:**
-1. **Proxy routing** — `/api/cogent/*` → Cogent supervisor
-2. **Auth sharing** — JWT tokens shared between Choir and Cogent
-3. **Work graph UI** — E-text shows work progress inline
-4. **Agent spawning** — Conductor agent creates work items, spawns workers
-
-**Key differences from stub scheduler:**
-- Real work graph persistence (Dolt/SQLite)
-- Real co-agent spawning with verification
-- Real attestation before work marked complete
-- Long-running work survives VM hibernation
-
-### 4. Settings (Per-User Preferences)
-
-**Location:** Inside microVM, persisted across hibernation.
-
-```
-User Settings (SQLite in microVM):
-- preferred_models: ["claude-sonnet", "gpt-4"]
-- budget_constraints: {monthly_limit: 100}
-- policy_text: "Use cheapest model that can handle the task"
-
-Conductor agent reads → routes to appropriate model
-```
-
-**Integration:**
-- Settings UI in desktop (reads/writes VM-local SQLite)
-- Conductor agent queries settings before routing
-- Gateway respects user model preferences
+It does **not** matter as:
+- a permanent external supervisor process
+- a separate control plane that Choir delegates to forever
 
 ---
 
-## Technical Debt from M6 to Clean Up
+## Work That Must Happen Before Mission 7 Becomes Primary
 
-1. **File browser API** — Remove host-based implementation
-2. **Terminal protocol** — Verify fixed protocol is stable
-3. **Browser** — Remove iframe-direct approach, implement proxy
-4. **VMctl** — Replace stub with real Firecracker management
+### 1. Make `vtext` honest
+- tighten the single-surface UX
+- ensure prompt/apply behavior is clear and reliable
+- improve revision navigation and document-state visibility
 
----
+### 2. Make the MAS visible
+- `vtext` should clearly spawn researchers for current/external info
+- `super` should appear when execution work is needed
+- trace should make delegation legible
 
-## Verification Approach
+### 3. Make conductor authoritative
+- stop mixing real conductor tasks with deterministic desktop shortcuts
+- let routing truth come from the agent path
 
-1. **Unit tests** — Go tests for VM lifecycle, proxy rewriting
-2. **E2E tests** — Playwright: spawn VM, open file browser, see isolated FS
-3. **Integration tests** — Cogent work graph → spawn worker → verify result
-4. **Manual verification** — Browser proxy loads Google, GitHub, etc.
-
----
-
-## Migration Path
-
-### Phase 1: MicroVM Foundation
-- Port `~/choiros-rs` VM lifecycle to go-choir
-- Create base VM image with sandbox
-- Verify VM spawn/destroy works
-
-### Phase 2: File Browser Fix
-- Move file browser backend into VM
-- Update proxy routing to user's VM
-- E2E test: isolated filesystem per user
-
-### Phase 3: Browser Proxy
-- Implement `/api/browser/proxy`
-- HTML rewriting logic
-- E2E test: Google loads in iframe via proxy
-
-### Phase 4: Cogent Integration
-- Add Cogent supervisor endpoint
-- Connect work graph to microVM workers
-- E2E test: long-running work survives VM hibernation
+### 4. Stabilize embedded Dolt
+- use the storage model we actually want before pushing it into microVM lifecycle work
 
 ---
 
-## Reference Material
+## Inputs For Mission 7
 
-- `~/choiros-rs/docs/` — Architecture decisions
-- `~/choiros-rs/sandbox/src/` — VM spawn patterns
-- `~/cogent/docs/architecture.md` — Work graph design
-- `~/cogent/internal/adapters/native/` — Tool loop
+### `~/go-choir`
+Study:
+- `internal/vmctl/`
+- `internal/vmmanager/`
+- `internal/proxy/`
+- `nix/microvm.nix`
+- `nix/guest.nix`
+- `nix/storedisk.nix`
+- `docs/architecture.md`
+- `docs/PROJECT-STATE.md`
+
+### `~/choiros-rs`
+Study:
+- `hypervisor/src/`
+- `sandbox/src/`
+- user VM / worker VM lifecycle patterns
+- routing, ownership, snapshot, resume, and networking boundaries
+
+Important caveat:
+- `choiros-rs` hibernates too aggressively after idle
+- that hurts login/startup latency when there is no capacity pressure
+- copy the good parts, not that policy
+
+### `~/cogent`
+Study:
+- tool loop design
+- coagent tools
+- session persistence patterns
+- work graph ideas
+
+Important caveat:
+- do not recreate Cogent as an external forever-harness
+
+---
+
+## Questions Mission 7 Should Answer
+
+1. What should the user VM lifecycle be?
+   - warm
+   - cold boot
+   - snapshot resume
+   - some hybrid
+
+2. What should the worker VM lifecycle be?
+   - per-task
+   - pooled
+   - spawned on demand from a warm base
+
+3. When should hibernation happen?
+   - only under pressure
+   - only after longer idle windows
+   - probably not as an aggressive default for the primary user VM
+
+4. What belongs in `vmctl` versus proxy/runtime?
+   - ownership resolution
+   - lifecycle operations
+   - capacity decisions
+   - routing hints
+
+5. How should user VM vs worker VM isolation work?
+   - filesystem
+   - network
+   - model/tool privileges
+   - persistence boundaries
 
 ---
 
 ## Success Criteria
 
-1. ✅ File browser shows per-user isolated filesystem (microVM)
-2. ✅ Browser loads any site via proxy (not just Wikipedia)
-3. ✅ Cogent work graph spawns workers in microVMs
-4. ✅ Settings UI manages per-user preferences
-5. ✅ All prior M6 functionality preserved
+Mission 7 is ready to start in earnest when:
 
----
+1. `vtext` feels coherent as the main local product surface
+2. conductor, `vtext`, researchers, and `super` are visibly interacting
+3. trace makes it easy to tell what actually happened in a run
+4. embedded Dolt is stable enough that we are not changing the sandbox state model underneath the VM work
 
-**Status:** Planned, ready for Cogent implementation
+Then the next major question becomes:
+
+**How should `go-choir` run fast per-user microVMs without repeating `choiros-rs`’s slow-login / over-hibernate mistakes?**
