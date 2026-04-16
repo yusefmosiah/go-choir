@@ -30,6 +30,7 @@
           filter = path: type:
             type == "directory" ||
             (pkgs.lib.hasSuffix ".go" path) ||
+            (pkgs.lib.hasInfix "/internal/runtime/prompt_defaults/" path && pkgs.lib.hasSuffix ".md" path) ||
             (baseNameOf path == "go.mod") ||
             (baseNameOf path == "go.sum");
         };
