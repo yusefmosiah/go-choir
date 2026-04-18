@@ -25,15 +25,15 @@ import (
 //
 //   - Worker failure sends error message to parent
 //   - Parent task continues running (not crashed)
-//   - Error includes run_id and error message
+//   - Error includes loop_id and error message
 //   - Parent can spawn replacement worker if needed
 //   - Other sibling workers unaffected by one failure
 //   - Failed task transitions to failed state with error details
-//   - run.failed event emitted with error details
+//   - loop.failed event emitted with error details
 //   - Runtime health remains ready or degraded (not failed)
 //   - Parent can cancel running child runs (VAL-CHOIR-010)
 //   - Cancelled task transitions to cancelled state
-//   - run.cancelled event emitted
+//   - loop.cancelled event emitted
 
 // failureIsolationSetup creates a fresh Runtime with a configurable provider
 // for testing failure scenarios.
@@ -189,7 +189,7 @@ func TestFailureIsolation_ParentContinuesRunning(t *testing.T) {
 }
 
 // TestFailureIsolation_ErrorIncludesRunIDAndMessage verifies that the error
-// notification includes both the run_id and the error message
+// notification includes both the loop_id and the error message
 // (VAL-CHOIR-009, expected behavior #3).
 func TestFailureIsolation_ErrorIncludesRunIDAndMessage(t *testing.T) {
 	provider := &StubProvider{
@@ -206,9 +206,9 @@ func TestFailureIsolation_ErrorIncludesRunIDAndMessage(t *testing.T) {
 
 	task := waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
-	// Verify task record has both run_id and error.
+	// Verify task record has both loop_id and error.
 	if task.RunID != child.RunID {
-		t.Errorf("run_id: got %q, want %q", task.RunID, child.RunID)
+		t.Errorf("loop_id: got %q, want %q", task.RunID, child.RunID)
 	}
 	if task.Error == "" {
 		t.Fatal("error field should not be empty")
@@ -365,7 +365,7 @@ func TestFailureIsolation_RuntimeHealthRemainsReady(t *testing.T) {
 	waitForTaskState(t, rt, child2.RunID, 10*time.Second)
 }
 
-// TestFailureIsolation_TaskFailedEventEmitted verifies that a run.failed event
+// TestFailureIsolation_TaskFailedEventEmitted verifies that a loop.failed event
 // is emitted when a worker fails (VAL-CHOIR-009 pass condition).
 func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 	provider := &StubProvider{
@@ -384,13 +384,13 @@ func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 	child, _ := rt.StartChildRun(ctx, parentID, "fail for event test", "user-alice", nil)
 	waitForTaskState(t, rt, child.RunID, 10*time.Second)
 
-	// Check for run.failed event.
+	// Check for loop.failed event.
 	found := false
 	timeout := time.After(3 * time.Second)
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for run.failed event")
+			t.Fatal("timeout waiting for loop.failed event")
 		case ev := <-ch:
 			if ev.Record.Kind == types.EventRunFailed && ev.Record.RunID == child.RunID {
 				found = true
@@ -398,7 +398,7 @@ func TestFailureIsolation_TaskFailedEventEmitted(t *testing.T) {
 				var payload map[string]string
 				if err := json.Unmarshal(ev.Record.Payload, &payload); err == nil {
 					if payload["error"] == "" {
-						t.Error("run.failed event payload should contain error details")
+						t.Error("loop.failed event payload should contain error details")
 					}
 				}
 			}
@@ -467,7 +467,7 @@ func TestFailureIsolation_APIStatusReturnsFailedState(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Check status via API.
-	req = authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+spawnResp.RunID, "", "user-alice")
+	req = authenticatedRequest(http.MethodGet, "/api/agent/status?loop_id="+spawnResp.RunID, "", "user-alice")
 	w = httptest.NewRecorder()
 	handler.HandleRunStatus(w, req)
 
@@ -708,7 +708,7 @@ func TestCancellation_CancelRunningTask(t *testing.T) {
 	}
 }
 
-// TestCancellation_CancelledEventEmitted verifies that a run.cancelled event
+// TestCancellation_CancelledEventEmitted verifies that a loop.cancelled event
 // is emitted when a task is cancelled (VAL-CHOIR-010).
 func TestCancellation_CancelledEventEmitted(t *testing.T) {
 	provider := NewStubProvider(5 * time.Second)
@@ -735,7 +735,7 @@ func TestCancellation_CancelledEventEmitted(t *testing.T) {
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for run.cancelled event")
+			t.Fatal("timeout waiting for loop.cancelled event")
 		case ev := <-ch:
 			if ev.Record.Kind == types.EventRunCancelled && ev.Record.RunID == child.RunID {
 				found = true
@@ -869,7 +869,7 @@ func TestCancellation_CancelViaAPI(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Cancel via API.
-	cancelBody := fmt.Sprintf(`{"run_id":"%s"}`, spawnResp.RunID)
+	cancelBody := fmt.Sprintf(`{"loop_id":"%s"}`, spawnResp.RunID)
 	req = authenticatedRequest(http.MethodPost, "/api/agent/cancel", cancelBody, "user-alice")
 	w = httptest.NewRecorder()
 	handler.HandleCancel(w, req)
@@ -880,7 +880,7 @@ func TestCancellation_CancelViaAPI(t *testing.T) {
 
 	// Verify the task is cancelled via status API.
 	time.Sleep(200 * time.Millisecond)
-	req = authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+spawnResp.RunID, "", "user-alice")
+	req = authenticatedRequest(http.MethodGet, "/api/agent/status?loop_id="+spawnResp.RunID, "", "user-alice")
 	w = httptest.NewRecorder()
 	handler.HandleRunStatus(w, req)
 
@@ -997,7 +997,7 @@ func TestRecovery_InterruptedTasksMarkedFailedOnRestart(t *testing.T) {
 }
 
 // TestRecovery_RecoveredTasksEmitFailedEvents verifies that recovered runs
-// emit run.failed events (VAL-CHOIR-014).
+// emit loop.failed events (VAL-CHOIR-014).
 func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := fmt.Sprintf("%s/%s.db", dir, t.Name())
@@ -1052,13 +1052,13 @@ func TestRecovery_RecoveredTasksEmitFailedEvents(t *testing.T) {
 	// Wait for recovery.
 	time.Sleep(200 * time.Millisecond)
 
-	// Check for run.failed event from recovery.
+	// Check for loop.failed event from recovery.
 	found := false
 	timeout := time.After(3 * time.Second)
 	for !found {
 		select {
 		case <-timeout:
-			t.Fatal("timeout waiting for recovery run.failed event")
+			t.Fatal("timeout waiting for recovery loop.failed event")
 		case ev := <-ch:
 			if ev.Record.Kind == types.EventRunFailed && ev.Record.RunID == "recovery-event-test" {
 				found = true

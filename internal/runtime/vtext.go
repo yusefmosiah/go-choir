@@ -610,7 +610,7 @@ type vtextAgentRevisionRequest struct {
 // submission. It returns the stable task handle so the client can track
 // progress through the event stream (VAL-ETEXT-004).
 type vtextAgentRevisionResponse struct {
-	RunID     string         `json:"run_id"`
+	RunID     string         `json:"loop_id"`
 	DocID     string         `json:"doc_id"`
 	State     types.RunState `json:"state"`
 	CreatedAt string         `json:"created_at"`
@@ -784,7 +784,7 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 	// Emit the vtext-specific agent revision started event.
 	startedPayload, _ := json.Marshal(map[string]string{
 		"doc_id": doc.DocID,
-		"run_id": rec.RunID,
+		"loop_id": rec.RunID,
 	})
 	rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionStarted,
 		events.CauseTaskLifecycle, startedPayload)
@@ -819,9 +819,9 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 		b.WriteString(sourcePath)
 		b.WriteString(". Preserve the file-backed structure while producing the next version.")
 	}
-	if conductorRunID := metadataString(metadata, "conductor_run_id"); conductorRunID != "" {
-		b.WriteString("\nConductor task: ")
-		b.WriteString(conductorRunID)
+	if conductorLoopID := metadataString(metadata, "conductor_loop_id"); conductorLoopID != "" {
+		b.WriteString("\nConductor loop: ")
+		b.WriteString(conductorLoopID)
 		b.WriteString(".")
 	}
 	if current.RevisionID != "" {

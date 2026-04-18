@@ -311,7 +311,7 @@ func TestToolLoopFileReadWithRuntime(t *testing.T) {
 		t.Error("expected persisted tool.result event")
 	}
 	if !taskCompleted {
-		t.Error("expected persisted run.completed event")
+		t.Error("expected persisted loop.completed event")
 	}
 
 	// Also verify tool events were published to the live event bus.

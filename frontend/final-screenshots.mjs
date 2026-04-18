@@ -36,7 +36,7 @@ import { chromium } from '@playwright/test';
   
   // Submit task via console to show the flow
   const result = await page.evaluate(async () => {
-    const res = await fetch('https://draft.choir-ip.com/api/agent/run', {
+    const res = await fetch('https://draft.choir-ip.com/api/agent/loop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: 'Explain quantum computing in one sentence' })

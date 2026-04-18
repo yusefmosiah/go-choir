@@ -947,7 +947,7 @@ func TestConcurrentWorkers_StatusAPIReturnsCorrectState(t *testing.T) {
 
 	// Check each child's status via the status API.
 	for i, id := range childIDs {
-		req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id="+id, "", "user-alice")
+		req := authenticatedRequest(http.MethodGet, "/api/agent/status?loop_id="+id, "", "user-alice")
 		w := httptest.NewRecorder()
 		handler.HandleRunStatus(w, req)
 
@@ -961,7 +961,7 @@ func TestConcurrentWorkers_StatusAPIReturnsCorrectState(t *testing.T) {
 		}
 
 		if resp.RunID != id {
-			t.Errorf("child %d: run_id got %q, want %q", i, resp.RunID, id)
+			t.Errorf("child %d: loop_id got %q, want %q", i, resp.RunID, id)
 		}
 		if resp.OwnerID != "user-alice" {
 			t.Errorf("child %d: owner_id got %q, want user-alice", i, resp.OwnerID)

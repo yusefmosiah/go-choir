@@ -92,7 +92,7 @@ func TestCreateAndGetRun(t *testing.T) {
 	}
 
 	if got.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", got.RunID, rec.RunID)
 	}
 	if got.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", got.OwnerID, rec.OwnerID)
@@ -555,7 +555,7 @@ func TestTaskRecoveryAcrossReopen(t *testing.T) {
 		t.Fatalf("get task after reopen: %v", err)
 	}
 	if got.RunID != "task-recovery" {
-		t.Errorf("run_id: got %q, want task-recovery", got.RunID)
+		t.Errorf("loop_id: got %q, want task-recovery", got.RunID)
 	}
 	if got.State != types.RunRunning {
 		t.Errorf("state: got %q, want running", got.State)

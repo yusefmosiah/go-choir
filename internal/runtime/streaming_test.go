@@ -125,7 +125,7 @@ func waitForStreamingRunState(t *testing.T, rt *Runtime, runID, ownerID string, 
 // --- Streaming Tests ---
 
 // TestStreamingProviderEmitsMultipleDeltas verifies that a streaming provider
-// emits multiple run.delta events during run execution, one for each text
+// emits multiple loop.delta events during run execution, one for each text
 // chunk. This is the core behavior that enables real-time SSE streaming from
 // provider → runtime → browser (VAL-LLM-008).
 func TestStreamingProviderEmitsMultipleDeltas(t *testing.T) {
@@ -247,7 +247,7 @@ done:
 
 	// submitted should come first.
 	if len(kinds) == 0 || kinds[0] != types.EventRunSubmitted {
-		t.Errorf("first event: got %v, want run.submitted", kinds)
+		t.Errorf("first event: got %v, want loop.submitted", kinds)
 	}
 
 	// deltas should come before completed.
@@ -314,7 +314,7 @@ func TestStreamingEventsContainChunkText(t *testing.T) {
 }
 
 // TestStreamingCompletesWithProperTermination verifies that a streaming task
-// properly terminates with a run.completed event after all chunks are
+// properly terminates with a loop.completed event after all chunks are
 // emitted. This ensures the stream lifecycle is complete and the browser
 // receives a clear completion signal (VAL-LLM-008, VAL-LLM-009).
 func TestStreamingCompletesWithProperTermination(t *testing.T) {
@@ -346,7 +346,7 @@ func TestStreamingCompletesWithProperTermination(t *testing.T) {
 		t.Error("finished_at should be set for completed streaming task")
 	}
 
-	// Verify a run.completed event was emitted.
+	// Verify a loop.completed event was emitted.
 	evts, err := s.ListEvents(ctx, rec.RunID, 50)
 	if err != nil {
 		t.Fatalf("list events: %v", err)
@@ -359,7 +359,7 @@ func TestStreamingCompletesWithProperTermination(t *testing.T) {
 		}
 	}
 	if !hasCompleted {
-		t.Error("expected run.completed event for streaming run")
+		t.Error("expected loop.completed event for streaming run")
 	}
 }
 

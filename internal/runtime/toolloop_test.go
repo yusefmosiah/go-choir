@@ -101,7 +101,7 @@ func TestRunToolLoopEndTurn(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected run.progress event from loop iteration")
+		t.Error("expected loop.progress event from loop iteration")
 	}
 }
 

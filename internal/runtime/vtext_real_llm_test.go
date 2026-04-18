@@ -386,7 +386,7 @@ func TestVTextAgentRevisionRealLLM(t *testing.T) {
 	state := waitForTaskCompletion(t, h, agentResp.RunID, 60*time.Second)
 	if state != types.RunCompleted {
 		statusReq := vtextRealLLMRequest(t, http.MethodGet,
-			"/api/agent/status?run_id="+agentResp.RunID, nil)
+			"/api/agent/status?loop_id="+agentResp.RunID, nil)
 		statusW := httptest.NewRecorder()
 		h.HandleRunStatus(statusW, statusReq)
 		var statusResp runStatusResponse
@@ -396,7 +396,7 @@ func TestVTextAgentRevisionRealLLM(t *testing.T) {
 
 	// Get the task result.
 	statusReq := vtextRealLLMRequest(t, http.MethodGet,
-		"/api/agent/status?run_id="+agentResp.RunID, nil)
+		"/api/agent/status?loop_id="+agentResp.RunID, nil)
 	statusW := httptest.NewRecorder()
 	h.HandleRunStatus(statusW, statusReq)
 	var statusResp runStatusResponse
@@ -647,7 +647,7 @@ func TestVTextAgentRevisionRealLLMEventsEmitted(t *testing.T) {
 		}
 	}
 	if !hasDelta {
-		t.Error("expected run.delta events from real LLM streaming")
+		t.Error("expected loop.delta events from real LLM streaming")
 	}
 
 	t.Logf("✓ Event emission validated (%d events captured)", len(evts))
@@ -837,7 +837,7 @@ func TestVTextAgentRevisionRealLLMProviderMetadata(t *testing.T) {
 
 	// Check metadata.
 	statusReq := vtextRealLLMRequest(t, http.MethodGet,
-		"/api/agent/status?run_id="+agentResp.RunID, nil)
+		"/api/agent/status?loop_id="+agentResp.RunID, nil)
 	statusW := httptest.NewRecorder()
 	h.HandleRunStatus(statusW, statusReq)
 	var statusResp runStatusResponse

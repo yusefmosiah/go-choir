@@ -72,7 +72,7 @@ func TestTaskRecordJSONRoundTrip(t *testing.T) {
 	}
 
 	if decoded.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", decoded.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", decoded.RunID, rec.RunID)
 	}
 	if decoded.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, rec.OwnerID)
@@ -160,7 +160,7 @@ func TestEventRecordJSONRoundTrip(t *testing.T) {
 		t.Errorf("kind: got %q, want %q", decoded.Kind, rec.Kind)
 	}
 	if decoded.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", decoded.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", decoded.RunID, rec.RunID)
 	}
 	if decoded.OwnerID != rec.OwnerID {
 		t.Errorf("owner_id: got %q, want %q", decoded.OwnerID, rec.OwnerID)

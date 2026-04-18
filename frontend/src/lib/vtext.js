@@ -15,7 +15,7 @@
  *   GET    /api/vtext/revisions/{id}/blame        — blame revision
  *   POST   /api/vtext/documents/{id}/agent-revision — submit agent revision
  *
- * Conductor and worker runs still use /api/agent/* because those APIs are
+ * Conductor and worker loops still use /api/agent/* because those APIs are
  * runtime-wide rather than document-specific.
  */
 
@@ -205,8 +205,8 @@ export async function submitAgentRevision(docId, payload = {}) {
   return createAgentRevision(docId, payload);
 }
 
-export async function getAgentRevisionStatus(taskId) {
-  const res = await fetchWithRenewal(`/api/agent/status?run_id=${encodeURIComponent(taskId)}`, {
+export async function getAgentRevisionStatus(loopId) {
+  const res = await fetchWithRenewal(`/api/agent/status?loop_id=${encodeURIComponent(loopId)}`, {
     method: 'GET',
   });
 

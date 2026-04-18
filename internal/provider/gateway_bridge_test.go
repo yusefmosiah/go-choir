@@ -140,7 +140,7 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		t.Fatalf("expected 1 user message, got: %+v", mock.lastReq.Messages)
 	}
 
-	// Verify a run.delta event was emitted during streaming.
+	// Verify a loop.delta event was emitted during streaming.
 	hasDelta := false
 	for _, e := range emitted {
 		if e.kind == types.EventRunDelta {
@@ -151,7 +151,7 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 		}
 	}
 	if !hasDelta {
-		t.Error("expected run.delta event from streaming gateway bridge")
+		t.Error("expected loop.delta event from streaming gateway bridge")
 	}
 }
 

@@ -339,8 +339,8 @@
         requestedApp: 'vtext',
         initialDocumentTitle: fallbackWindowTitle,
       });
-      const conductorTaskId = task.run_id || '';
-      const decision = await waitForConductorDecision(conductorTaskId);
+      const conductorLoopId = task.loop_id || '';
+      const decision = await waitForConductorDecision(conductorLoopId);
 
       if (decision.action === 'toast') {
         showToast(decision.message || 'Conductor acknowledged the request');
@@ -355,11 +355,11 @@
       openApp('vtext', 'VText', '📝', {
         windowTitle: decision.title || fallbackWindowTitle,
         docId: decision.doc_id || '',
-        initialTaskId: decision.initial_run_id || '',
+        initialLoopId: decision.initial_loop_id || '',
         seedPrompt: decision.seed_prompt || text,
         initialContent: decision.initial_content || decision.seed_prompt || text,
         createInitialVersion: decision.create_initial_version !== false,
-        conductorTaskId,
+        conductorLoopId,
       });
     } catch (err) {
       if (err instanceof AuthRequiredError) {

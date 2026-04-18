@@ -712,7 +712,7 @@ func waitForTaskCompletion(t *testing.T, h *APIHandler, taskID string, timeout t
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		req := vtextRequest(t, http.MethodGet, "/api/agent/status?run_id="+taskID, nil)
+		req := vtextRequest(t, http.MethodGet, "/api/agent/status?loop_id="+taskID, nil)
 		w := httptest.NewRecorder()
 		h.HandleRunStatus(w, req)
 		if w.Code != http.StatusOK {

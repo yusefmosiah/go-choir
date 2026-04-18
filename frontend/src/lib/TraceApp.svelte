@@ -50,7 +50,7 @@
   }
 
   function runProfile(run) {
-    return run?.agent_profile || run?.metadata?.agent_profile || run?.metadata?.type || 'run';
+    return run?.agent_profile || run?.metadata?.agent_profile || run?.metadata?.type || 'loop';
   }
 
   function runRole(run) {
@@ -58,7 +58,7 @@
   }
 
   function runParentId(run) {
-    return run?.parent_run_id || run?.metadata?.parent_id || '';
+    return run?.parent_loop_id || run?.metadata?.parent_id || '';
   }
 
   function workflowTrajectoryId(run) {
@@ -67,13 +67,13 @@
       run?.trajectory_id ||
       run?.channel_id ||
       run?.metadata?.channel_id ||
-      run?.run_id ||
+      run?.loop_id ||
       ''
     );
   }
 
   function workflowDetailChannelId(run) {
-    return run?.channel_id || run?.metadata?.channel_id || run?.run_id || '';
+    return run?.channel_id || run?.metadata?.channel_id || run?.loop_id || '';
   }
 
   // Back-compat alias: anything still calling workflowChannelId gets the
@@ -84,7 +84,7 @@
 
   function excerpt(text, max = 72) {
     const normalized = (text || '').replace(/\s+/g, ' ').trim();
-    if (!normalized) return 'Untitled run';
+    if (!normalized) return 'Untitled loop';
     if (normalized.length <= max) return normalized;
     return `${normalized.slice(0, max - 1)}…`;
   }
@@ -109,7 +109,7 @@
   function workflowTitle(workflow) {
     const latestRun = workflow?.latestRun;
     const prompt = excerpt(latestRun?.prompt || latestRun?.metadata?.original_prompt || '', 54);
-    if (prompt !== 'Untitled run') return prompt;
+    if (prompt !== 'Untitled loop') return prompt;
     if (latestRun?.metadata?.doc_id) return `vtext ${String(latestRun.metadata.doc_id).slice(0, 8)}`;
     return workflow?.channelId || 'workflow';
   }
@@ -154,11 +154,11 @@
   function eventSummary(eventRecord) {
     const payload = parsePayload(eventRecord.payload);
     switch (eventRecord.kind) {
-      case 'run.submitted':
-        return payload.parent_id ? `spawned from ${payload.parent_id.slice(0, 8)}` : 'run submitted';
-      case 'run.started':
-        return 'run started';
-      case 'run.progress':
+      case 'loop.submitted':
+        return payload.parent_id ? `spawned from loop ${payload.parent_id.slice(0, 8)}` : 'loop submitted';
+      case 'loop.started':
+        return 'loop started';
+      case 'loop.progress':
         if (payload.tool_calls !== undefined) {
           return `tool loop iteration ${payload.iteration || '?'} with ${payload.tool_calls} tool calls`;
         }
@@ -172,11 +172,11 @@
         return `${payload.tool || 'tool'} returned${payload.is_error ? ' error' : ''}`;
       case 'channel.message':
         return `${payload.role || 'agent'} posted to ${payload.channel_id || 'channel'}`;
-      case 'run.completed':
-        return 'run completed';
-      case 'run.failed':
-      case 'run.blocked':
-      case 'run.cancelled':
+      case 'loop.completed':
+        return 'loop completed';
+      case 'loop.failed':
+      case 'loop.blocked':
+      case 'loop.cancelled':
         return payload.error || eventRecord.kind;
       case 'vtext.agent_revision.started':
         return 'vtext revision started';
@@ -192,7 +192,7 @@
   }
 
   function eventIsVisible(eventRecord) {
-    return eventRecord?.kind !== 'run.delta';
+    return eventRecord?.kind !== 'loop.delta';
   }
 
   function formatTimestamp(value) {
@@ -224,7 +224,7 @@
     }
     detailLoading = true;
     try {
-      // A trajectory may span multiple channels (conductor.channel = run_id,
+      // A trajectory may span multiple channels (conductor.channel = loop_id,
       // vtext.channel = doc_id, researcher channel = inherited). Filter the
       // locally-known owner runs by trajectory_id, then fan-out event and
       // message queries over each distinct channel in the trajectory. This
@@ -303,7 +303,7 @@
         scheduleWorkflowRefresh();
         if (
           selectedChannelId &&
-          (eventRecord.channel_id === selectedChannelId || workflowRuns.some((run) => run.run_id === eventRecord.run_id))
+          (eventRecord.channel_id === selectedChannelId || workflowRuns.some((run) => run.loop_id === eventRecord.loop_id))
         ) {
           scheduleSelectedWorkflowRefresh();
         }
@@ -366,7 +366,7 @@
   $: researcherRuns = workflowRuns.filter((run) => runProfile(run) === 'researcher');
   $: superRuns = workflowRuns.filter((run) => ['super', 'co-super'].includes(runProfile(run)));
   $: toolInvocations = workflowEvents.filter((eventRecord) => eventRecord.kind === 'tool.invoked').length;
-  $: childMessages = workflowMessages.filter((message) => message.from_run_id && message.from_run_id !== latestRun?.run_id);
+  $: childMessages = workflowMessages.filter((message) => message.from_loop_id && message.from_loop_id !== latestRun?.loop_id);
 
   onMount(() => {
     loadTraceState();
@@ -390,7 +390,7 @@
       <div class="topology-card" data-trace-topology>
         <div><strong>Provider</strong> {topology.active_provider}</div>
         <div><strong>Configured researcher slots</strong> {topology.researcher_count}</div>
-        <div><strong>Running runs</strong> {topology.running_runs}</div>
+        <div><strong>Running loops</strong> {topology.running_runs}</div>
         <div><strong>Active channels</strong> {topology.channel_count}</div>
         <div><strong>Health</strong> {topology.runtime_health}</div>
       </div>
@@ -417,7 +417,7 @@
             <div class="workflow-title">{workflowTitle(workflow)}</div>
             <div class="workflow-meta">
               <span>{workflowSubtitle(workflow)}</span>
-              <span>{workflow.runs.length} runs</span>
+              <span>{workflow.runs.length} loops</span>
             </div>
           </button>
         {/each}
@@ -441,7 +441,7 @@
         </div>
 
         <div class="summary-metrics">
-          <div class="metric"><span>{workflowRuns.length}</span><div class="metric-label">runs</div></div>
+          <div class="metric"><span>{workflowRuns.length}</span><div class="metric-label">loops</div></div>
           <div class="metric"><span>{delegationRuns.length}</span><div class="metric-label">delegations</div></div>
           <div class="metric"><span>{researcherRuns.length}</span><div class="metric-label">researchers</div></div>
           <div class="metric"><span>{superRuns.length}</span><div class="metric-label">supers</div></div>
@@ -452,14 +452,14 @@
 
       <section class="graph-panel" data-trace-family>
         <h3>Workflow graph</h3>
-        <div class="section-note">One shared channel, many runs. Parent edges show delegation. Message bodies live below.</div>
+        <div class="section-note">One trajectory, many agent loops. Parent edges show delegation. Message bodies live below.</div>
         {#if detailLoading && workflowRuns.length === 0}
-          <div class="empty-state">Loading workflow runs…</div>
+          <div class="empty-state">Loading workflow loops…</div>
         {:else if workflowRuns.length === 0}
-          <div class="empty-state">No runs recorded for this channel yet.</div>
+          <div class="empty-state">No agent loops recorded for this trajectory yet.</div>
         {:else}
           <div class="family-grid">
-            {#each workflowRuns as run (run.run_id)}
+            {#each workflowRuns as run (run.loop_id)}
               <div class={`family-card ${taskStateTone(run.state)}`}>
                 <div class="family-card-top">
                   <strong>{runProfile(run)}</strong>
@@ -467,9 +467,9 @@
                 </div>
                 <div class="family-card-body">{excerpt(run.prompt, 92)}</div>
                 <div class="family-card-meta">
-                  <span>{run.run_id}</span>
+                  <span>loop {run.loop_id}</span>
                   {#if runParentId(run)}
-                    <span>parent {runParentId(run).slice(0, 8)}</span>
+                    <span>parent loop {runParentId(run).slice(0, 8)}</span>
                   {/if}
                   <span>{formatTimestamp(run.created_at)}</span>
                 </div>
@@ -489,7 +489,7 @@
         {:else}
           <div class="message-list">
             {#each workflowMessages as message (`${message.channel_id}-${message.seq}`)}
-              <div class={`message-card ${message.from_run_id && latestRun && message.from_run_id !== latestRun.run_id ? 'message-child' : ''}`}>
+              <div class={`message-card ${message.from_loop_id && latestRun && message.from_loop_id !== latestRun.loop_id ? 'message-child' : ''}`}>
                 <div class="message-card-top">
                   <strong>{message.from || message.role || 'agent'}</strong>
                   <span>{message.role || 'message'}</span>
@@ -500,8 +500,8 @@
                   {#if message.from_agent_id}
                     <span>agent {message.from_agent_id}</span>
                   {/if}
-                  {#if message.from_run_id}
-                    <span>run {message.from_run_id}</span>
+                  {#if message.from_loop_id}
+                    <span>loop {message.from_loop_id}</span>
                   {/if}
                 </div>
                 <pre class="message-content">{message.content}</pre>
@@ -514,7 +514,7 @@
       <section class="timeline-panel">
         <h3>Event timeline</h3>
         {#if hiddenDeltaCount > 0}
-          <div class="timeline-note">Hiding {hiddenDeltaCount} raw `run.delta` events so the causal steps stay readable.</div>
+          <div class="timeline-note">Hiding {hiddenDeltaCount} raw `loop.delta` text-stream events so the causal steps stay readable.</div>
         {/if}
         {#if visibleWorkflowEvents.length === 0}
           <div class="empty-state">No events captured yet for this workflow.</div>
@@ -526,8 +526,8 @@
                 <div class="event-kind">{eventRecord.kind}</div>
                 <div class="event-summary">
                   <div>{eventSummary(eventRecord)}</div>
-                  {#if eventRecord.run_id}
-                    <div class="event-meta">run {eventRecord.run_id}</div>
+                  {#if eventRecord.loop_id}
+                    <div class="event-meta">loop {eventRecord.loop_id}</div>
                   {/if}
                 </div>
               </div>
@@ -536,7 +536,7 @@
         {/if}
       </section>
     {:else if !loading}
-      <div class="empty-state">Select a workflow to inspect its runs, message passing, and event history.</div>
+      <div class="empty-state">Select a workflow to inspect its agent loops, message passing, and event history.</div>
     {/if}
   </div>
 </div>

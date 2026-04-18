@@ -157,11 +157,44 @@
 
 ---
 
+### `trajectory`
+
+**Definition:** The full causal path started by one user request and continued through conductor routing, appagent ownership, worker delegation, and later revisions.
+
+**What it includes:**
+- prompt-bar input
+- `conductor`
+- the owning appagent, usually `vtext`
+- delegated workers and their messages
+- later user revisions and agent-authored versions for that same document/work surface
+
+**Important rule:** this is the primary thing Trace should show as one coherent unit.
+
+**Prior / nearby names:**
+- workflow
+- session thread
+- end-to-end request
+
+---
+
+### `loop`
+
+**Definition:** One individual LLM/tool execution record inside a larger trajectory.
+
+**Important rule:** use `loop` for a single execution record; do not use `run` as the primary product term for this concept.
+
+**Prior / nearby names:**
+- run
+- task record
+- execution loop
+
+---
+
 ### `task`
 
-**Definition:** A runtime execution handle or persisted record for some work, not the primary product concept.
+**Definition:** Legacy compatibility wording for a runtime handle/record, not a preferred product concept.
 
-**Important rule:** when we are talking about user-facing behavior or MAS semantics, prefer `work`, `run`, `delegation`, `agent`, or `version` unless we specifically mean the runtime record.
+**Important rule:** in user-facing behavior and MAS semantics, prefer `trajectory`, `loop`, `work`, `delegation`, `agent`, or `version`. Use `task` only when discussing old code, compatibility layers, or trivia.
 
 **Prior / nearby names:**
 - runtime task
@@ -288,7 +321,9 @@
 
 ### `Trace`
 
-**Definition:** The app/surface used to inspect runs, delegations, tool calls, and message flow in the MAS.
+**Definition:** The app/surface used to inspect trajectories, loops, delegations, tool calls, and message flow in the MAS.
+
+**Important rule:** Trace should center the trajectory as the primary unit and show individual loops as children inside it.
 
 **What it is not:**
 - not the same thing as old Rust Trace
@@ -412,6 +447,8 @@ Use these only when talking about history or compatibility:
 
 - `etext`
 - writer
+- run
+- task
 - supervisor
 - terminal agent
 - Factory Droid / factory workflows as an architectural reference
@@ -420,6 +457,8 @@ Preferred replacements:
 
 - `vtext`
 - `vtext agent`
+- trajectory
+- loop
 - `super`
 - `conductor`
 
@@ -430,10 +469,12 @@ Preferred replacements:
 If we need the shortest consistent language:
 
 - top-level input goes to `conductor`
+- one prompt-bar request starts one `trajectory`
 - `conductor` usually spawns `vtext`
 - the user prompt becomes `v0`
 - the `vtext` agent writes `v1`
 - `vtext` spawns workers like `researcher` or `super` as needed
 - workers send messages back over coagent tools
+- those worker and appagent executions are `loops` inside the trajectory
 - the `vtext` agent writes new canonical versions
 - users can always edit and hit Revise to create a new user-authored version

@@ -19,7 +19,7 @@ import { chromium } from '@playwright/test';
     '/api/sandbox/health',
     '/api/shell/bootstrap',
     '/api/vm/status',
-    '/api/agent/run',
+    '/api/agent/loop',
     '/api/events',
   ];
   
@@ -40,7 +40,7 @@ import { chromium } from '@playwright/test';
   console.log('\n\nTrying to submit a task...');
   const taskResponse = await page.evaluate(async () => {
     try {
-      const res = await fetch('/api/agent/run', {
+      const res = await fetch('/api/agent/loop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'Say hello world' })

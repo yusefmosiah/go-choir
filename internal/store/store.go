@@ -59,10 +59,10 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-	run_id     TEXT PRIMARY KEY,
+	loop_id     TEXT PRIMARY KEY,
 	agent_id    TEXT NOT NULL DEFAULT '',
 	channel_id  TEXT NOT NULL DEFAULT '',
-	parent_run_id TEXT NOT NULL DEFAULT '',
+	parent_loop_id TEXT NOT NULL DEFAULT '',
 	agent_profile TEXT NOT NULL DEFAULT '',
 	agent_role TEXT NOT NULL DEFAULT '',
 	owner_id    TEXT NOT NULL,
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS events (
 	event_id   TEXT NOT NULL,
-	run_id    TEXT NOT NULL DEFAULT '',
+	loop_id    TEXT NOT NULL DEFAULT '',
 	agent_id   TEXT NOT NULL DEFAULT '',
 	channel_id TEXT NOT NULL DEFAULT '',
 	owner_id   TEXT NOT NULL DEFAULT '',
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 	seq             INTEGER NOT NULL,
 	owner_id        TEXT NOT NULL DEFAULT '',
 	from_agent_id   TEXT NOT NULL DEFAULT '',
-	from_run_id     TEXT NOT NULL DEFAULT '',
+	from_loop_id     TEXT NOT NULL DEFAULT '',
 	from_name       TEXT NOT NULL DEFAULT '',
 	role            TEXT NOT NULL DEFAULT '',
 	content         TEXT NOT NULL,
@@ -111,8 +111,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
 CREATE INDEX IF NOT EXISTS idx_runs_sandbox_id ON runs(sandbox_id);
 CREATE INDEX IF NOT EXISTS idx_runs_agent_id ON runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_runs_channel_id ON runs(channel_id);
-CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id ON runs(parent_run_id);
-CREATE INDEX IF NOT EXISTS idx_events_run_id_seq ON events(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_runs_parent_loop_id ON runs(parent_loop_id);
+CREATE INDEX IF NOT EXISTS idx_events_loop_id_seq ON events(loop_id, seq);
 CREATE INDEX IF NOT EXISTS idx_events_owner_id ON events(owner_id);
 CREATE INDEX IF NOT EXISTS idx_events_agent_id ON events(agent_id);
 CREATE INDEX IF NOT EXISTS idx_events_channel_id_ts ON events(channel_id, ts);
@@ -201,7 +201,7 @@ func (s *Store) bootstrap() error {
 	}{
 		{"runs", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"runs", "channel_id", "TEXT NOT NULL DEFAULT ''"},
-		{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"runs", "parent_loop_id", "TEXT NOT NULL DEFAULT ''"},
 		{"runs", "agent_profile", "TEXT NOT NULL DEFAULT ''"},
 		{"runs", "agent_role", "TEXT NOT NULL DEFAULT ''"},
 		{"events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
@@ -327,7 +327,7 @@ func (s *Store) CreateRun(ctx context.Context, rec types.RunRecord) error {
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO runs (run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json)
+		`INSERT INTO runs (loop_id, agent_id, channel_id, parent_loop_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.RunID,
 		rec.AgentID,
@@ -355,9 +355,9 @@ func (s *Store) CreateRun(ctx context.Context, rec types.RunRecord) error {
 // GetRun returns the run with the given run ID.
 func (s *Store) GetRun(ctx context.Context, runID string) (types.RunRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+		`SELECT loop_id, agent_id, channel_id, parent_loop_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
 		   FROM runs
-		  WHERE run_id = ?`,
+		  WHERE loop_id = ?`,
 		runID,
 	)
 	return scanRun(row)
@@ -374,7 +374,7 @@ func (s *Store) UpdateRun(ctx context.Context, rec types.RunRecord) error {
 		`UPDATE runs
 		    SET agent_id = ?,
 		        channel_id = ?,
-		        parent_run_id = ?,
+		        parent_loop_id = ?,
 		        agent_profile = ?,
 		        agent_role = ?,
 		        owner_id = ?,
@@ -386,7 +386,7 @@ func (s *Store) UpdateRun(ctx context.Context, rec types.RunRecord) error {
 		        updated_at = ?,
 		        finished_at = ?,
 		        metadata_json = ?
-		  WHERE run_id = ?`,
+		  WHERE loop_id = ?`,
 		rec.AgentID,
 		rec.ChannelID,
 		rec.ParentRunID,
@@ -455,7 +455,7 @@ func (s *Store) ListRunsByChannel(ctx context.Context, ownerID, channelID string
 // GetLatestActiveRunByAgent returns the most recent non-terminal run for an agent.
 func (s *Store) GetLatestActiveRunByAgent(ctx context.Context, ownerID, agentID string) (types.RunRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+		`SELECT loop_id, agent_id, channel_id, parent_loop_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
 		   FROM runs
 		  WHERE owner_id = ?
 		    AND agent_id = ?
@@ -469,7 +469,7 @@ func (s *Store) GetLatestActiveRunByAgent(ctx context.Context, ownerID, agentID 
 }
 
 func (s *Store) listRunsWhere(ctx context.Context, where string, args []any, limit int) ([]types.RunRecord, error) {
-	query := `SELECT run_id, agent_id, channel_id, parent_run_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
+	query := `SELECT loop_id, agent_id, channel_id, parent_loop_id, agent_profile, agent_role, owner_id, sandbox_id, state, prompt, result, error, created_at, updated_at, finished_at, metadata_json
 	            FROM runs`
 	if where != "" {
 		query += " WHERE " + where
@@ -513,7 +513,7 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 
  	// Compute the next sequence number for this run.
 	row := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id = ?`,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE loop_id = ?`,
 		rec.RunID,
 	)
 	if err := row.Scan(&rec.Seq); err != nil {
@@ -521,7 +521,7 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO events (event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json)
+		`INSERT INTO events (event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.EventID,
 		rec.RunID,
@@ -558,9 +558,9 @@ func (s *Store) ListEventsAfter(ctx context.Context, runID string, afterSeq int6
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
-		  WHERE run_id = ?
+		  WHERE loop_id = ?
 		    AND seq > ?
 		  ORDER BY seq ASC
 		  LIMIT ?`,
@@ -595,7 +595,7 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		  ORDER BY ts DESC
@@ -632,7 +632,7 @@ func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afte
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		    AND seq > ?
@@ -667,7 +667,7 @@ func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID stri
 		limit = 200
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, run_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		    AND channel_id = ?
@@ -716,7 +716,7 @@ func (s *Store) AppendChannelMessage(ctx context.Context, message *types.Channel
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_run_id, from_name, role, content, created_at)
+		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_loop_id, from_name, role, content, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		message.ChannelID,
 		message.Seq,
@@ -742,7 +742,7 @@ func (s *Store) ListChannelMessages(ctx context.Context, ownerID, channelID stri
 	if limit <= 0 {
 		limit = 200
 	}
-	query := `SELECT channel_id, seq, from_agent_id, from_run_id, from_name, role, content, created_at
+	query := `SELECT channel_id, seq, from_agent_id, from_loop_id, from_name, role, content, created_at
 		   FROM channel_messages
 		  WHERE channel_id = ?
 		    AND seq > ?`

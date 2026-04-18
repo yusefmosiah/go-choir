@@ -234,7 +234,7 @@ test('prompt bar routes normal input through conductor and opens vtext', async (
   const promptInput = page.locator('[data-prompt-input]');
   const initialVTextCount = await page.locator('[data-vtext-app]').count();
   const responsePromise = page.waitForResponse((response) =>
-    response.url().includes('/api/agent/run') && response.request().method() === 'POST'
+    response.url().includes('/api/agent/loop') && response.request().method() === 'POST'
   );
 
   await promptInput.fill('Draft a project outline');
@@ -262,7 +262,7 @@ test('prompt bar sends greetings through conductor instead of frontend pattern m
 
   const promptInput = page.locator('[data-prompt-input]');
   const responsePromise = page.waitForResponse((response) =>
-    response.url().includes('/api/agent/run') && response.request().method() === 'POST'
+    response.url().includes('/api/agent/loop') && response.request().method() === 'POST'
   );
   await promptInput.fill('hi');
   await promptInput.press('Enter');

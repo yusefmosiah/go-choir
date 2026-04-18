@@ -10,21 +10,21 @@ export async function listAgentRuns(limit = 100, { channelId = '' } = {}) {
   if (channelId) {
     params.set('channel_id', channelId);
   }
-  const res = await fetchWithRenewal(`/api/agent/runs?${params.toString()}`, {
+  const res = await fetchWithRenewal(`/api/agent/loops?${params.toString()}`, {
     method: 'GET',
   });
 
   if (!res.ok) {
-    await decodeError(res, `Run list fetch failed (${res.status})`);
+    await decodeError(res, `Loop list fetch failed (${res.status})`);
   }
 
   return res.json();
 }
 
-export async function listAgentEvents({ runId = '', channelId = '', limit = 200 } = {}) {
+export async function listAgentEvents({ loopId = '', channelId = '', limit = 200 } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
-  if (runId) {
-    params.set('run_id', runId);
+  if (loopId) {
+    params.set('loop_id', loopId);
   }
   if (channelId) {
     params.set('channel_id', channelId);

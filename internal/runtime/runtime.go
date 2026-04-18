@@ -29,7 +29,7 @@ type Runtime struct {
 
 	mu      sync.Mutex
 	health  types.RuntimeHealthState
-	running map[string]context.CancelFunc // run_id → cancel function
+	running map[string]context.CancelFunc // loop_id → cancel function
 
 	wg           sync.WaitGroup
 	toolRegistry *ToolRegistry
@@ -572,7 +572,7 @@ func (rt *Runtime) executeRun(ctx context.Context, rec *types.RunRecord) {
 				if kind == types.EventRunProgress {
 					progressPayload, _ := json.Marshal(map[string]string{
 						"doc_id": docID,
-						"run_id": rec.RunID,
+						"loop_id": rec.RunID,
 						"phase":  phase,
 					})
 					rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionProgress,
@@ -751,39 +751,96 @@ type conductorDecision struct {
 	Message              string `json:"message,omitempty"`
 	DocID                string `json:"doc_id,omitempty"`
 	InitialRevisionID    string `json:"initial_revision_id,omitempty"`
-	InitialRunID         string `json:"initial_run_id,omitempty"`
+	InitialLoopID        string `json:"initial_loop_id,omitempty"`
 }
 
-func normalizeConductorDecision(rec *types.RunRecord) string {
+func conductorSeedPrompt(rec *types.RunRecord) string {
 	if rec == nil {
-		return `{"action":"open_app","app":"vtext","title":"VText","seed_prompt":"","initial_content":"","create_initial_version":true}`
+		return ""
 	}
-
 	seedPrompt, _ := rec.Metadata["seed_prompt"].(string)
 	if strings.TrimSpace(seedPrompt) == "" {
 		seedPrompt = strings.TrimSpace(rec.Prompt)
 	}
+	return strings.TrimSpace(seedPrompt)
+}
 
+func conductorRequestedApp(rec *types.RunRecord) string {
+	if rec == nil {
+		return AgentProfileVText
+	}
 	requestedApp, _ := rec.Metadata["requested_app"].(string)
 	if strings.TrimSpace(requestedApp) == "" {
 		requestedApp = AgentProfileVText
 	}
+	return strings.TrimSpace(requestedApp)
+}
 
+func conductorWindowTitle(rec *types.RunRecord, seedPrompt string) string {
+	if rec == nil {
+		if strings.TrimSpace(seedPrompt) != "" {
+			return strings.TrimSpace(seedPrompt)
+		}
+		return "VText"
+	}
 	title, _ := rec.Metadata["initial_document_title"].(string)
 	if strings.TrimSpace(title) == "" {
 		title = strings.TrimSpace(seedPrompt)
 	}
-	if title == "" {
+	if strings.TrimSpace(title) == "" {
 		title = "VText"
 	}
+	return strings.TrimSpace(title)
+}
 
-	defaultDecision := conductorDecision{
-		Action:               "open_app",
-		App:                  requestedApp,
-		Title:                title,
-		SeedPrompt:           seedPrompt,
-		InitialContent:       seedPrompt,
-		CreateInitialVersion: ptrBool(true),
+func fillConductorDecisionFromRun(rec *types.RunRecord, decision conductorDecision) conductorDecision {
+	seedPrompt := conductorSeedPrompt(rec)
+	requestedApp := conductorRequestedApp(rec)
+	if strings.TrimSpace(decision.Action) == "" {
+		decision.Action = "open_app"
+	}
+	if decision.Action == "open_app" {
+		if strings.TrimSpace(decision.App) == "" {
+			decision.App = requestedApp
+		}
+		if strings.TrimSpace(decision.Title) == "" {
+			decision.Title = conductorWindowTitle(rec, seedPrompt)
+		}
+		if strings.TrimSpace(decision.SeedPrompt) == "" {
+			decision.SeedPrompt = seedPrompt
+		}
+		if strings.TrimSpace(decision.InitialContent) == "" {
+			decision.InitialContent = seedPrompt
+		}
+		if decision.CreateInitialVersion == nil {
+			decision.CreateInitialVersion = ptrBool(true)
+		}
+		if rec != nil && rec.Metadata != nil {
+			if decision.DocID == "" {
+				decision.DocID = metadataStringValue(rec.Metadata, "doc_id")
+			}
+			if decision.InitialRevisionID == "" {
+				decision.InitialRevisionID = metadataStringValue(rec.Metadata, "initial_revision_id")
+			}
+			if decision.InitialLoopID == "" {
+				decision.InitialLoopID = metadataStringValue(rec.Metadata, "initial_loop_id")
+			}
+		}
+	}
+	if decision.Action == "toast" && strings.TrimSpace(decision.Message) == "" {
+		decision.Message = "Conductor acknowledged the request."
+	}
+	return decision
+}
+
+func normalizeConductorDecision(rec *types.RunRecord) string {
+	defaultDecision := fillConductorDecisionFromRun(rec, conductorDecision{})
+	if rec == nil {
+		out, err := json.Marshal(defaultDecision)
+		if err != nil {
+			return `{"action":"open_app","app":"vtext","title":"VText","seed_prompt":"","initial_content":"","create_initial_version":true}`
+		}
+		return string(out)
 	}
 
 	if raw := strings.TrimSpace(rec.Result); raw != "" {
@@ -791,25 +848,9 @@ func normalizeConductorDecision(rec *types.RunRecord) string {
 		if err := json.Unmarshal([]byte(raw), &parsed); err == nil && strings.TrimSpace(parsed.Action) != "" {
 			switch strings.TrimSpace(parsed.Action) {
 			case "toast":
-				if strings.TrimSpace(parsed.Message) == "" {
-					parsed.Message = "Conductor acknowledged the request."
-				}
+				parsed = fillConductorDecisionFromRun(rec, parsed)
 			case "open_app":
-				if strings.TrimSpace(parsed.App) == "" {
-					parsed.App = requestedApp
-				}
-				if strings.TrimSpace(parsed.Title) == "" {
-					parsed.Title = title
-				}
-				if strings.TrimSpace(parsed.SeedPrompt) == "" {
-					parsed.SeedPrompt = seedPrompt
-				}
-				if strings.TrimSpace(parsed.InitialContent) == "" {
-					parsed.InitialContent = seedPrompt
-				}
-				if parsed.CreateInitialVersion == nil {
-					parsed.CreateInitialVersion = ptrBool(true)
-				}
+				parsed = fillConductorDecisionFromRun(rec, parsed)
 			default:
 				parsed = defaultDecision
 			}
@@ -830,6 +871,92 @@ func ptrBool(v bool) *bool {
 	return &v
 }
 
+func (rt *Runtime) ensureConductorVTextRoute(ctx context.Context, rec *types.RunRecord, objective string) (conductorDecision, error) {
+	if rec == nil || agentProfileForRun(rec) != AgentProfileConductor {
+		return conductorDecision{}, fmt.Errorf("conductor route requires a conductor record")
+	}
+	if rec.State == "" || rec.State == types.RunPending {
+		if current, err := rt.store.GetRun(ctx, rec.RunID); err == nil {
+			*rec = current
+		}
+	}
+
+	existing := fillConductorDecisionFromRun(rec, conductorDecision{})
+	if existing.Action == "open_app" && existing.App == AgentProfileVText && strings.TrimSpace(existing.DocID) != "" {
+		return existing, nil
+	}
+
+	now := time.Now().UTC()
+	decision := fillConductorDecisionFromRun(rec, conductorDecision{})
+	doc := types.Document{
+		DocID:     uuid.New().String(),
+		OwnerID:   rec.OwnerID,
+		Title:     decision.Title,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if strings.TrimSpace(doc.Title) == "" {
+		doc.Title = "VText"
+	}
+	if err := rt.store.CreateDocument(ctx, doc); err != nil {
+		return conductorDecision{}, fmt.Errorf("create vtext document: %w", err)
+	}
+
+	revMeta, _ := json.Marshal(map[string]any{
+		"seed_prompt":      decision.SeedPrompt,
+		"conductor_loop_id": rec.RunID,
+		"created_from":     "conductor",
+	})
+	rev := types.Revision{
+		RevisionID:  uuid.New().String(),
+		DocID:       doc.DocID,
+		OwnerID:     rec.OwnerID,
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: rec.OwnerID,
+		Content:     decision.InitialContent,
+		Citations:   json.RawMessage("[]"),
+		Metadata:    revMeta,
+		CreatedAt:   now,
+	}
+	if err := rt.store.CreateRevision(ctx, rev); err != nil {
+		return conductorDecision{}, fmt.Errorf("create initial vtext revision: %w", err)
+	}
+
+	doc.CurrentRevisionID = rev.RevisionID
+	initialRun, err := rt.submitVTextAgentRevisionRun(ctx, doc, rec.OwnerID, vtextAgentRevisionRequest{
+		Intent: "create",
+		Prompt: strings.TrimSpace(objective),
+	}, rec.RunID)
+	if err != nil {
+		return conductorDecision{}, fmt.Errorf("submit initial vtext revision: %w", err)
+	}
+
+	decision.DocID = doc.DocID
+	decision.InitialRevisionID = rev.RevisionID
+	if initialRun != nil {
+		decision.InitialLoopID = initialRun.RunID
+	}
+	decision = fillConductorDecisionFromRun(rec, decision)
+
+	if rec.Metadata == nil {
+		rec.Metadata = make(map[string]any)
+	}
+	rec.Metadata["doc_id"] = decision.DocID
+	rec.Metadata["initial_revision_id"] = decision.InitialRevisionID
+	if decision.InitialLoopID != "" {
+		rec.Metadata["initial_loop_id"] = decision.InitialLoopID
+	}
+	if out, err := json.Marshal(decision); err == nil {
+		rec.Result = string(out)
+	}
+	rec.UpdatedAt = time.Now().UTC()
+
+	if err := rt.store.UpdateRun(ctx, *rec); err != nil {
+		return conductorDecision{}, fmt.Errorf("persist conductor route: %w", err)
+	}
+	return decision, nil
+}
+
 func (rt *Runtime) materializeConductorDecision(rec *types.RunRecord) {
 	if rec == nil || agentProfileForRun(rec) != AgentProfileConductor {
 		return
@@ -843,70 +970,8 @@ func (rt *Runtime) materializeConductorDecision(rec *types.RunRecord) {
 		return
 	}
 
-	initialContent := strings.TrimSpace(decision.InitialContent)
-	if initialContent == "" {
-		initialContent = strings.TrimSpace(decision.SeedPrompt)
-	}
-
-	persistCtx := context.Background()
-	now := time.Now().UTC()
-	doc := types.Document{
-		DocID:     uuid.New().String(),
-		OwnerID:   rec.OwnerID,
-		Title:     decision.Title,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if strings.TrimSpace(doc.Title) == "" {
-		doc.Title = "VText"
-	}
-	if err := rt.store.CreateDocument(persistCtx, doc); err != nil {
-		log.Printf("runtime: conductor run %s: create vtext document: %v", rec.RunID, err)
-		return
-	}
-
-	revMeta, _ := json.Marshal(map[string]any{
-		"seed_prompt":      decision.SeedPrompt,
-		"conductor_run_id": rec.RunID,
-		"created_from":     "conductor",
-	})
-	rev := types.Revision{
-		RevisionID:  uuid.New().String(),
-		DocID:       doc.DocID,
-		OwnerID:     rec.OwnerID,
-		AuthorKind:  types.AuthorUser,
-		AuthorLabel: rec.OwnerID,
-		Content:     initialContent,
-		Citations:   json.RawMessage("[]"),
-		Metadata:    revMeta,
-		CreatedAt:   now,
-	}
-	if err := rt.store.CreateRevision(persistCtx, rev); err != nil {
-		log.Printf("runtime: conductor run %s: create initial vtext revision: %v", rec.RunID, err)
-		return
-	}
-
-	doc.CurrentRevisionID = rev.RevisionID
-	initialRun, err := rt.submitVTextAgentRevisionRun(persistCtx, doc, rec.OwnerID, vtextAgentRevisionRequest{Intent: "create"}, rec.RunID)
-	if err != nil {
-		log.Printf("runtime: conductor run %s: submit initial vtext revision: %v", rec.RunID, err)
-	}
-
-	decision.DocID = doc.DocID
-	decision.InitialRevisionID = rev.RevisionID
-	if initialRun != nil {
-		decision.InitialRunID = initialRun.RunID
-	}
-	if out, err := json.Marshal(decision); err == nil {
-		rec.Result = string(out)
-	}
-	if rec.Metadata == nil {
-		rec.Metadata = make(map[string]any)
-	}
-	rec.Metadata["doc_id"] = doc.DocID
-	rec.Metadata["initial_revision_id"] = rev.RevisionID
-	if initialRun != nil {
-		rec.Metadata["initial_run_id"] = initialRun.RunID
+	if _, err := rt.ensureConductorVTextRoute(context.Background(), rec, ""); err != nil {
+		log.Printf("runtime: conductor run %s: materialize decision: %v", rec.RunID, err)
 	}
 }
 
@@ -969,7 +1034,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		failPayload, _ := json.Marshal(map[string]string{
 			"doc_id": docID,
-			"run_id": rec.RunID,
+			"loop_id": rec.RunID,
 			"error":  "vtext agent produced no content",
 		})
 		rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
@@ -998,7 +1063,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 
 	// Build revision metadata that preserves durable context keys from
 	// the parent revision so that subsequent revise requests can still
-	// read seed_prompt, source_path, conductor_run_id, etc.
+	// read seed_prompt, source_path, conductor_loop_id, etc.
 	revMeta := buildAppagentRevisionMetadata(rec, doc, ownerID, rt.store)
 
 	now := time.Now().UTC()
@@ -1038,7 +1103,7 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 	completedPayload, _ := json.Marshal(map[string]string{
 		"doc_id":      docID,
 		"revision_id": rev.RevisionID,
-		"run_id":      rec.RunID,
+		"loop_id":     rec.RunID,
 	})
 	rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionCompleted,
 		events.CauseTaskLifecycle, completedPayload)
@@ -1138,7 +1203,7 @@ func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID st
 var durableMetadataKeys = []string{
 	"seed_prompt",
 	"source_path",
-	"conductor_run_id",
+	"conductor_loop_id",
 }
 
 // buildAppagentRevisionMetadata constructs the metadata JSON for an
@@ -1147,7 +1212,7 @@ var durableMetadataKeys = []string{
 func buildAppagentRevisionMetadata(rec *types.RunRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
 	meta := map[string]any{
 		"source": "agent_revision",
-		"run_id": rec.RunID,
+		"loop_id": rec.RunID,
 	}
 
 	// Carry forward durable keys from the parent revision metadata.
@@ -1175,7 +1240,7 @@ func buildAppagentRevisionMetadata(rec *types.RunRecord, doc types.Document, own
 
 	data, err := json.Marshal(meta)
 	if err != nil {
-		return json.RawMessage(`{"source":"agent_revision","run_id":"` + rec.RunID + `"}`)
+		return json.RawMessage(`{"source":"agent_revision","loop_id":"` + rec.RunID + `"}`)
 	}
 	return data
 }
@@ -1226,7 +1291,7 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.RunRecor
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
 				"doc_id": docID,
-				"run_id": rec.RunID,
+				"loop_id": rec.RunID,
 				"error":  err.Error(),
 			})
 			rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,

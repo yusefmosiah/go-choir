@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 	}
 
 	var spawnResp struct {
-		RunID     string `json:"run_id"`
+		RunID     string `json:"loop_id"`
 		ChannelID string `json:"channel_id"`
 		Profile   string `json:"profile"`
 	}
@@ -217,7 +218,7 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("vtext spawn super: %v", err)
 	}
 	var superSpawn struct {
-		RunID     string `json:"run_id"`
+		RunID     string `json:"loop_id"`
 		Profile   string `json:"profile"`
 		ChannelID string `json:"channel_id"`
 	}
@@ -240,7 +241,7 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 		t.Fatalf("super spawn co-super: %v", err)
 	}
 	var coSuperSpawn struct {
-		RunID  string `json:"run_id"`
+		RunID   string `json:"loop_id"`
 		Profile string `json:"profile"`
 	}
 	if err := json.Unmarshal([]byte(coSuperRaw), &coSuperSpawn); err != nil {
@@ -323,7 +324,7 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 		t.Fatalf("conductor spawn vtext: %v", err)
 	}
 	var vtextSpawn struct {
-		RunID     string `json:"run_id"`
+		RunID     string `json:"loop_id"`
 		Profile   string `json:"profile"`
 		ChannelID string `json:"channel_id"`
 	}
@@ -333,9 +334,47 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	if vtextSpawn.Profile != AgentProfileVText {
 		t.Fatalf("vtext spawn profile = %q, want %q", vtextSpawn.Profile, AgentProfileVText)
 	}
+	if vtextSpawn.ChannelID == "" {
+		t.Fatal("vtext spawn channel_id should not be empty")
+	}
 	vtextTask, err := s.GetRun(context.Background(), vtextSpawn.RunID)
 	if err != nil {
 		t.Fatalf("get vtext task: %v", err)
+	}
+	if vtextTask.Metadata["doc_id"] != vtextSpawn.ChannelID {
+		t.Fatalf("vtext task doc_id = %v, want %q", vtextTask.Metadata["doc_id"], vtextSpawn.ChannelID)
+	}
+	parentAfterSpawn, err := s.GetRun(context.Background(), conductorTask.RunID)
+	if err != nil {
+		t.Fatalf("get conductor task: %v", err)
+	}
+	if parentAfterSpawn.Metadata["doc_id"] != vtextSpawn.ChannelID {
+		t.Fatalf("conductor metadata doc_id = %v, want %q", parentAfterSpawn.Metadata["doc_id"], vtextSpawn.ChannelID)
+	}
+	if strings.TrimSpace(parentAfterSpawn.Result) == "" {
+		t.Fatal("conductor result should be populated as soon as vtext is opened")
+	}
+	var parentDecision struct {
+		Action            string `json:"action"`
+		App               string `json:"app"`
+		DocID             string `json:"doc_id"`
+		InitialRunID      string `json:"initial_loop_id"`
+		InitialRevisionID string `json:"initial_revision_id"`
+	}
+	if err := json.Unmarshal([]byte(parentAfterSpawn.Result), &parentDecision); err != nil {
+		t.Fatalf("decode conductor result: %v", err)
+	}
+	if parentDecision.Action != "open_app" || parentDecision.App != AgentProfileVText {
+		t.Fatalf("unexpected conductor decision: %+v", parentDecision)
+	}
+	if parentDecision.DocID != vtextSpawn.ChannelID {
+		t.Fatalf("conductor result doc_id = %q, want %q", parentDecision.DocID, vtextSpawn.ChannelID)
+	}
+	if parentDecision.InitialRunID != vtextTask.RunID {
+		t.Fatalf("conductor result initial_loop_id = %q, want %q", parentDecision.InitialRunID, vtextTask.RunID)
+	}
+	if parentDecision.InitialRevisionID == "" {
+		t.Fatal("conductor result initial_revision_id should not be empty")
 	}
 
 	vtextRegistry := rt.ToolRegistryForProfile(AgentProfileVText)
@@ -348,7 +387,7 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 		t.Fatalf("vtext spawn researcher: %v", err)
 	}
 	var researchSpawn struct {
-		RunID     string `json:"run_id"`
+		RunID     string `json:"loop_id"`
 		Profile   string `json:"profile"`
 		ChannelID string `json:"channel_id"`
 	}

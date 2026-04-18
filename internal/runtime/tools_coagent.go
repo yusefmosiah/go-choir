@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
 func RegisterCoAgentTools(registry *ToolRegistry, rt *Runtime) error {
@@ -35,11 +37,11 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 		Name:        "spawn_agent",
 		Description: "Spawn a child agent run with a specific role/profile and optional shared channel.",
 		Parameters: jsonSchemaObject(map[string]any{
-			"objective": map[string]any{"type": "string"},
-			"role":      map[string]any{"type": "string"},
-			"profile":   map[string]any{"type": "string"},
+			"objective":  map[string]any{"type": "string"},
+			"role":       map[string]any{"type": "string"},
+			"profile":    map[string]any{"type": "string"},
 			"channel_id": map[string]any{"type": "string"},
-			"model":     map[string]any{"type": "string"},
+			"model":      map[string]any{"type": "string"},
 		}, []string{"objective", "role"}, false),
 		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var in args
@@ -73,17 +75,47 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 			if model := strings.TrimSpace(in.Model); model != "" {
 				constraints[runMetadataModel] = model
 			}
+			if callerProfile == AgentProfileConductor && profile == AgentProfileVText {
+				parentRec, _ := ctx.Value(toolCtxRunRecord).(*types.RunRecord)
+				if parentRec == nil {
+					parentRec = &types.RunRecord{
+						RunID:        parentID,
+						OwnerID:      ownerID,
+						AgentProfile: callerProfile,
+					}
+				}
+				decision, err := rt.ensureConductorVTextRoute(ctx, parentRec, in.Objective)
+				if err != nil {
+					return "", err
+				}
+				return toolResultJSON(map[string]any{
+					"action":                 decision.Action,
+					"app":                    decision.App,
+					"title":                  decision.Title,
+					"seed_prompt":            decision.SeedPrompt,
+					"initial_content":        decision.InitialContent,
+					"create_initial_version": decision.CreateInitialVersion != nil && *decision.CreateInitialVersion,
+					"doc_id":                 decision.DocID,
+					"initial_revision_id":    decision.InitialRevisionID,
+					"initial_loop_id":        decision.InitialLoopID,
+					"loop_id":                decision.InitialLoopID,
+					"channel_id":             decision.DocID,
+					"role":                   role,
+					"profile":                profile,
+					"state":                  types.RunPending,
+				})
+			}
 			child, err := rt.StartChildRun(ctx, parentID, in.Objective, ownerID, constraints)
 			if err != nil {
 				return "", err
 			}
 			return toolResultJSON(map[string]any{
-				"agent_id": child.AgentID,
-				"run_id":   child.RunID,
+				"agent_id":   child.AgentID,
+				"loop_id":    child.RunID,
 				"channel_id": child.ChannelID,
-				"role":     role,
-				"profile":  profile,
-				"state":    child.State,
+				"role":       role,
+				"profile":    profile,
+				"state":      child.State,
 			})
 		},
 	}
@@ -92,18 +124,18 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 func newPostMessageTool(rt *Runtime) Tool {
 	type args struct {
 		ChannelID string `json:"channel_id"`
-		From    string `json:"from,omitempty"`
-		Role    string `json:"role,omitempty"`
-		Content string `json:"content"`
+		From      string `json:"from,omitempty"`
+		Role      string `json:"role,omitempty"`
+		Content   string `json:"content"`
 	}
 	return Tool{
 		Name:        "post_message",
 		Description: "Post a message to a shared channel without blocking.",
 		Parameters: jsonSchemaObject(map[string]any{
 			"channel_id": map[string]any{"type": "string"},
-			"from":    map[string]any{"type": "string"},
-			"role":    map[string]any{"type": "string"},
-			"content": map[string]any{"type": "string"},
+			"from":       map[string]any{"type": "string"},
+			"role":       map[string]any{"type": "string"},
+			"content":    map[string]any{"type": "string"},
 		}, []string{"channel_id", "content"}, false),
 		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var in args
@@ -134,14 +166,14 @@ func newPostMessageTool(rt *Runtime) Tool {
 func newReadMessagesTool(rt *Runtime) Tool {
 	type args struct {
 		ChannelID string `json:"channel_id"`
-		Cursor uint64 `json:"cursor,omitempty"`
+		Cursor    uint64 `json:"cursor,omitempty"`
 	}
 	return Tool{
 		Name:        "read_messages",
 		Description: "Read messages from a shared channel since a cursor.",
 		Parameters: jsonSchemaObject(map[string]any{
 			"channel_id": map[string]any{"type": "string"},
-			"cursor":  map[string]any{"type": "integer", "minimum": 0},
+			"cursor":     map[string]any{"type": "integer", "minimum": 0},
 		}, []string{"channel_id"}, false),
 		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var in args
@@ -154,8 +186,8 @@ func newReadMessagesTool(rt *Runtime) Tool {
 			}
 			return toolResultJSON(map[string]any{
 				"channel_id": in.ChannelID,
-				"messages": messages,
-				"cursor":    cursor,
+				"messages":   messages,
+				"cursor":     cursor,
 			})
 		},
 	}
@@ -191,18 +223,18 @@ func newWaitForMessageTool(rt *Runtime) Tool {
 				if err == context.DeadlineExceeded || err == waitCtx.Err() {
 					return toolResultJSON(map[string]any{
 						"channel_id": in.ChannelID,
-						"messages":  []ChannelMessage{},
-						"cursor":    in.Cursor,
-						"timed_out": true,
+						"messages":   []ChannelMessage{},
+						"cursor":     in.Cursor,
+						"timed_out":  true,
 					})
 				}
 				return "", err
 			}
 			return toolResultJSON(map[string]any{
 				"channel_id": in.ChannelID,
-				"messages":  messages,
-				"cursor":    cursor,
-				"timed_out": false,
+				"messages":   messages,
+				"cursor":     cursor,
+				"timed_out":  false,
 			})
 		},
 	}

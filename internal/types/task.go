@@ -73,7 +73,7 @@ type RunRecord struct {
 	// RunID is the stable unique identifier for this run, generated at
 	// submission time and persisted for the lifetime of the record.
 	// This is the handle used by status/event surfaces (VAL-RUNTIME-003).
-	RunID string `json:"run_id"`
+	RunID string `json:"loop_id"`
 
 	// AgentID is the durable agent identity that executed this run.
 	// Multiple runs may belong to the same agent over time.
@@ -84,7 +84,7 @@ type RunRecord struct {
 	ChannelID string `json:"channel_id,omitempty"`
 
 	// ParentRunID links this run to the run that spawned it, if any.
-	ParentRunID string `json:"parent_run_id,omitempty"`
+	ParentRunID string `json:"parent_loop_id,omitempty"`
 
 	// AgentProfile is the profile/tool policy used for this run.
 	AgentProfile string `json:"agent_profile,omitempty"`
@@ -131,31 +131,31 @@ type EventKind string
 
 const (
 	// EventRunSubmitted is emitted when a run is submitted and accepted.
-	EventRunSubmitted EventKind = "run.submitted"
+	EventRunSubmitted EventKind = "loop.submitted"
 
 	// EventRunStarted is emitted when a run begins executing.
-	EventRunStarted EventKind = "run.started"
+	EventRunStarted EventKind = "loop.started"
 
 	// EventRunProgress is emitted for incremental progress updates during
 	// run execution.
-	EventRunProgress EventKind = "run.progress"
+	EventRunProgress EventKind = "loop.progress"
 
 	// EventRunDelta is emitted for streaming text deltas from the provider
 	// response, supporting incremental event streaming (VAL-RUNTIME-005).
-	EventRunDelta EventKind = "run.delta"
+	EventRunDelta EventKind = "loop.delta"
 
 	// EventRunCompleted is emitted when a run finishes successfully.
-	EventRunCompleted EventKind = "run.completed"
+	EventRunCompleted EventKind = "loop.completed"
 
 	// EventRunFailed is emitted when a run fails with a structured error
 	// outcome (VAL-RUNTIME-008).
-	EventRunFailed EventKind = "run.failed"
+	EventRunFailed EventKind = "loop.failed"
 
 	// EventRunBlocked is emitted when a run is blocked (e.g., provider failure).
-	EventRunBlocked EventKind = "run.blocked"
+	EventRunBlocked EventKind = "loop.blocked"
 
 	// EventRunCancelled is emitted when a run is cancelled.
-	EventRunCancelled EventKind = "run.cancelled"
+	EventRunCancelled EventKind = "loop.cancelled"
 
 	// EventRuntimeHealth is emitted when the runtime health state changes.
 	EventRuntimeHealth EventKind = "runtime.health"
@@ -216,7 +216,7 @@ type EventRecord struct {
 
 	// RunID is the run this event is correlated to. For runtime-level events
 	// (health, degraded), this may be empty.
-	RunID string `json:"run_id,omitempty"`
+	RunID string `json:"loop_id,omitempty"`
 
 	// AgentID is the durable agent identity that emitted or owns this event.
 	AgentID string `json:"agent_id,omitempty"`
@@ -285,7 +285,7 @@ type ChannelMessage struct {
 	FromAgentID string `json:"from_agent_id,omitempty"`
 
 	// FromRunID identifies the run that posted the message.
-	FromRunID string `json:"from_run_id,omitempty"`
+	FromRunID string `json:"from_loop_id,omitempty"`
 
 	// Role classifies the message (e.g., "coordinator", "worker", "status").
 	Role string `json:"role"`

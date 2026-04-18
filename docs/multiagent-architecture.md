@@ -68,7 +68,7 @@ Spawn a child run with a specific role. Delegation policy enforced from caller p
 { "objective": "find GDP stats", "role": "researcher",
   "channel_id": "doc-abc123", "model": "optional-override" }
 // output
-{ "agent_id": "...", "run_id": "...", "channel_id": "doc-abc123",
+{ "agent_id": "...", "loop_id": "...", "channel_id": "doc-abc123",
   "role": "researcher", "profile": "researcher", "state": "pending" }
 ```
 
@@ -116,18 +116,18 @@ agents
   created_at  updated_at
 
 runs  [agent_id -> agents]
-  run_id TEXT (PK)  agent_id  parent_run_id  channel_id
+  loop_id TEXT (PK)  agent_id  parent_loop_id  channel_id
   agent_profile  agent_role  owner_id  sandbox_id  state
   prompt  result  error  metadata JSON
   created_at  started_at  finished_at
 
-events  [run_id -> runs]
-  event_id TEXT (PK)  run_id  agent_id  channel_id
+events  [loop_id -> runs]
+  event_id TEXT (PK)  loop_id  agent_id  channel_id
   owner_id  kind  payload JSON  seq INTEGER  ts
 
 channel_messages
   id INTEGER (PK autoincrement)  channel_id
-  from_run_id  from_agent_id  role  content  ts
+  from_loop_id  from_agent_id  role  content  ts
 ```
 
 ### VText tables — internal/store/vtext.go (Dolt — version-native document storage)
@@ -142,12 +142,12 @@ vtext_revisions  [doc_id -> vtext_documents]
   content  author_type   -- "user" | "agent"
   metadata JSON  created_at
 
-vtext_agent_mutations  [run_id PK]
-  run_id  doc_id  state  canonical_revision_id
+vtext_agent_mutations  [loop_id PK]
+  loop_id  doc_id  state  canonical_revision_id
   created_at  completed_at
 
 agent_evidence
-  evidence_id TEXT (PK)  run_id  doc_id
+  evidence_id TEXT (PK)  loop_id  doc_id
   kind  content  source  created_at
 ```
 
@@ -156,10 +156,10 @@ agent_evidence
 | Concept | Value | Set by |
 |---------|-------|--------|
 | `agent_id` for vtext agents | `vtext:<doc_id>` | `submitVTextAgentRevisionRun()` in vtext.go |
-| `agent_id` for other agents | `run_id` (self) | `agentIDForRun()` in tool_profiles.go |
+| `agent_id` for other agents | `loop_id` (self) | `agentIDForRun()` in tool_profiles.go |
 | `channel_id` for vtext families | `doc_id` | `submitVTextAgentRevisionRun()` in vtext.go |
-| `channel_id` for ad-hoc runs | caller `run_id` unless explicit | `channelIDForRun()` in tool_profiles.go |
-| `parent_run_id` | spawning run's `run_id` | `StartChildRun()` in runtime.go |
+| `channel_id` for ad-hoc runs | caller `loop_id` unless explicit | `channelIDForRun()` in tool_profiles.go |
+| `parent_loop_id` | spawning run's `loop_id` | `StartChildRun()` in runtime.go |
 
 ---
 
@@ -171,9 +171,9 @@ agent_evidence
 User types prompt
   -> BottomBar.svelte emits promptsubmit
   -> Desktop.svelte: submitConductorPrompt()
-       POST /api/agent/run { prompt, metadata: { agent_profile: "conductor" } }
+       POST /api/agent/loop { prompt, metadata: { agent_profile: "conductor" } }
   -> Proxy validates auth, forwards to sandbox :8081
-  -> Runtime creates RunRecord (profile=conductor, channel_id=run_id)
+  -> Runtime creates RunRecord (profile=conductor, channel_id=loop_id)
   -> executeWithToolLoop() with conductor tool registry
   -> Conductor LLM returns JSON decision:
        { "action": "open_app", "app": "vtext", "title": "Essay on X",
@@ -181,16 +181,16 @@ User types prompt
   -> handleRunCompletion() -> materializeConductorDecision():
        1. CreateDocument(doc_id, title, owner)
        2. CreateRevision(v0, author_type="user", content=initial_content)
-       3. submitVTextAgentRevisionRun(doc_id, v0_id, parentRunID=conductor_run_id)
+       3. submitVTextAgentRevisionRun(doc_id, v0_id, parentRunID=conductor_loop_id)
             -> vtext RunRecord: profile=vtext, agent_id="vtext:<doc_id>",
-               channel_id=doc_id, parent_run_id=conductor_run_id
+               channel_id=doc_id, parent_loop_id=conductor_loop_id
        4. Enriches conductor result:
-            { ...decision, doc_id, initial_revision_id, initial_run_id }
+            { ...decision, doc_id, initial_revision_id, initial_loop_id }
   -> Frontend receives enriched result
   -> Desktop.svelte opens VTextEditor({ docId, initialRunId })
   -> VTextEditor polls (document-scoped, not global):
-       GET /api/agent/status?run_id=<initialRunId>
-       GET /api/agent/runs?channel_id=<docId>
+       GET /api/agent/status?loop_id=<initialRunId>
+       GET /api/agent/loops?channel_id=<docId>
        GET /api/agent/events?channel_id=<docId>
 ```
 
@@ -216,9 +216,9 @@ Agent final answer = complete next document version (plain text)
      child-worker activity on the shared channel before accepting the answer
      as canonical. Follow-up transforms may reuse prior grounded history.
      CreateRevision(content, author_type="agent",
-        metadata={ source:"agent_revision", run_id, seed_prompt, ... })
+        metadata={ source:"agent_revision", loop_id, seed_prompt, ... })
      UpdateDocument(head_revision_id = new_revision_id)
-     CompleteVTextAgentMutation(run_id)
+     CompleteVTextAgentMutation(loop_id)
 -> Emits vtext.agent_revision.completed
 ```
 
@@ -237,7 +237,7 @@ User edits in VTextEditor -> clicks Revise
 
 ```
 VText calls spawn_agent({ role:"researcher", channel_id:doc_id, objective:"find X" })
--> StartChildRun(): profile=researcher, parent_run_id=vtext_run_id, channel_id=doc_id
+-> StartChildRun(): profile=researcher, parent_loop_id=vtext_loop_id, channel_id=doc_id
 
 Researcher:
   web_search("X 2025") -> store_evidence({ doc_id, ... })
@@ -254,10 +254,10 @@ VText:
 
 | Event kind | When emitted |
 |-----------|-------------|
-| `run.started` | Run transitions to running |
-| `run.completed` | Run finishes successfully |
-| `run.failed` | Run fails with error |
-| `run.cancelled` | Run is cancelled |
+| `loop.started` | Run transitions to running |
+| `loop.completed` | Run finishes successfully |
+| `loop.failed` | Run fails with error |
+| `loop.cancelled` | Run is cancelled |
 | `run.streaming_token` | Streaming token from LLM (SSE only) |
 | `channel.message` | Message posted to a shared channel |
 | `vtext.agent_revision.started` | VText mutation run created |
@@ -274,10 +274,10 @@ All routes registered in `internal/runtime/api.go`, forwarded by `internal/proxy
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/agent/run` | Submit a new run |
-| GET | `/api/agent/status?run_id=` | Poll run state + result |
+| POST | `/api/agent/loop` | Submit a new run |
+| GET | `/api/agent/status?loop_id=` | Poll run state + result |
 | GET | `/api/agent/{id}/status` | Same, path-based |
-| GET | `/api/agent/runs?channel_id=&limit=` | List runs (channel-scoped) |
+| GET | `/api/agent/loops?channel_id=&limit=` | List runs (channel-scoped) |
 | GET | `/api/agent/events?channel_id=&limit=` | List events (channel-scoped) |
 | GET | `/api/agent/topology` | Active run family graph |
 | POST | `/api/agent/spawn` | API-level child run spawn |
@@ -328,7 +328,7 @@ Desktop.svelte
   conductor.js                 submitConductorPrompt, waitForConductorDecision
   Window.svelte                window chrome (minimize / maximize / close)
     VTextEditor.svelte         main writing surface
-      Activity panel           polls /api/agent/runs?channel_id=<doc_id>
+      Activity panel           polls /api/agent/loops?channel_id=<doc_id>
                                polls /api/agent/events?channel_id=<doc_id>
       Version nav              floating vN navigator (v0 to vLatest)
       Revise button            POST .../agent-revision
@@ -377,4 +377,4 @@ Browser / Electron frontend  (frontend/dist/)
 
 5. **Single-emission vtext revise.** `submitVTextAgentRevisionRun()` is the one site that creates the pending mutation and emits `vtext.agent_revision.started`. `HandleVTextAgentRevision` only calls this helper and does not repeat side effects.
 
-6. **Activity panels are channel-scoped.** `/api/agent/runs` and `/api/agent/events` both accept `?channel_id=` so VTextEditor sees only its document family regardless of unrelated global history volume.
+6. **Activity panels are channel-scoped.** `/api/agent/loops` and `/api/agent/events` both accept `?channel_id=` so VTextEditor sees only its document family regardless of unrelated global history volume.

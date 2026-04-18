@@ -27,6 +27,16 @@
     return [...items].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
   }
 
+  function missingDiagnostics(prompt) {
+    if (!prompt) return ['effective system prompt', 'role policy', 'provider/model policy', 'tool definitions'];
+    const missing = [];
+    if (!prompt.effective_system_prompt) missing.push('effective system prompt');
+    if (!prompt.role_policy?.profile) missing.push('role policy');
+    if (!prompt.provider_policy?.active_provider) missing.push('provider/model policy');
+    if (!Array.isArray(prompt.tools)) missing.push('tool definitions');
+    return missing;
+  }
+
   function selectedPrompt() {
     return prompts.find((item) => item.role === selectedRole) || null;
   }
@@ -37,6 +47,12 @@
     try {
       const data = await listPrompts();
       prompts = sortedPrompts(data.prompts || []);
+      const incomplete = prompts
+        .map((prompt) => ({ role: prompt.role, missing: missingDiagnostics(prompt) }))
+        .filter((item) => item.missing.length > 0);
+      if (incomplete.length > 0) {
+        error = `Sandbox returned incomplete prompt diagnostics for ${incomplete.map((item) => `${item.role} (${item.missing.join(', ')})`).join('; ')}. This comes from /api/prompts on the sandbox runtime, not vmctl.`;
+      }
       if (!selectedPrompt() && prompts.length > 0) {
         selectedRole = prompts[0].role;
       }
@@ -161,7 +177,7 @@
           class="readonly-editor"
           spellcheck="false"
           readonly
-          value={activePrompt?.effective_system_prompt || '(restart sandbox to load)'}
+          value={activePrompt?.effective_system_prompt || '(runtime did not return an effective system prompt)'}
         ></textarea>
       </details>
 
@@ -180,7 +196,7 @@
               <div><strong>Co-agent tools</strong> {activePrompt.role_policy.allow_coagent_tools ? 'yes' : 'no'}</div>
             </div>
           {:else}
-            <div class="empty-hint">Restart sandbox to load role policy.</div>
+            <div class="empty-hint">Runtime did not return role policy.</div>
           {/if}
         </details>
 
@@ -201,7 +217,7 @@
               </div>
             {/if}
           {:else}
-            <div class="empty-hint">Restart sandbox to load provider policy.</div>
+            <div class="empty-hint">Runtime did not return provider/model policy.</div>
           {/if}
         </details>
       </div>
@@ -220,7 +236,7 @@
             {/each}
           </div>
         {:else}
-          <div class="empty-hint">Restart sandbox to load tool definitions.</div>
+          <div class="empty-hint">Runtime did not return tool definitions.</div>
         {/if}
       </details>
     {/if}

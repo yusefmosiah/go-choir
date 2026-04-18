@@ -54,7 +54,7 @@ func TestSpawnCreatesChildTask(t *testing.T) {
 	}
 
 	if resp.RunID == "" {
-		t.Error("run_id should not be empty")
+		t.Error("loop_id should not be empty")
 	}
 	if resp.State != types.RunPending {
 		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
@@ -189,7 +189,7 @@ func TestSpawnWithConstraints(t *testing.T) {
 	}
 
 	if resp.RunID == "" {
-		t.Error("run_id should not be empty")
+		t.Error("loop_id should not be empty")
 	}
 	if resp.State != types.RunPending {
 		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
@@ -279,7 +279,7 @@ func TestSpawnMultipleChildrenFromSameParent(t *testing.T) {
 		}
 
 		if childIDs[resp.RunID] {
-			t.Errorf("spawn %d: duplicate run_id %q", i, resp.RunID)
+			t.Errorf("spawn %d: duplicate loop_id %q", i, resp.RunID)
 		}
 		childIDs[resp.RunID] = true
 	}
@@ -370,7 +370,7 @@ func TestSpawnChildMetadataAndTaskConsistent(t *testing.T) {
 		t.Fatalf("get child run: %v", err)
 	}
 	if task.RunID != resp.RunID {
-		t.Errorf("run_id: got %q, want %q", task.RunID, resp.RunID)
+		t.Errorf("loop_id: got %q, want %q", task.RunID, resp.RunID)
 	}
 	if task.OwnerID != "user-alice" {
 		t.Errorf("owner_id: got %q, want user-alice", task.OwnerID)

@@ -1,20 +1,20 @@
 <!--
-  TaskRunner — shell prompt and runtime run progress UI.
+  TaskRunner — shell prompt and runtime loop progress UI.
 
-  Submits prompts through POST /api/agent/run, renders run/status/event
+  Submits prompts through POST /api/agent/loop, renders loop/status/event
   progress, returns the real provider-backed answer, and supports
   reattachment across reload/new-tab without resubmitting (VAL-CROSS-121).
 
   Renewal-safe submission (VAL-CROSS-111):
-    - submitRun() uses fetchWithRenewal so expired access tokens are
+    - submitLoop() uses fetchWithRenewal so expired access tokens are
       silently renewed before retry.
-    - The client-side active-run guard prevents duplicate submission
+    - The client-side active-loop guard prevents duplicate submission
       even if renewal causes a second fetch attempt.
 
   Reattachment (VAL-CROSS-121):
-    - On mount, reattachToActiveRun() checks sessionStorage for an
-      in-flight run handle and resumes progress instead of resubmitting.
-    - The run handle is cleared from sessionStorage when the run
+    - On mount, reattachToActiveLoop() checks sessionStorage for an
+      in-flight loop handle and resumes progress instead of resubmitting.
+    - The loop handle is cleared from sessionStorage when the loop
       reaches a terminal state.
 
   Data attributes for test targeting:
@@ -32,13 +32,12 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import {
-    submitRun,
-    fetchRunStatus,
+    submitLoop,
+    fetchLoopStatus,
     connectEventStream,
-    reattachToActiveRun,
-    clearActiveRun,
+    reattachToActiveLoop,
+    clearActiveLoop,
     isTerminalState,
-    getActiveRun,
   } from './runtime.js';
   import { AuthRequiredError } from './auth.js';
 
@@ -50,22 +49,22 @@
   /** Whether a submission is in progress. */
   let submitting = false;
 
-  /** The current run ID (stable handle). */
-  let currentRunId = '';
+  /** The current loop ID (stable handle). */
+  let currentLoopId = '';
 
-  /** The current run state. */
-  let currentRunState = '';
+  /** The current loop state. */
+  let currentLoopState = '';
 
-  /** The run result text (populated on completion). */
+  /** The loop result text (populated on completion). */
   let taskResult = '';
 
-  /** Run error message (populated on failure). */
+  /** Loop error message (populated on failure). */
   let taskError = '';
 
-  /** Collected events for the current run. */
+  /** Collected events for the current loop. */
   let taskEvents = [];
 
-  /** Whether we are reattaching to an in-flight run. */
+  /** Whether we are reattaching to an in-flight loop. */
   let reattaching = false;
 
   /** Event stream handle. */
@@ -83,23 +82,23 @@
   import { onDestroy } from 'svelte';
 
   onMount(async () => {
-    // Attempt reattachment to any in-flight run (VAL-CROSS-121).
+    // Attempt reattachment to any in-flight loop (VAL-CROSS-121).
     try {
       reattaching = true;
-      const status = await reattachToActiveRun();
+      const status = await reattachToActiveLoop();
       if (status && !isTerminalState(status.state)) {
-        // Found an in-flight run — resume tracking it.
-        currentRunId = status.run_id;
-        currentRunState = status.state;
+        // Found an in-flight loop — resume tracking it.
+        currentLoopId = status.loop_id;
+        currentLoopState = status.state;
         taskResult = status.result || '';
         taskError = status.error || '';
         promptText = status.prompt || '';
         startEventStream();
         startStatusPolling();
       } else if (status && isTerminalState(status.state)) {
-        // Run already finished — show the result.
-        currentRunId = status.run_id;
-        currentRunState = status.state;
+        // Loop already finished — show the result.
+        currentLoopId = status.loop_id;
+        currentLoopState = status.state;
         taskResult = status.result || '';
         taskError = status.error || '';
         promptText = status.prompt || '';
@@ -126,7 +125,7 @@
     }
   }
 
-  // ---- Run submission ----
+  // ---- Loop submission ----
 
   async function handleSubmit() {
     const trimmed = promptText.trim();
@@ -139,10 +138,10 @@
     submitting = true;
 
     try {
-      const runInfo = await submitRun(trimmed);
+      const loopInfo = await submitLoop(trimmed);
 
-      currentRunId = runInfo.run_id;
-      currentRunState = runInfo.state;
+      currentLoopId = loopInfo.loop_id;
+      currentLoopState = loopInfo.state;
 
       // Start tracking progress.
       startEventStream();
@@ -152,7 +151,7 @@
         dispatch('authexpired');
         return;
       }
-      submissionError = err.message || 'Run submission failed';
+      submissionError = err.message || 'Loop submission failed';
     } finally {
       submitting = false;
     }
@@ -181,8 +180,9 @@
 
     eventStreamHandle = connectEventStream(
       (event) => {
-        // Only track events for the current run.
-        if (currentRunId && event.run_id && event.run_id !== currentRunId) {
+        // Only track events for the current loop.
+        const eventLoopId = event.loop_id || '';
+        if (currentLoopId && eventLoopId && eventLoopId !== currentLoopId) {
           return;
         }
 
@@ -194,16 +194,16 @@
         taskEvents = [...taskEvents, event];
 
         // Update state from events if the event carries state info.
-        if (event.kind === 'run.started') {
-          currentRunState = 'running';
-        } else if (event.kind === 'run.completed') {
-          currentRunState = 'completed';
+        if (event.kind === 'loop.started') {
+          currentLoopState = 'running';
+        } else if (event.kind === 'loop.completed') {
+          currentLoopState = 'completed';
           handleTaskComplete(event);
-        } else if (event.kind === 'run.failed') {
-          currentRunState = 'failed';
+        } else if (event.kind === 'loop.failed') {
+          currentLoopState = 'failed';
           handleTaskFailed(event);
-        } else if (event.kind === 'run.cancelled') {
-          currentRunState = 'cancelled';
+        } else if (event.kind === 'loop.cancelled') {
+          currentLoopState = 'cancelled';
           handleTaskTerminal();
         }
       },
@@ -219,11 +219,11 @@
     }
 
     statusPollInterval = setInterval(async () => {
-      if (!currentRunId) return;
+      if (!currentLoopId) return;
 
       try {
-        const status = await fetchRunStatus(currentRunId);
-        currentRunState = status.state;
+        const status = await fetchLoopStatus(currentLoopId);
+        currentLoopState = status.state;
 
         if (status.result) {
           taskResult = status.result;
@@ -233,7 +233,7 @@
         }
 
         if (isTerminalState(status.state)) {
-          // Run reached terminal state — stop polling and clean up.
+          // Loop reached terminal state — stop polling and clean up.
           clearInterval(statusPollInterval);
           statusPollInterval = null;
 
@@ -242,8 +242,8 @@
             eventStreamHandle = null;
           }
 
-          // Clear the stored run handle (VAL-CROSS-121).
-          clearActiveRun();
+          // Clear the stored loop handle (VAL-CROSS-121).
+          clearActiveLoop();
         }
       } catch (_err) {
         // Status poll failed — may be transient. Keep polling.
@@ -265,12 +265,12 @@
     }
 
     // Do a final status fetch to get the full result text.
-    if (currentRunId) {
-      fetchRunStatus(currentRunId)
+    if (currentLoopId) {
+      fetchLoopStatus(currentLoopId)
         .then((status) => {
           if (status.result) taskResult = status.result;
           if (status.error) taskError = status.error;
-          currentRunState = status.state;
+          currentLoopState = status.state;
         })
         .catch(() => {});
     }
@@ -292,7 +292,7 @@
 
   function handleTaskTerminal() {
     // Clear the stored task handle so a new submission is allowed.
-    clearActiveRun();
+    clearActiveLoop();
 
     if (eventStreamHandle) {
       eventStreamHandle.close();
@@ -332,14 +332,14 @@
 
   function eventKindLabel(kind) {
     switch (kind) {
-      case 'run.submitted': return 'Submitted';
-      case 'run.started': return 'Started';
-      case 'run.progress': return 'Progress';
-      case 'run.delta': return 'Delta';
-      case 'run.completed': return 'Completed';
-      case 'run.failed': return 'Failed';
-      case 'run.blocked': return 'Blocked';
-      case 'run.cancelled': return 'Cancelled';
+      case 'loop.submitted': return 'Loop Submitted';
+      case 'loop.started': return 'Loop Started';
+      case 'loop.progress': return 'Loop Progress';
+      case 'loop.delta': return 'Loop Delta';
+      case 'loop.completed': return 'Loop Completed';
+      case 'loop.failed': return 'Loop Failed';
+      case 'loop.blocked': return 'Loop Blocked';
+      case 'loop.cancelled': return 'Loop Cancelled';
       case 'tool.invoked': return 'Tool Call';
       case 'tool.result': return 'Tool Result';
       case 'runtime.health': return 'Health';
@@ -349,7 +349,7 @@
   }
 
   /** Whether the task is in progress (pending or running). */
-  $: taskInProgress = currentRunState === 'pending' || currentRunState === 'running';
+  $: taskInProgress = currentLoopState === 'pending' || currentLoopState === 'running';
 </script>
 
 <div class="task-runner" data-task-runner>
@@ -386,12 +386,12 @@
   </div>
 
   <!-- Task status and progress -->
-  {#if currentRunId}
+  {#if currentLoopId}
     <div class="task-progress" data-task-status>
       <div class="task-header">
-        <span class="task-id" data-task-id>Run: {currentRunId.slice(0, 8)}…</span>
-        <span class="task-state {stateClass(currentRunState)}" data-task-state>
-          {stateLabel(currentRunState)}
+        <span class="task-id" data-task-id>Loop: {currentLoopId.slice(0, 8)}…</span>
+        <span class="task-state {stateClass(currentLoopState)}" data-task-state>
+          {stateLabel(currentLoopState)}
         </span>
       </div>
 
@@ -400,7 +400,7 @@
           <div class="progress-spinner"></div>
           <span class="progress-text">
             {#if reattaching}
-              Reattaching to in-flight run…
+              Reattaching to in-flight loop…
             {:else}
               Processing your request…
             {/if}
@@ -431,7 +431,7 @@
           <ul class="event-list">
             {#each taskEvents as event}
               <li class="event-item" data-event-item>
-                <span class="event-kind {stateClass(event.kind === 'run.completed' ? 'completed' : event.kind === 'run.failed' ? 'failed' : '')}">
+                <span class="event-kind {stateClass(event.kind === 'loop.completed' ? 'completed' : event.kind === 'loop.failed' ? 'failed' : '')}">
                   {eventKindLabel(event.kind)}
                 </span>
                 <span class="event-seq">#{event.seq || '?'}</span>

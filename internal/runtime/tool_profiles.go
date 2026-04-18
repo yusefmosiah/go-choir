@@ -44,29 +44,49 @@ Protect the user's trust. Keep claims calibrated, preserve provenance, and optim
 type toolContextKey string
 
 const (
-	toolCtxRunID     toolContextKey = "run_id"
+	toolCtxRunID     toolContextKey = "loop_id"
 	toolCtxAgentID   toolContextKey = "agent_id"
 	toolCtxOwnerID   toolContextKey = "owner_id"
 	toolCtxProfile   toolContextKey = "agent_profile"
 	toolCtxRole      toolContextKey = "agent_role"
 	toolCtxChannelID toolContextKey = "channel_id"
 	toolCtxSandboxID toolContextKey = "sandbox_id"
+	toolCtxRunRecord toolContextKey = "run_record"
 )
 
 func WithToolExecutionContext(ctx context.Context, rec *types.RunRecord) context.Context {
 	ctx = context.WithValue(ctx, toolCtxRunID, rec.RunID)
 	ctx = context.WithValue(ctx, toolCtxAgentID, agentIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxOwnerID, rec.OwnerID)
-	ctx = context.WithValue(ctx, toolCtxProfile, agentProfileForRun(rec))
+	ctx = context.WithValue(ctx, toolCtxProfile, configuredAgentProfileForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxRole, agentRoleForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxChannelID, channelIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxSandboxID, rec.SandboxID)
+	ctx = context.WithValue(ctx, toolCtxRunRecord, rec)
 	return ctx
 }
 
 func stringFromToolContext(ctx context.Context, key toolContextKey) string {
 	value, _ := ctx.Value(key).(string)
 	return strings.TrimSpace(value)
+}
+
+func configuredAgentProfileForRun(rec *types.RunRecord) string {
+	if rec == nil {
+		return ""
+	}
+	if strings.TrimSpace(rec.AgentProfile) != "" {
+		return strings.TrimSpace(rec.AgentProfile)
+	}
+	if rec.Metadata != nil {
+		if profile, _ := rec.Metadata[runMetadataAgentProfile].(string); strings.TrimSpace(profile) != "" {
+			return strings.TrimSpace(profile)
+		}
+	}
+	if taskType, _ := rec.Metadata["type"].(string); taskType == "vtext_agent_revision" {
+		return AgentProfileVText
+	}
+	return ""
 }
 
 func agentProfileForRun(rec *types.RunRecord) string {
@@ -184,8 +204,6 @@ func roleSpec(profile string) AgentRoleSpec {
 			AllowedDelegateTargets: []string{AgentProfileResearcher},
 		}
 	case AgentProfileSuper:
-		fallthrough
-	default:
 		return AgentRoleSpec{
 			Profile:                AgentProfileSuper,
 			AllowWritableFiles:     true,
@@ -195,6 +213,8 @@ func roleSpec(profile string) AgentRoleSpec {
 			AllowCoAgentTools:      true,
 			AllowedDelegateTargets: []string{AgentProfileResearcher, AgentProfileCoSuper},
 		}
+	default:
+		return AgentRoleSpec{Profile: strings.TrimSpace(profile)}
 	}
 }
 
@@ -239,9 +259,9 @@ func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
 		if requestedApp == "" {
 			requestedApp = AgentProfileVText
 		}
-		b.WriteString("\n\nReturn only a single JSON object with one of these shapes:")
-		b.WriteString(` {"action":"open_app","app":"vtext","title":"...","seed_prompt":"...","initial_content":"...","create_initial_version":true}`)
-		b.WriteString(` or {"action":"toast","message":"..."}.`)
+		b.WriteString("\n\nFor substantial work, route by using coagent tools. Prefer spawn_agent with role=vtext so VText becomes the durable owner of the next step.")
+		b.WriteString("\nFor lightweight acknowledgements with no app handoff, return one compact JSON object like {\"action\":\"toast\",\"message\":\"...\"}.")
+		b.WriteString("\nIf you already opened the next owner with a tool call, you may finish tersely; the runtime will surface the opened app from the routed result.")
 		b.WriteString("\nDefault to opening vtext unless there is a strong reason to do otherwise.")
 		if requestedApp != "" {
 			b.WriteString("\nRequested default app: ")
@@ -383,7 +403,10 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 }
 
 func (rt *Runtime) toolRegistryForRun(rec *types.RunRecord) *ToolRegistry {
-	profile := agentProfileForRun(rec)
+	profile := configuredAgentProfileForRun(rec)
+	if profile == "" {
+		return nil
+	}
 	if rt.toolProfiles != nil {
 		if registry, ok := rt.toolProfiles[profile]; ok && registry != nil {
 			return registry

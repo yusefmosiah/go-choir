@@ -18,7 +18,7 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
-// runSubmitRequest is the JSON payload for POST /api/agent/run.
+// runSubmitRequest is the JSON payload for POST /api/agent/loop.
 type runSubmitRequest struct {
 	Prompt   string         `json:"prompt"`
 	Metadata map[string]any `json:"metadata,omitempty"`
@@ -37,7 +37,7 @@ type spawnRequest struct {
 // It returns the child run handle with the parent linkage.
 type spawnResponse struct {
 	AgentID   string         `json:"agent_id"`
-	RunID     string         `json:"run_id"`
+	RunID     string         `json:"loop_id"`
 	ChannelID string         `json:"channel_id,omitempty"`
 	ParentID  string         `json:"parent_id"`
 	State     types.RunState `json:"state"`
@@ -48,21 +48,21 @@ type spawnResponse struct {
 // cancelRequest is the JSON payload for POST /api/agent/cancel.
 // It cancels a running or pending run (VAL-CHOIR-010).
 type cancelRequest struct {
-	RunID string `json:"run_id"`
+	RunID string `json:"loop_id"`
 }
 
 // cancelResponse is the JSON response for POST /api/agent/cancel.
 type cancelResponse struct {
-	RunID string         `json:"run_id"`
+	RunID string         `json:"loop_id"`
 	State types.RunState `json:"state"`
 }
 
-// runSubmitResponse is the JSON response for POST /api/agent/run.
+// runSubmitResponse is the JSON response for POST /api/agent/loop.
 // It returns the stable run handle and initial lifecycle state
 // (VAL-RUNTIME-003).
 type runSubmitResponse struct {
 	AgentID   string         `json:"agent_id"`
-	RunID     string         `json:"run_id"`
+	RunID     string         `json:"loop_id"`
 	ChannelID string         `json:"channel_id,omitempty"`
 	State     types.RunState `json:"state"`
 	OwnerID   string         `json:"owner_id"`
@@ -74,9 +74,9 @@ type runSubmitResponse struct {
 // (VAL-RUNTIME-004).
 type runStatusResponse struct {
 	AgentID      string         `json:"agent_id"`
-	RunID        string         `json:"run_id"`
+	RunID        string         `json:"loop_id"`
 	ChannelID    string         `json:"channel_id,omitempty"`
-	ParentRunID  string         `json:"parent_run_id,omitempty"`
+	ParentRunID  string         `json:"parent_loop_id,omitempty"`
 	AgentProfile string         `json:"agent_profile,omitempty"`
 	AgentRole    string         `json:"agent_role,omitempty"`
 	OwnerID      string         `json:"owner_id"`
@@ -91,7 +91,7 @@ type runStatusResponse struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
-// runListResponse is the JSON response for GET /api/agent/runs.
+// runListResponse is the JSON response for GET /api/agent/loops.
 // It returns recent runs owned by the authenticated user so debugging
 // surfaces can group live events into runs and child delegations.
 type runListResponse struct {
@@ -170,7 +170,7 @@ func writeAPIJSON(w http.ResponseWriter, status int, v interface{}) {
 	}
 }
 
-// HandleRunSubmission handles POST /api/agent/run.
+// HandleRunSubmission handles POST /api/agent/loop.
 // It accepts work only through the authenticated same-origin proxy path and
 // denies missing or invalid auth before runtime work starts
 // (VAL-RUNTIME-002). Returns a stable run handle (VAL-RUNTIME-003).
@@ -291,7 +291,7 @@ func (h *APIHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(req.RunID) == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "run_id is required"})
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "loop_id is required"})
 		return
 	}
 
@@ -333,9 +333,9 @@ func (h *APIHandler) HandleRunStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runID := r.URL.Query().Get("run_id")
+	runID := r.URL.Query().Get("loop_id")
 	if runID == "" {
-		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "run_id query parameter is required"})
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "loop_id query parameter is required"})
 		return
 	}
 
@@ -373,7 +373,7 @@ func (h *APIHandler) HandleRunStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleRunList handles GET /api/agent/runs.
+// HandleRunList handles GET /api/agent/loops.
 // It returns recent owner-scoped runs in reverse chronological order so
 // debugging and orchestration surfaces can inspect current work and run
 // families without polling individual IDs one by one.
@@ -440,9 +440,9 @@ func (h *APIHandler) HandleRunList(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleEventList handles GET /api/agent/events.
-// When run_id is present, it returns historical events for that specific
-// run after verifying owner access. Otherwise it returns recent owner-scoped
-// events across runs. This complements the live /api/events SSE feed.
+// When loop_id is present, it returns historical events for that specific
+// loop after verifying owner access. Otherwise it returns recent owner-scoped
+// events across loops. This complements the live /api/events SSE feed.
 func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
@@ -462,7 +462,7 @@ func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+	runID := strings.TrimSpace(r.URL.Query().Get("loop_id"))
 	if runID != "" {
 		if _, err := h.rt.GetRun(r.Context(), runID, ownerID); err != nil {
 			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "run not found"})
@@ -767,8 +767,8 @@ func (h *APIHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // report runtime readiness.
 func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.SetHealthHandler(h.HandleHealth)
-	s.HandleFunc("/api/agent/run", h.HandleRunSubmission)
-	s.HandleFunc("/api/agent/runs", h.HandleRunList)
+	s.HandleFunc("/api/agent/loop", h.HandleRunSubmission)
+	s.HandleFunc("/api/agent/loops", h.HandleRunList)
 	s.HandleFunc("/api/agent/events", h.HandleEventList)
 	s.HandleFunc("/api/agent/channel-messages", h.HandleChannelMessageList)
 	s.HandleFunc("/api/agent/topology", h.HandleTopology)

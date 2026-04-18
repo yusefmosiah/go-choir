@@ -34,7 +34,7 @@
   let activeRevisionIndex = -1;
   let editorValue = '';
   let initializedKey = '';
-  let watchedInitialTaskId = '';
+  let watchedInitialLoopId = '';
 
   function normalizeTitle(ctx) {
     if (ctx?.windowTitle) return ctx.windowTitle;
@@ -60,7 +60,7 @@
       initialContent: ctx?.initialContent || '',
       seedPrompt: ctx?.seedPrompt || '',
       createInitialVersion: !!ctx?.createInitialVersion,
-      initialTaskId: ctx?.initialTaskId || '',
+      initialLoopId: ctx?.initialLoopId || '',
     };
     return JSON.stringify(key);
   }
@@ -80,7 +80,7 @@
     return {
       source_path: appContext.sourcePath || '',
       seed_prompt: appContext.seedPrompt || '',
-      conductor_run_id: appContext.conductorTaskId || '',
+      conductor_loop_id: appContext.conductorLoopId || '',
     };
   }
 
@@ -147,8 +147,8 @@
     return revision;
   }
 
-  async function watchAgentTask(taskId, options = {}) {
-    if (!taskId) return;
+  async function watchAgentLoop(loopId, options = {}) {
+    if (!loopId) return;
     const writeThroughOnComplete = options.writeThroughOnComplete === true;
     const successStatus = options.successStatus || 'Agent created next version';
 
@@ -158,7 +158,7 @@
 
     try {
       for (;;) {
-        const status = await getAgentRevisionStatus(taskId);
+        const status = await getAgentRevisionStatus(loopId);
         if (status.state === 'completed') {
           await reloadDocument();
           if (writeThroughOnComplete && appContext.sourcePath) {
@@ -222,9 +222,10 @@
         }
       }
 
-      if (appContext.initialTaskId && appContext.initialTaskId !== watchedInitialTaskId) {
-        watchedInitialTaskId = appContext.initialTaskId;
-        void watchAgentTask(appContext.initialTaskId, { successStatus: 'First draft ready' }).catch((err) => {
+      const initialLoopId = appContext.initialLoopId || '';
+      if (initialLoopId && initialLoopId !== watchedInitialLoopId) {
+        watchedInitialLoopId = initialLoopId;
+        void watchAgentLoop(initialLoopId, { successStatus: 'First draft ready' }).catch((err) => {
           if (err instanceof AuthRequiredError) {
             dispatch('authexpired');
             return;
@@ -259,7 +260,7 @@
       const submitted = await submitAgentRevision(currentDoc.doc_id, {
         intent: 'revise',
       });
-      await watchAgentTask(submitted.run_id, {
+      await watchAgentLoop(submitted.loop_id, {
         writeThroughOnComplete: !!appContext.sourcePath,
         successStatus: 'Agent created next version',
       });

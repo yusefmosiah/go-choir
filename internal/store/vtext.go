@@ -68,17 +68,17 @@ CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc_created ON vtext_revisions(doc_id,
 
 CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 	doc_id              VARCHAR(255) NOT NULL,
-	run_id             VARCHAR(255) NOT NULL,
+	loop_id             VARCHAR(255) NOT NULL,
 	owner_id            VARCHAR(255) NOT NULL,
 	state               VARCHAR(64) NOT NULL DEFAULT 'pending',
 	revision_id         VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL,
 	completed_at        DATETIME,
-	PRIMARY KEY (doc_id, run_id)
+	PRIMARY KEY (doc_id, loop_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_doc ON vtext_agent_mutations(doc_id);
-CREATE INDEX IF NOT EXISTS idx_vtext_mutations_run ON vtext_agent_mutations(run_id);
+CREATE INDEX IF NOT EXISTS idx_vtext_mutations_run ON vtext_agent_mutations(loop_id);
 
 CREATE TABLE IF NOT EXISTS agent_evidence (
 	evidence_id    VARCHAR(255) PRIMARY KEY,
@@ -996,7 +996,7 @@ func scanRevision(row interface{ Scan(...any) error }) (types.Revision, error) {
 // duplicate canonical revision.
 type AgentMutation struct {
 	DocID       string     `json:"doc_id"`
-	RunID      string     `json:"run_id"`
+	RunID       string     `json:"loop_id"`
 	OwnerID     string     `json:"owner_id"`
 	State       string     `json:"state"` // "pending", "completed", "failed"
 	RevisionID  string     `json:"revision_id,omitempty"`
@@ -1005,7 +1005,7 @@ type AgentMutation struct {
 }
 
 // CreateAgentMutation records a new in-flight appagent mutation. It uses
-// INSERT IGNORE so that duplicate (doc_id, run_id) pairs are silently
+// INSERT IGNORE so that duplicate (doc_id, loop_id) pairs are silently
 // ignored, supporting idempotent run creation (VAL-CROSS-122).
 func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error {
 	var completedAt any
@@ -1013,7 +1013,7 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 		completedAt = m.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.vtextHandle().ExecContext(ctx,
-		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, run_id, owner_id, state, revision_id, created_at, completed_at)
+		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		m.DocID,
 		m.RunID,
@@ -1035,7 +1035,7 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 // (VAL-CROSS-122).
 func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, run_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
 		  WHERE doc_id = ? AND owner_id = ? AND state = 'pending'
 		  ORDER BY created_at DESC
@@ -1050,9 +1050,9 @@ func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID
 // been created (VAL-CROSS-122: no duplicate canonical revision).
 func (s *Store) GetAgentMutationByRun(ctx context.Context, runID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, run_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
-		  WHERE run_id = ?`,
+		  WHERE loop_id = ?`,
 		runID,
 	)
 	return scanAgentMutation(row)
@@ -1071,7 +1071,7 @@ func (s *Store) CompleteAgentMutation(ctx context.Context, runID, revisionID str
 		    SET state = 'completed',
 		        revision_id = ?,
 		        completed_at = ?
-		  WHERE run_id = ? AND state = 'pending'`,
+		  WHERE loop_id = ? AND state = 'pending'`,
 		revisionID,
 		now.Format(time.RFC3339Nano),
 		runID,
@@ -1096,7 +1096,7 @@ func (s *Store) FailAgentMutation(ctx context.Context, runID string) error {
 		`UPDATE vtext_agent_mutations
 		    SET state = 'failed',
 		        completed_at = ?
-		  WHERE run_id = ? AND state = 'pending'`,
+		  WHERE loop_id = ? AND state = 'pending'`,
 		now.Format(time.RFC3339Nano),
 		runID,
 	)

@@ -31,7 +31,7 @@ import { chromium } from '@playwright/test';
   console.log('Submitting new task for network analysis...');
   const taskResponse = await page.evaluate(async () => {
     try {
-      const res = await fetch('https://draft.choir-ip.com/api/agent/run', {
+      const res = await fetch('https://draft.choir-ip.com/api/agent/loop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: 'What is 2+2?' })

@@ -531,7 +531,7 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 		}
 	}
 	if !foundDelta {
-		t.Error("expected run.delta event from streaming bridge provider")
+		t.Error("expected loop.delta event from streaming bridge provider")
 	}
 }
 

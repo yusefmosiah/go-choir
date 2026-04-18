@@ -22,7 +22,7 @@ export async function submitConductorPrompt(text, options = {}) {
     metadata.initial_document_title = options.initialDocumentTitle;
   }
 
-  const res = await fetchWithRenewal('/api/agent/run', {
+  const res = await fetchWithRenewal('/api/agent/loop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -55,17 +55,17 @@ function parseDecision(raw) {
   return parsed;
 }
 
-export async function waitForConductorDecision(runId, options = {}) {
-  if (!runId) {
-    throw new Error('Conductor run ID is required');
+export async function waitForConductorDecision(loopId, options = {}) {
+  if (!loopId) {
+    throw new Error('Conductor loop ID is required');
   }
 
-  const timeoutMs = options.timeoutMs ?? 15000;
+  const timeoutMs = options.timeoutMs ?? 60000;
   const pollMs = options.pollMs ?? 500;
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const res = await fetchWithRenewal(`/api/agent/status?run_id=${encodeURIComponent(runId)}`, {
+    const res = await fetchWithRenewal(`/api/agent/status?loop_id=${encodeURIComponent(loopId)}`, {
       method: 'GET',
     });
 
@@ -75,7 +75,7 @@ export async function waitForConductorDecision(runId, options = {}) {
     }
 
     const status = await res.json();
-    if (status.state === 'completed') {
+    if (typeof status.result === 'string' && status.result.trim()) {
       return parseDecision(status.result);
     }
     if (status.state === 'failed' || status.state === 'blocked' || status.state === 'cancelled') {

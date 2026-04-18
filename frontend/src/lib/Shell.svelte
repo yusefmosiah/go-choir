@@ -6,7 +6,7 @@
     - session-aware current-user display
     - bootstrap data from GET /api/shell/bootstrap
     - live-channel status from GET /api/ws
-    - runtime prompt/run UI that submits through POST /api/agent/run,
+    - runtime prompt/loop UI that submits through POST /api/agent/loop,
       renders status/event progress, and returns a real provider-backed
       answer (VAL-RUNTIME-007, VAL-CROSS-109)
     - in-shell protected refresh action that triggers renewal when
@@ -27,12 +27,12 @@
       this triggers refresh rotation without a page reload. When both
       are invalid, the shell falls back cleanly to guest auth state.
 
-  Renewal-safe run submission (VAL-CROSS-111):
-    - The TaskRunner component uses fetchWithRenewal for run submission
+  Renewal-safe loop submission (VAL-CROSS-111):
+    - The TaskRunner component uses fetchWithRenewal for loop submission
       and guards against duplicate submission during renewal retry.
 
   Reattachment across reload/new-tab (VAL-CROSS-121):
-    - The TaskRunner checks for an in-flight run handle on mount
+    - The TaskRunner checks for an in-flight loop handle on mount
       and reattaches instead of resubmitting.
 
   Data attributes for test targeting:

@@ -1677,7 +1677,7 @@ func TestAllAPIRoutesDenySignedOutCallers(t *testing.T) {
 	}{
 		{"/api/shell/bootstrap", http.MethodGet, http.StatusUnauthorized},
 		{"/api/ws", http.MethodGet, http.StatusUnauthorized},
-		{"/api/agent/run", http.MethodPost, http.StatusUnauthorized},
+		{"/api/agent/loop", http.MethodPost, http.StatusUnauthorized},
 		{"/api/agent/status", http.MethodGet, http.StatusUnauthorized},
 		{"/api/events", http.MethodGet, http.StatusUnauthorized},
 		{"/api/unknown", http.MethodGet, http.StatusUnauthorized},
@@ -1804,7 +1804,7 @@ func TestSignedOutCallersNeverSeeSandboxData(t *testing.T) {
 	paths := []string{
 		"/api/shell/bootstrap",
 		"/api/ws",
-		"/api/agent/run",
+		"/api/agent/loop",
 		"/api/anything",
 	}
 
@@ -2156,11 +2156,11 @@ func testVMctlProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Se
 			"path":        r.URL.Path,
 		})
 	})
-	sandboxMux.HandleFunc("/api/agent/run", func(w http.ResponseWriter, r *http.Request) {
+	sandboxMux.HandleFunc("/api/agent/loop", func(w http.ResponseWriter, r *http.Request) {
 		user := r.Header.Get("X-Authenticated-User")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"run_id":  "task-123",
+			"loop_id":  "task-123",
 			"owner_id": user,
 			"state":    "accepted",
 		})
@@ -2351,7 +2351,7 @@ func TestVMctlRouting_ProtectedAPIThroughVM(t *testing.T) {
 
 	accessToken := issueTestAccessJWT(priv, "user-runtime")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/agent/run", strings.NewReader(`{"prompt":"test"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/loop", strings.NewReader(`{"prompt":"test"}`))
 	req.Header.Set("Cookie", "choir_access="+accessToken)
 	w := httptest.NewRecorder()
 	handler.HandleProtectedAPI(w, req)

@@ -84,7 +84,7 @@ func TestHandleRunSubmissionReturnsStableHandle(t *testing.T) {
 	_, handler := testAPISetup(t)
 
 	body := `{"prompt":"explain closures in Go"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", body, "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -99,7 +99,7 @@ func TestHandleRunSubmissionReturnsStableHandle(t *testing.T) {
 	}
 
 	if resp.RunID == "" {
-		t.Error("run_id should not be empty")
+		t.Error("loop_id should not be empty")
 	}
 	if resp.State != types.RunPending {
 		t.Errorf("state: got %q, want %q", resp.State, types.RunPending)
@@ -113,7 +113,7 @@ func TestHandleRunSubmissionPreservesMetadata(t *testing.T) {
 	rt, handler := testAPISetup(t)
 
 	body := `{"prompt":"route this into conductor","metadata":{"agent_profile":"conductor","agent_role":"conductor","input_source":"prompt_bar","requested_app":"vtext"}}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", body, "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -160,7 +160,7 @@ func TestHandleRunListOwnerScoped(t *testing.T) {
 		t.Fatalf("submit bob task: %v", err)
 	}
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/runs?limit=20", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/loops?limit=20", "", "user-alice")
 	w := httptest.NewRecorder()
 	handler.HandleRunList(w, req)
 
@@ -218,7 +218,7 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 		t.Fatal("expected owner events")
 	}
 
-	taskReq := authenticatedRequest(http.MethodGet, "/api/agent/events?run_id="+rec.RunID+"&limit=50", "", "user-alice")
+	taskReq := authenticatedRequest(http.MethodGet, "/api/agent/events?loop_id="+rec.RunID+"&limit=50", "", "user-alice")
 	taskW := httptest.NewRecorder()
 	handler.HandleEventList(taskW, taskReq)
 
@@ -235,11 +235,11 @@ func TestHandleEventListSupportsOwnerAndTaskHistory(t *testing.T) {
 	}
 	for _, event := range taskResp.Events {
 		if event.RunID != rec.RunID {
-			t.Fatalf("unexpected run_id in task-scoped events: %q", event.RunID)
+			t.Fatalf("unexpected loop_id in task-scoped events: %q", event.RunID)
 		}
 	}
 
-	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/events?run_id="+rec.RunID, "", "user-bob")
+	otherReq := authenticatedRequest(http.MethodGet, "/api/agent/events?loop_id="+rec.RunID, "", "user-bob")
 	otherW := httptest.NewRecorder()
 	handler.HandleEventList(otherW, otherReq)
 	if otherW.Code != http.StatusNotFound {
@@ -319,7 +319,7 @@ func TestHandleRunSubmissionAuthGated(t *testing.T) {
 
 	// Request without auth header.
 	body := `{"prompt":"test prompt"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", body, "")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -332,7 +332,7 @@ func TestHandleRunSubmissionAuthGated(t *testing.T) {
 func TestHandleRunSubmissionMethodNotAllowed(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/run", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/loop", "", "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -346,7 +346,7 @@ func TestHandleRunSubmissionEmptyPrompt(t *testing.T) {
 	_, handler := testAPISetup(t)
 
 	body := `{"prompt":""}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", body, "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -359,7 +359,7 @@ func TestHandleRunSubmissionEmptyPrompt(t *testing.T) {
 func TestHandleRunSubmissionInvalidBody(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", "not json", "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", "not json", "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunSubmission(w, req)
@@ -383,7 +383,7 @@ func TestHandleRunStatusReturnsCorrelatedHandle(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?loop_id=%s", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunStatus(w, req)
@@ -398,7 +398,7 @@ func TestHandleRunStatusReturnsCorrelatedHandle(t *testing.T) {
 	}
 
 	if resp.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", resp.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", resp.RunID, rec.RunID)
 	}
 	if resp.State != types.RunCompleted {
 		t.Errorf("state: got %q, want %q", resp.State, types.RunCompleted)
@@ -412,7 +412,7 @@ func TestHandleRunStatusAuthGated(t *testing.T) {
 	// VAL-RUNTIME-006: status is auth-gated.
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id=test", "", "")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?loop_id=test", "", "")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunStatus(w, req)
@@ -433,7 +433,7 @@ func TestHandleRunStatusCallerScoped(t *testing.T) {
 
 	// Eve tries to see Alice's task.
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-eve")
+		fmt.Sprintf("/api/agent/status?loop_id=%s", rec.RunID), "", "user-eve")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunStatus(w, req)
@@ -459,7 +459,7 @@ func TestHandleRunStatusMissingRunID(t *testing.T) {
 func TestHandleRunStatusNotFound(t *testing.T) {
 	_, handler := testAPISetup(t)
 
-	req := authenticatedRequest(http.MethodGet, "/api/agent/status?run_id=nonexistent", "", "user-alice")
+	req := authenticatedRequest(http.MethodGet, "/api/agent/status?loop_id=nonexistent", "", "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunStatus(w, req)
@@ -514,7 +514,7 @@ func TestHandleRunStatusFailedOutcome(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	req := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?run_id=%s", rec.RunID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?loop_id=%s", rec.RunID), "", "user-alice")
 	w := httptest.NewRecorder()
 
 	handler.HandleRunStatus(w, req)
@@ -568,7 +568,7 @@ func TestHandleRunStatusByIDReturnsTaskRecord(t *testing.T) {
 
 	// Response includes all required fields (VAL-CHOIR-002).
 	if resp.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", resp.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", resp.RunID, rec.RunID)
 	}
 	if resp.OwnerID != "user-alice" {
 		t.Errorf("owner_id: got %q, want user-alice", resp.OwnerID)
@@ -795,7 +795,7 @@ func TestHandleRunStatusByIDSpawnedChildTask(t *testing.T) {
 	}
 
 	if resp.RunID != child.RunID {
-		t.Errorf("run_id: got %q, want %q", resp.RunID, child.RunID)
+		t.Errorf("loop_id: got %q, want %q", resp.RunID, child.RunID)
 	}
 	if resp.State == "" {
 		t.Error("state should not be empty")
@@ -933,7 +933,7 @@ func TestHandleEventsReturnsSSEStream(t *testing.T) {
 		}
 	}
 	if !foundSubmitted {
-		t.Error("expected run.submitted event in SSE stream")
+		t.Error("expected loop.submitted event in SSE stream")
 	}
 }
 
@@ -1022,10 +1022,10 @@ func TestHandleEventsIncremental(t *testing.T) {
 
 	// Should see at least submitted + started (incremental, not buffered).
 	if !kinds[types.EventRunSubmitted] {
-		t.Error("expected run.submitted event")
+		t.Error("expected loop.submitted event")
 	}
 	if !kinds[types.EventRunStarted] {
-		t.Error("expected run.started event (arrived incrementally)")
+		t.Error("expected loop.started event (arrived incrementally)")
 	}
 }
 
@@ -1300,7 +1300,7 @@ func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 
 	// Submit the failing task.
 	body := `{"prompt":"will fail"}`
-	req := authenticatedRequest(http.MethodPost, "/api/agent/run", body, "user-alice")
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop", body, "user-alice")
 	w := httptest.NewRecorder()
 	handler.HandleRunSubmission(w, req)
 
@@ -1318,7 +1318,7 @@ func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 	}
 
 	statusReq := authenticatedRequest(http.MethodGet,
-		fmt.Sprintf("/api/agent/status?run_id=%s", submitResp.RunID), "", "user-alice")
+		fmt.Sprintf("/api/agent/status?loop_id=%s", submitResp.RunID), "", "user-alice")
 	statusW := httptest.NewRecorder()
 	handler.HandleRunStatus(statusW, statusReq)
 
@@ -1337,7 +1337,7 @@ func TestProviderFailureDoesNotCrashRuntime(t *testing.T) {
 
 	// The runtime should still accept new runs.
 	newBody := `{"prompt":"after failure"}`
-	newReq := authenticatedRequest(http.MethodPost, "/api/agent/run", newBody, "user-alice")
+	newReq := authenticatedRequest(http.MethodPost, "/api/agent/loop", newBody, "user-alice")
 	newW := httptest.NewRecorder()
 
 	// Replace the provider with a working one for the new task.

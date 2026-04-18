@@ -71,7 +71,7 @@ func TestSubmitTaskReturnsStableHandle(t *testing.T) {
 
 	// Task should have a stable UUID handle.
 	if rec.RunID == "" {
-		t.Error("run_id should not be empty")
+		t.Error("loop_id should not be empty")
 	}
 	if rec.State != types.RunPending {
 		t.Errorf("state: got %q, want %q", rec.State, types.RunPending)
@@ -105,7 +105,7 @@ func TestSubmitTaskPersistsToStore(t *testing.T) {
 		t.Fatalf("get task from store: %v", err)
 	}
 	if stored.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", stored.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", stored.RunID, rec.RunID)
 	}
 	if stored.OwnerID != "user-bob" {
 		t.Errorf("owner_id: got %q, want user-bob", stored.OwnerID)
@@ -147,7 +147,7 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		CreateInitialVersion bool   `json:"create_initial_version"`
 		DocID                string `json:"doc_id"`
 		InitialRevisionID    string `json:"initial_revision_id"`
-		InitialRunID         string `json:"initial_run_id"`
+		InitialRunID         string `json:"initial_loop_id"`
 	}
 	if err := json.Unmarshal([]byte(stored.Result), &result); err != nil {
 		t.Fatalf("decode result json: %v\nraw=%q", err, stored.Result)
@@ -174,7 +174,7 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		t.Fatal("initial_revision_id should not be empty")
 	}
 	if result.InitialRunID == "" {
-		t.Fatal("initial_run_id should not be empty")
+		t.Fatal("initial_loop_id should not be empty")
 	}
 
 	doc, err := s.GetDocument(ctx, result.DocID, "user-alice")
@@ -196,8 +196,8 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		t.Fatalf("v0 content: got %q, want hi", v0.Content)
 	}
 	meta := decodeRevisionMetadata(v0.Metadata)
-	if metadataString(meta, "conductor_run_id") != rec.RunID {
-		t.Fatalf("v0 conductor_run_id: got %q, want %q", metadataString(meta, "conductor_run_id"), rec.RunID)
+	if metadataString(meta, "conductor_loop_id") != rec.RunID {
+		t.Fatalf("v0 conductor_loop_id: got %q, want %q", metadataString(meta, "conductor_loop_id"), rec.RunID)
 	}
 
 	initialTask, err := s.GetRun(ctx, result.InitialRunID)
@@ -281,7 +281,7 @@ func TestGetRunCallerScoped(t *testing.T) {
 		t.Fatalf("get own task: %v", err)
 	}
 	if got.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", got.RunID, rec.RunID)
 	}
 
 	// Another user cannot see the task (VAL-RUNTIME-006).
@@ -399,7 +399,7 @@ func TestProviderFailureSurfacesStructuredOutcome(t *testing.T) {
 		t.Fatalf("submit task after failure: %v", err)
 	}
 	if nextRec.RunID == "" {
-		t.Error("run_id should not be empty for task submitted after failure")
+		t.Error("loop_id should not be empty for task submitted after failure")
 	}
 }
 
@@ -443,7 +443,7 @@ func TestEventEmissionOnTaskSubmission(t *testing.T) {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	// Should receive a run.submitted event.
+	// Should receive a loop.submitted event.
 	select {
 	case ev := <-ch:
 		if ev.Record.Kind != types.EventRunSubmitted {
@@ -453,7 +453,7 @@ func TestEventEmissionOnTaskSubmission(t *testing.T) {
 			t.Errorf("event owner_id: got %q, want user-alice", ev.Record.OwnerID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for run.submitted event")
+		t.Fatal("timed out waiting for loop.submitted event")
 	}
 }
 
@@ -479,7 +479,7 @@ func TestEventsPersistedToStore(t *testing.T) {
 		t.Fatal("expected events to be persisted")
 	}
 
-	// First event should be run.submitted.
+	// First event should be loop.submitted.
 	if evts[0].Kind != types.EventRunSubmitted {
 		t.Errorf("first event kind: got %q, want %q", evts[0].Kind, types.EventRunSubmitted)
 	}
@@ -546,7 +546,7 @@ func TestTaskRecoveryAcrossRestart(t *testing.T) {
 	}
 
 	if got.RunID != rec.RunID {
-		t.Errorf("run_id: got %q, want %q", got.RunID, rec.RunID)
+		t.Errorf("loop_id: got %q, want %q", got.RunID, rec.RunID)
 	}
 	if got.State != types.RunCompleted {
 		t.Errorf("state: got %q, want %q", got.State, types.RunCompleted)
@@ -774,16 +774,16 @@ done:
 	}
 
 	if !kinds[types.EventRunSubmitted] {
-		t.Error("expected run.submitted event")
+		t.Error("expected loop.submitted event")
 	}
 	if !kinds[types.EventRunStarted] {
-		t.Error("expected run.started event")
+		t.Error("expected loop.started event")
 	}
 	if !kinds[types.EventRunProgress] {
-		t.Error("expected run.progress event")
+		t.Error("expected loop.progress event")
 	}
 	if !kinds[types.EventRunCompleted] {
-		t.Error("expected run.completed event")
+		t.Error("expected loop.completed event")
 	}
 }
 
@@ -817,7 +817,7 @@ func TestProviderStubDeltaEvent(t *testing.T) {
 		}
 	}
 	if !hasDelta {
-		t.Error("expected run.delta event from stub provider")
+		t.Error("expected loop.delta event from stub provider")
 	}
 }
 
@@ -1021,7 +1021,7 @@ func TestHealthReportsActiveProvider(t *testing.T) {
 
 // TestBuildAppagentRevisionMetadataPreservesDurableKeys verifies that
 // appagent revisions carry forward seed_prompt, source_path, and
-// conductor_run_id from the parent revision metadata so subsequent
+// conductor_loop_id from the parent revision metadata so subsequent
 // revise requests retain the original user context.
 func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	_, s := testRuntime(t)
@@ -1042,7 +1042,7 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	parentMeta, _ := json.Marshal(map[string]any{
 		"seed_prompt":      "write a haiku about cats",
 		"source_path":      "/notes/cats.md",
-		"conductor_run_id": "task-original-conductor",
+		"conductor_loop_id": "task-original-conductor",
 	})
 	parentRev := types.Revision{
 		RevisionID: "rev-parent-meta",
@@ -1080,15 +1080,15 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	if resultMap["source_path"] != "/notes/cats.md" {
 		t.Errorf("source_path: got %v, want '/notes/cats.md'", resultMap["source_path"])
 	}
-	if resultMap["conductor_run_id"] != "task-original-conductor" {
-		t.Errorf("conductor_run_id: got %v, want 'task-original-conductor'", resultMap["conductor_run_id"])
+	if resultMap["conductor_loop_id"] != "task-original-conductor" {
+		t.Errorf("conductor_loop_id: got %v, want 'task-original-conductor'", resultMap["conductor_loop_id"])
 	}
 
 	// Verify agent-specific fields are also present.
 	if resultMap["source"] != "agent_revision" {
 		t.Errorf("source: got %v, want 'agent_revision'", resultMap["source"])
 	}
-	if resultMap["run_id"] != "task-agent-1" {
-		t.Errorf("run_id: got %v, want 'task-agent-1'", resultMap["run_id"])
+	if resultMap["loop_id"] != "task-agent-1" {
+		t.Errorf("loop_id: got %v, want 'task-agent-1'", resultMap["loop_id"])
 	}
 }
