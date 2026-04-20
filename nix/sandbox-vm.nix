@@ -126,6 +126,9 @@
       RestartSec = 1;
       EnvironmentFile = [ "-/run/go-choir-sandbox.env" ];
       Environment = [
+        # VM health checks and host forwarding reach the guest via its tap IP,
+        # so the sandbox must listen on all guest interfaces, not loopback only.
+        "SERVER_HOST=0.0.0.0"
         # Default port; overridden by guest_port= in kernel cmdline
         "SANDBOX_PORT=8085"
         "SANDBOX_ID=sandbox-guest"
