@@ -68,6 +68,53 @@
 
   # ── Guest services ───────────────────────────────────────────────────
 
+  # Configure the guest network from the vmmanager-provided kernel ip=
+  # parameter before systemd-networkd starts. We cannot rely on DHCP here:
+  # vmmanager owns the host tap, but it does not run a DHCP server.
+  systemd.services.go-choir-configure-network = {
+    description = "Configure guest network from kernel cmdline";
+    wantedBy = [ "sysinit.target" ];
+    before = [ "systemd-networkd.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      set -euo pipefail
+      client_ip=""
+      gateway_ip=""
+
+      for param in $(cat /proc/cmdline); do
+        case "$param" in
+          ip=*)
+            value="''${param#ip=}"
+            IFS=':' read -r client_ip _ gateway_ip _ _ _ _ <<EOF
+$value
+EOF
+            ;;
+        esac
+      done
+
+      if [ -z "$client_ip" ] || [ -z "$gateway_ip" ]; then
+        echo "go-choir-configure-network: missing ip= kernel param" >&2
+        exit 1
+      fi
+
+      mkdir -p /run/systemd/network
+      cat > /run/systemd/network/10-vm-runtime.network <<EOF
+[Match]
+Driver=virtio_net
+
+[Network]
+Address=$client_ip/30
+Gateway=$gateway_ip
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+EOF
+    '';
+  };
+
   # Extract per-VM bootstrap settings into an env file before the sandbox
   # service starts. Runtime parameters come from kernel cmdline, while the
   # gateway token is read from the persistent data volume vmmanager owns.
@@ -144,23 +191,11 @@
   networking.firewall.allowedTCPPorts = [ 8085 ];
 
   # ── Networking ───────────────────────────────────────────────────────
-  # Use systemd-networkd for DHCP on virtio-net interfaces.
-  # vmmanager creates the tap device and assigns IPs via the ip= kernel
-  # parameter. The guest configures networking through systemd-networkd.
+  # Use systemd-networkd for interface bring-up. The actual per-VM static
+  # address is generated at boot by go-choir-configure-network from the
+  # vmmanager-provided kernel ip= parameter.
   networking.useDHCP = false;
-  systemd.network = {
-    enable = true;
-    networks."10-vm" = {
-      matchConfig.Driver = "virtio_net";
-      networkConfig = {
-        DHCP = "ipv4";
-      };
-      dhcpV4Config = {
-        UseDNS = true;
-        UseRoutes = true;
-      };
-    };
-  };
+  systemd.network.enable = true;
 
   # ── System packages ──────────────────────────────────────────────────
   # Minimal set for debugging and runtime support.
