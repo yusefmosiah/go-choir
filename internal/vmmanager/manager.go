@@ -1122,13 +1122,13 @@ func (m *Manager) deleteTapDevice(name string) {
 	comment := fmt.Sprintf("go-choir-vm-%s", name)
 
 	// Remove all iptables rules associated with this VM's comment tag.
-	// We clean up PREROUTING, OUTPUT, POSTROUTING, and FORWARD chains
+	// We clean up PREROUTING, OUTPUT, POSTROUTING, FORWARD, and INPUT chains
 	// to ensure no stale rules leak between VM lifecycles.
 	for _, chain := range []string{"PREROUTING", "OUTPUT", "POSTROUTING"} {
 		_ = exec.Command("sh", "-c",
 			fmt.Sprintf("%s -t nat -S %s | grep '%s' | cut -d' ' -f2- | while read rule; do %s -t nat -D %s $rule 2>/dev/null; done", iptBin, chain, comment, iptBin, chain)).Run()
 	}
-	for _, chain := range []string{"FORWARD"} {
+	for _, chain := range []string{"FORWARD", "INPUT"} {
 		_ = exec.Command("sh", "-c",
 			fmt.Sprintf("%s -S %s | grep '%s' | cut -d' ' -f2- | while read rule; do %s -D %s $rule 2>/dev/null; done", iptBin, chain, comment, iptBin, chain)).Run()
 	}
@@ -1140,6 +1140,8 @@ func (m *Manager) deleteTapDevice(name string) {
 	}
 	_ = exec.Command("sh", "-c",
 		fmt.Sprintf("%s -S FORWARD | grep '%s' | cut -d' ' -f2- | while read rule; do %s -D FORWARD $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
+	_ = exec.Command("sh", "-c",
+		fmt.Sprintf("%s -S INPUT | grep '%s' | cut -d' ' -f2- | while read rule; do %s -D INPUT $rule 2>/dev/null; done", iptBin, name, iptBin)).Run()
 
 	cmd := exec.Command(ipBin, "link", "del", name)
 	if err := cmd.Run(); err != nil {
@@ -1194,11 +1196,15 @@ func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, gues
 		"-i", tapName, "-j", "ACCEPT").Run()
 	_ = exec.Command(iptBin, "-A", "FORWARD",
 		"-o", tapName, "-j", "ACCEPT").Run()
+	comment := fmt.Sprintf("go-choir-vm-%s", tapName)
 	// Allow guest sandboxes to reach the host-side gateway listener on the tap
-	// subnet without opening 8084 beyond VM tap interfaces.
-	_ = exec.Command(iptBin, "-A", "INPUT",
+	// subnet without opening 8084 beyond VM tap interfaces. Insert ahead of
+	// nixos-fw so the packet is accepted before the host firewall's default
+	// refuse path.
+	_ = exec.Command(iptBin, "-I", "INPUT", "1",
 		"-i", tapName,
 		"-p", "tcp", "--dport", "8084",
+		"-m", "comment", "--comment", comment,
 		"-j", "ACCEPT").Run()
 
 	// Set up MASQUERADE (SNAT) for outbound guest traffic.
@@ -1206,7 +1212,6 @@ func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, gues
 	// host (e.g., to 127.0.0.1:8084 for gateway) but the host's reply
 	// packets don't route back to the guest. MASQUERADE rewrites the
 	// source IP to the host's IP so replies come back through the tap.
-	comment := fmt.Sprintf("go-choir-vm-%s", tapName)
 	_ = exec.Command(iptBin, "-t", "nat", "-A", "POSTROUTING",
 		"-s", guestIP+"/30",
 		"-o", "lo",
