@@ -772,6 +772,11 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// Network config is passed via ip= kernel parameter so the guest
 	// can configure its network interface at boot time.
 	//
+	// The sandbox gateway token is a per-VM sandbox identity credential, not a
+	// provider secret. We pass it through kernel cmdline bootstrap because the
+	// guest's persistent data disk is not pre-seeded from the host-side
+	// PersistentDir before first boot.
+	//
 	// With the upstream microvm.nix approach:
 	//   - start from the microvm-provided kernel params (`root=fstab`,
 	//     `/nix/store/.../init`, `regInfo=...`)
@@ -797,6 +802,9 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 			fmt.Sprintf("choir.gateway_url=http://%s:8084", hostIP),
 			fmt.Sprintf("ip=%s::%s:255.255.255.252::eth0:off", guestIP, hostIP),
 		}
+		if cfg.GatewayToken != "" {
+			runtimeArgs = append(runtimeArgs, fmt.Sprintf("choir.gateway_token=%s", cfg.GatewayToken))
+		}
 		bootArgs = strings.Join(append([]string{strings.TrimSpace(m.cfg.KernelParams)}, runtimeArgs...), " ")
 	} else {
 		// Legacy approach with custom init script.
@@ -809,6 +817,9 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 			cfg.GuestPort, cfg.VMID, cfg.Epoch,
 			guestIP, hostIP,
 		)
+		if cfg.GatewayToken != "" {
+			bootArgs += fmt.Sprintf(" choir.gateway_token=%s", cfg.GatewayToken)
+		}
 	}
 
 	// Build boot-source config. If an initrd is available, include it

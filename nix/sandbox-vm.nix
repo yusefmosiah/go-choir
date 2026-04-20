@@ -146,9 +146,14 @@ EOF
           choir.gateway_url=*)
             echo "RUNTIME_GATEWAY_URL=''${param#choir.gateway_url=}" >> "$ENV_FILE"
             ;;
+          choir.gateway_token=*)
+            echo "RUNTIME_GATEWAY_TOKEN=''${param#choir.gateway_token=}" >> "$ENV_FILE"
+            ;;
         esac
       done
 
+      # Back-compat fallback for older bootstraps that wrote only the host-side
+      # token file expectation. Kernel cmdline now provides first-boot truth.
       if [ -f /mnt/persistent/gateway-token ]; then
         printf 'RUNTIME_GATEWAY_TOKEN=%s\n' "$(cat /mnt/persistent/gateway-token)" >> "$ENV_FILE"
       fi

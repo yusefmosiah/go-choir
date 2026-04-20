@@ -540,9 +540,6 @@ func TestBuildFirecrackerConfig_ComprehensiveSecretExclusion(t *testing.T) {
 		"FIREWORKS_API_KEY",
 		"RUNTIME_FIREWORKS_MODEL",
 		"FIREWORKS_BASE_URL",
-		// Gateway credential patterns
-		"RUNTIME_GATEWAY_URL",
-		"RUNTIME_GATEWAY_TOKEN",
 		// Auth signing material
 		"AUTH_JWT_PRIVATE_KEY_PATH",
 		"ed25519-key",
@@ -550,7 +547,6 @@ func TestBuildFirecrackerConfig_ComprehensiveSecretExclusion(t *testing.T) {
 		"Bearer",
 		"SECRET",
 		"PASSWORD",
-		"TOKEN",
 		"api_key",
 		"apiKey",
 		"api-key",
@@ -638,8 +634,8 @@ func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
 		}
 	}
 
-	// Verify the boot args do NOT contain host-side parameters.
-	forbiddenArgs := []string{"gateway", "provider", "api_key", "secret", "auth", "token"}
+	// Verify the boot args do NOT contain host-side provider parameters.
+	forbiddenArgs := []string{"provider", "api_key", "secret", "auth"}
 	for _, arg := range forbiddenArgs {
 		if containsStr(bootArgs, arg) {
 			t.Errorf("VAL-VM-011: boot args contain forbidden pattern: %s (full: %s)", arg, bootArgs)
@@ -713,12 +709,15 @@ func TestGuestInitScript_NoProviderCredentials(t *testing.T) {
 	// The guest init script sets only:
 	//   - SANDBOX_PORT (from guest_port kernel param)
 	//   - SANDBOX_ID (from vm_id kernel param)
+	//   - RUNTIME_GATEWAY_URL / RUNTIME_GATEWAY_TOKEN (sandbox auth only)
 	//   - RUNTIME_STORE_PATH (local persistent path)
 	//
-	// No provider credentials, gateway URLs, or auth material are set.
+	// No provider credentials or host-side secret paths are set.
 	guestEnvVars := []string{
 		"SANDBOX_PORT",
 		"SANDBOX_ID",
+		"RUNTIME_GATEWAY_URL",
+		"RUNTIME_GATEWAY_TOKEN",
 		"RUNTIME_STORE_PATH",
 	}
 
@@ -726,8 +725,6 @@ func TestGuestInitScript_NoProviderCredentials(t *testing.T) {
 		"ZAI_API_KEY",
 		"AWS_BEARER_TOKEN_BEDROCK",
 		"FIREWORKS_API_KEY",
-		"RUNTIME_GATEWAY_URL",
-		"RUNTIME_GATEWAY_TOKEN",
 		"AUTH_JWT_PRIVATE_KEY_PATH",
 		"PROXY_AUTH_PUBLIC_KEY_PATH",
 		"GATEWAY_PORT",
@@ -883,6 +880,35 @@ func TestBuildFirecrackerConfig_IPConfigInBootArgs(t *testing.T) {
 	// Verify the ip= parameter contains the expected guest/host IPs.
 	if !containsStr(bootArgs, "ip=172.2.0.2::172.2.0.1:255.255.255.252::eth0:off") {
 		t.Errorf("expected ip= parameter with correct subnet in boot args: %s", bootArgs)
+	}
+}
+
+func TestBuildFirecrackerConfig_IncludesGatewayTokenBootstrapParam(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.InitrdPath = "/opt/go-choir/guest/initrd"
+	cfg.StoreDiskPath = "/opt/go-choir/guest/storedisk.erofs"
+	cfg.KernelParams = "root=fstab init=/nix/store/example-init regInfo=/nix/store/example-reginfo"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:              "vm-gateway-token-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		InitrdPath:        cfg.InitrdPath,
+		StoreDiskPath:     cfg.StoreDiskPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
+		MachineMemSizeMib: 512,
+		GatewayToken:      "vm-gateway-token-test:abcdef123456",
+		Epoch:             1,
+	}
+
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9000)
+	bootArgs := fcConfig["boot-source"].(map[string]interface{})["boot_args"].(string)
+	if !containsStr(bootArgs, "choir.gateway_token=vm-gateway-token-test:abcdef123456") {
+		t.Fatalf("expected gateway token bootstrap arg in %q", bootArgs)
 	}
 }
 
