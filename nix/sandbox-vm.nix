@@ -68,11 +68,9 @@
 
   # ── Guest services ───────────────────────────────────────────────────
 
-  # Extract gateway token and other secrets from kernel cmdline.
-  # The vmmanager injects parameters into the Firecracker --cmdline like:
-  #   choir.gateway_token=<TOKEN>
-  # This oneshot service parses them and writes an env file before
-  # the sandbox service starts.
+  # Extract per-VM bootstrap settings into an env file before the sandbox
+  # service starts. Runtime parameters come from kernel cmdline, while the
+  # gateway token is read from the persistent data volume vmmanager owns.
   systemd.services.go-choir-extract-cmdline = {
     description = "Extract go-choir secrets from kernel cmdline";
     wantedBy = [ "multi-user.target" ];
@@ -89,9 +87,6 @@
       # Parse kernel cmdline parameters from vmmanager.
       for param in $(cat /proc/cmdline); do
         case "$param" in
-          choir.gateway_token=*)
-            echo "RUNTIME_GATEWAY_TOKEN=''${param#choir.gateway_token=}" >> "$ENV_FILE"
-            ;;
           guest_port=*)
             echo "SANDBOX_PORT=''${param#guest_port=}" >> "$ENV_FILE"
             ;;
@@ -101,8 +96,15 @@
           epoch=*)
             echo "VM_EPOCH=''${param#epoch=}" >> "$ENV_FILE"
             ;;
+          choir.gateway_url=*)
+            echo "RUNTIME_GATEWAY_URL=''${param#choir.gateway_url=}" >> "$ENV_FILE"
+            ;;
         esac
       done
+
+      if [ -f /mnt/persistent/gateway-token ]; then
+        printf 'RUNTIME_GATEWAY_TOKEN=%s\n' "$(cat /mnt/persistent/gateway-token)" >> "$ENV_FILE"
+      fi
 
       chmod 0640 "$ENV_FILE"
     '';

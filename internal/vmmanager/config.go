@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,15 @@ func LoadConfigFromEnv() ManagerConfig {
 
 	if v := os.Getenv("VM_STORE_DISK_IMAGE"); v != "" {
 		cfg.StoreDiskPath = v
+	}
+
+	if v := os.Getenv("VM_KERNEL_PARAMS"); v != "" {
+		cfg.KernelParams = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("VM_KERNEL_PARAMS_FILE"); v != "" {
+		if data, err := os.ReadFile(v); err == nil {
+			cfg.KernelParams = strings.TrimSpace(string(data))
+		}
 	}
 
 	if v := os.Getenv("VM_GUEST_PORT"); v != "" {

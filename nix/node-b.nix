@@ -226,13 +226,15 @@ in
         # Guest images are built from the repo via `nix build .#guest-image`.
         # The microvm.nix approach produces:
         #   - vmlinux (kernel)
+        #   - rootfs.ext4 (boot disk / guest root filesystem)
         #   - initrd (for systemd module loading)
         #   - storedisk.erofs (shared nix store)
-        # The old rootfs.ext4 is no longer used with the microvm.nix approach.
         "VM_FIRECRACKER_BIN=${pkgs.firecracker}/bin/firecracker"
         "VM_KERNEL_IMAGE=/var/lib/go-choir/guest/vmlinux"
+        "VM_ROOTFS_IMAGE=/var/lib/go-choir/guest/rootfs.ext4"
         "VM_INITRD_IMAGE=/var/lib/go-choir/guest/initrd"
         "VM_STORE_DISK_IMAGE=/var/lib/go-choir/guest/storedisk.erofs"
+        "VM_KERNEL_PARAMS_FILE=/var/lib/go-choir/guest/kernel-params"
         "VM_STATE_DIR=/var/lib/go-choir/vm-state"
         "VM_HOST_BASE_PORT=9000"
         "VM_CPU_COUNT=2"

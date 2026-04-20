@@ -118,16 +118,20 @@
       # microvm.nix. From it we extract the individual artifacts that
       # vmmanager needs to launch Firecracker:
       #   - vmlinux (kernel)
+      #   - boot disk (ext4 root filesystem)
       #   - initrd (for systemd module loading)
       #   - store disk (erofs for the nix store closure)
       #
       # The guest-image package bundles these for easy deployment:
       #   nix build .#guest-image
-      #   cp result/vmlinux result/initrd result/storedisk.erofs /var/lib/go-choir/guest/
+      #   cp result/vmlinux result/rootfs.ext4 result/initrd result/storedisk.erofs /var/lib/go-choir/guest/
       guestVmConfig = self.nixosConfigurations.go-choir-sandbox-vm.config;
 
       # Guest kernel (vmlinux ELF binary for Firecracker).
       guestKernel = guestVmConfig.boot.kernelPackages.kernel.dev;
+
+      # Guest boot disk (root filesystem image).
+      guestBootDisk = guestVmConfig.microvm.bootDisk;
 
       # Guest initrd (contains ext4, erofs, virtio modules needed by systemd).
       guestInitrd = guestVmConfig.system.build.initialRamdisk;
@@ -142,8 +146,12 @@
       guest-image = pkgs.runCommand "go-choir-guest-image" { } ''
         mkdir -p $out
         cp ${guestKernel}/vmlinux $out/vmlinux
+        cp ${guestBootDisk} $out/rootfs.ext4
         cp ${guestInitrd}/${guestVmConfig.system.boot.loader.initrdFile} $out/initrd
         cp ${guestStoreDisk} $out/storedisk.erofs
+        cat > $out/kernel-params <<'EOF'
+${builtins.concatStringsSep " " guestVmConfig.microvm.kernelParams}
+EOF
       '';
     in
     {

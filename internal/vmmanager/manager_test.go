@@ -634,6 +634,64 @@ func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
 	}
 }
 
+func TestBuildFirecrackerConfig_MicrovmUsesRootfsAndStoreDisk(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.StateDir = t.TempDir()
+	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
+	cfg.InitrdPath = "/opt/go-choir/guest/initrd"
+	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
+	cfg.StoreDiskPath = "/opt/go-choir/guest/storedisk.erofs"
+	cfg.KernelParams = "root=fstab init=/nix/store/example-init regInfo=/nix/store/example-reginfo"
+
+	mgr := NewManager(cfg)
+
+	vmCfg := VMConfig{
+		VMID:              "vm-microvm-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		InitrdPath:        cfg.InitrdPath,
+		RootfsPath:        cfg.RootfsPath,
+		StoreDiskPath:     cfg.StoreDiskPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
+		MachineMemSizeMib: 512,
+		Epoch:             1,
+	}
+
+	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9000)
+	drives, ok := fcConfig["drives"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("expected drives slice")
+	}
+	if len(drives) != 3 {
+		t.Fatalf("expected rootfs, store, and data drives; got %d", len(drives))
+	}
+	if drives[0]["drive_id"] != "rootfs" || drives[0]["is_root_device"] != true {
+		t.Fatalf("expected first drive to be rootfs root device, got %#v", drives[0])
+	}
+	if drives[1]["drive_id"] != "store" || drives[1]["is_root_device"] != false {
+		t.Fatalf("expected second drive to be store disk, got %#v", drives[1])
+	}
+	if drives[2]["drive_id"] != "data" {
+		t.Fatalf("expected third drive to be data disk, got %#v", drives[2])
+	}
+
+	bootArgs := fcConfig["boot-source"].(map[string]interface{})["boot_args"].(string)
+	for _, arg := range []string{
+		"root=fstab",
+		"init=/nix/store/example-init",
+		"regInfo=/nix/store/example-reginfo",
+		"guest_port=8085",
+		"vm_id=vm-microvm-test",
+		"epoch=1",
+		"choir.gateway_url=http://172.1.0.1:8084",
+		"ip=172.1.0.2::172.1.0.1:255.255.255.252::eth0:off",
+	} {
+		if !containsStr(bootArgs, arg) {
+			t.Fatalf("expected boot arg %q in %q", arg, bootArgs)
+		}
+	}
+}
+
 func TestGuestInitScript_NoProviderCredentials(t *testing.T) {
 	// VAL-VM-011: Verify the guest init script pattern used in guest-image.nix
 	// does not pass provider credentials to the guest. This test mirrors the
