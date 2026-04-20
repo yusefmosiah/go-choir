@@ -1,8 +1,12 @@
 package vmmanager
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,6 +40,9 @@ func TestManagerDefaultConfig(t *testing.T) {
 	}
 	if cfg.HealthCheckInterval != 15*time.Second {
 		t.Errorf("expected HealthCheckInterval=15s, got %s", cfg.HealthCheckInterval)
+	}
+	if cfg.BootReadyTimeout != 20*time.Second {
+		t.Errorf("expected BootReadyTimeout=20s, got %s", cfg.BootReadyTimeout)
 	}
 }
 
@@ -327,6 +334,12 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	cfg := LoadConfigFromEnv()
 	if cfg.KernelImagePath != "" {
 		t.Errorf("expected empty KernelImagePath, got %s", cfg.KernelImagePath)
+	}
+
+	t.Setenv("VM_BOOT_READY_TIMEOUT", "7s")
+	cfg = LoadConfigFromEnv()
+	if cfg.BootReadyTimeout != 7*time.Second {
+		t.Fatalf("expected BootReadyTimeout=7s, got %s", cfg.BootReadyTimeout)
 	}
 }
 
@@ -926,5 +939,45 @@ func TestGuestAndHostIP_TracksPerVMSubnet(t *testing.T) {
 	guestIP, hostIP = mgr.guestAndHostIP(9001)
 	if guestIP != "172.2.0.2" || hostIP != "172.2.0.1" {
 		t.Fatalf("port 9001: got guest=%s host=%s", guestIP, hostIP)
+	}
+}
+
+func TestWaitForGuestReady_EventuallySucceeds(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) < 3 {
+			http.Error(w, "booting", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintln(w, `{"status":"ready"}`)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultManagerConfig()
+	cfg.HealthCheckTimeout = 100 * time.Millisecond
+	cfg.BootReadyTimeout = 2 * time.Second
+	mgr := NewManager(cfg)
+
+	if err := mgr.waitForGuestReady(srv.URL); err != nil {
+		t.Fatalf("waitForGuestReady: %v", err)
+	}
+	if hits.Load() < 3 {
+		t.Fatalf("expected multiple probes, got %d", hits.Load())
+	}
+}
+
+func TestWaitForGuestReady_TimesOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "booting", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultManagerConfig()
+	cfg.HealthCheckTimeout = 50 * time.Millisecond
+	cfg.BootReadyTimeout = 300 * time.Millisecond
+	mgr := NewManager(cfg)
+
+	if err := mgr.waitForGuestReady(srv.URL); err == nil {
+		t.Fatal("expected timeout waiting for guest readiness")
 	}
 }

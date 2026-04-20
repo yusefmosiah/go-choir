@@ -203,6 +203,10 @@ type ManagerConfig struct {
 
 	// HealthCheckTimeout is the per-check HTTP timeout.
 	HealthCheckTimeout time.Duration
+
+	// BootReadyTimeout is how long BootVM/ResumeVM wait for the guest
+	// to answer /health before treating the launch as failed.
+	BootReadyTimeout time.Duration
 }
 
 // DefaultManagerConfig returns a sensible default configuration.
@@ -217,6 +221,7 @@ func DefaultManagerConfig() ManagerConfig {
 		StateDir:            "/var/lib/go-choir/vm-state",
 		HealthCheckInterval: 15 * time.Second,
 		HealthCheckTimeout:  3 * time.Second,
+		BootReadyTimeout:    20 * time.Second,
 	}
 }
 
@@ -433,6 +438,13 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 		return nil, fmt.Errorf("launch firecracker for VM %s: %w", cfg.VMID, err)
 	}
 
+	if err := m.waitForGuestReady(hostURL); err != nil {
+		inst.State = StateFailed
+		inst.Healthy = false
+		m.killFirecrackerProcess(inst)
+		return nil, fmt.Errorf("wait for guest ready for VM %s: %w", cfg.VMID, err)
+	}
+
 	inst.State = StateRunning
 	inst.Healthy = true
 	inst.LastHealthCheck = time.Now()
@@ -534,6 +546,13 @@ func (m *Manager) ResumeVM(vmID string) (*VMInstance, error) {
 	if err := m.launchFirecracker(vmID, fcConfig, hostPort, inst.Config.GuestPort); err != nil {
 		inst.State = StateFailed
 		return nil, fmt.Errorf("resume firecracker for VM %s: %w", vmID, err)
+	}
+
+	if err := m.waitForGuestReady(hostURL); err != nil {
+		inst.State = StateFailed
+		inst.Healthy = false
+		m.killFirecrackerProcess(inst)
+		return nil, fmt.Errorf("wait for resumed guest ready for VM %s: %w", vmID, err)
 	}
 
 	inst.State = StateRunning
@@ -929,6 +948,19 @@ func (m *Manager) probeGuestHealth(hostURL string) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+func (m *Manager) waitForGuestReady(hostURL string) error {
+	deadline := time.Now().Add(m.cfg.BootReadyTimeout)
+	for {
+		if m.probeGuestHealth(hostURL) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("guest did not become healthy at %s within %s", hostURL, m.cfg.BootReadyTimeout)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // loadEpoch loads the epoch counter for a VM from persistent storage.

@@ -85,6 +85,12 @@ func LoadConfigFromEnv() ManagerConfig {
 		}
 	}
 
+	if v := os.Getenv("VM_BOOT_READY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.BootReadyTimeout = d
+		}
+	}
+
 	return cfg
 }
 
