@@ -31,11 +31,11 @@ const (
 
 const choirCoreSystemPrompt = `You are one agent inside Choir, a multiagent writing, research, and execution system.
 
-All Choir agents share one user-facing product, one runtime, and one standard of truth. You are not an isolated chatbot. You are one participant in an ongoing workflow with durable documents, durable agents, shared channels, event history, and revision history.
+All Choir agents share one user-facing product, one runtime, and one standard of truth. You are not an isolated chatbot. You are one participant in an ongoing workflow with durable documents, durable agents, explicit coordination edges, event history, and revision history.
 
 The user cares about getting informed work, not performative agent chatter. Prefer useful progress over narration. Do not bluff about research, evidence, or execution. If outside facts, validation, or real system work are needed, use the right tools or delegate to the right agent role.
 
-Shared channels are the coordination fabric. Read them for context, post concise updates when they unblock another agent, and treat worker messages as causal inputs to the workflow.
+The runtime owns delivery. When another agent sends you addressed work, the runtime may thread that delivery into your loop as a normal next user turn. Do not poll for inbox state yourself.
 
 Conductor routes top-level intent. VText owns canonical document versions. Researcher gathers evidence and grounded findings. Super handles execution-heavy work. Co-super is Super's supervised helper.
 
@@ -277,16 +277,32 @@ func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
 	if profile == AgentProfileVText {
 		b.WriteString("\n\nVText is a durable document owner, not a one-shot answerer.")
 		b.WriteString("\nWrite the best current version promptly from the canonical document, current context, and your priors.")
-		b.WriteString("\nLater worker messages on the shared channel can wake the next VText run and trigger another revision.")
+		b.WriteString("\nLater addressed worker deliveries can be threaded into this loop or wake the next VText run and trigger another revision.")
 		b.WriteString("\nBuild each revision from the current canonical version, recent worker messages, recent change context, and user-authored diffs.")
 		b.WriteString("\nIntermediate appagent revisions are compactable working memory. Keep the current canonical document and user-authored changes authoritative.")
 	}
+	agentID := agentIDForRun(rec)
+	if agentID != "" {
+		b.WriteString("\n\nCurrent agent id: ")
+		b.WriteString(agentID)
+		b.WriteString(".")
+	}
+	if rec != nil && strings.TrimSpace(rec.ParentRunID) != "" && rt != nil && rt.store != nil {
+		if parentRun, err := rt.store.GetRun(context.Background(), strings.TrimSpace(rec.ParentRunID)); err == nil {
+			parentAgentID := agentIDForRun(&parentRun)
+			if parentAgentID != "" {
+				b.WriteString("\nParent agent id: ")
+				b.WriteString(parentAgentID)
+				b.WriteString(".")
+			}
+		}
+	}
 	if channelID != "" {
-		b.WriteString("\n\nCurrent shared channel: ")
+		b.WriteString("\nCurrent coordination channel: ")
 		b.WriteString(channelID)
 		b.WriteString(".")
 	}
-	b.WriteString("\nUse shared channels to coordinate with peer agents and keep messages concise and actionable.")
+	b.WriteString("\nUse addressed casts for peer coordination and keep messages concise and actionable.")
 	return b.String(), nil
 }
 
@@ -379,6 +395,9 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 	}
 	researcherRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileResearcher), cwd, searchClient, httpClient)
 	if err != nil {
+		return err
+	}
+	if err := RegisterResearcherTools(researcherRegistry, rt); err != nil {
 		return err
 	}
 	conductorRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileConductor), cwd, searchClient, httpClient)

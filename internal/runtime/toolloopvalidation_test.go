@@ -387,6 +387,7 @@ func TestToolLoopToolUseResponse(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -481,6 +482,7 @@ func TestToolLoopToolResultFedBack(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -597,6 +599,7 @@ func TestToolLoopMultiToolSequential(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -718,8 +721,8 @@ func TestToolLoopEndToEndWithRuntime(t *testing.T) {
 	expectedKinds := map[types.EventKind]bool{
 		types.EventRunSubmitted: false,
 		types.EventRunStarted:   false,
-		types.EventToolInvoked:   false,
-		types.EventToolResult:    false,
+		types.EventToolInvoked:  false,
+		types.EventToolResult:   false,
 		types.EventRunProgress:  false,
 		types.EventRunCompleted: false,
 	}
@@ -819,6 +822,7 @@ func TestToolLoopWithMultipleToolsRegistered(t *testing.T) {
 		"You are helpful.",
 		4096,
 		func(kind types.EventKind, phase string, payload json.RawMessage) {},
+		nil,
 	)
 
 	if err != nil {

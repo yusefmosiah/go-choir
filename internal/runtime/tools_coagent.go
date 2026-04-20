@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
@@ -13,10 +12,8 @@ import (
 func RegisterCoAgentTools(registry *ToolRegistry, rt *Runtime) error {
 	for _, tool := range []Tool{
 		newSpawnAgentTool(rt),
-		newPostMessageTool(rt),
-		newReadMessagesTool(rt),
-		newWaitForMessageTool(rt),
-		newCloseAgentTool(rt),
+		newCastAgentTool(rt),
+		newCancelAgentTool(rt),
 	} {
 		if err := registry.Register(tool); err != nil {
 			return err
@@ -35,7 +32,7 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 	}
 	return Tool{
 		Name:        "spawn_agent",
-		Description: "Spawn a child agent run with a specific role/profile and optional shared channel.",
+		Description: "Spawn a child agent run with a specific role/profile and optional coordination channel.",
 		Parameters: jsonSchemaObject(map[string]any{
 			"objective":  map[string]any{"type": "string"},
 			"role":       map[string]any{"type": "string"},
@@ -121,26 +118,43 @@ func newSpawnAgentTool(rt *Runtime) Tool {
 	}
 }
 
-func newPostMessageTool(rt *Runtime) Tool {
+func newCastAgentTool(rt *Runtime) Tool {
 	type args struct {
-		ChannelID string `json:"channel_id"`
+		AgentID   string `json:"agent_id"`
+		ChannelID string `json:"channel_id,omitempty"`
 		From      string `json:"from,omitempty"`
 		Role      string `json:"role,omitempty"`
 		Content   string `json:"content"`
 	}
 	return Tool{
-		Name:        "post_message",
-		Description: "Post a message to a shared channel without blocking.",
+		Name:        "cast_agent",
+		Description: "Send an addressed asynchronous message to an existing agent without blocking.",
 		Parameters: jsonSchemaObject(map[string]any{
+			"agent_id":   map[string]any{"type": "string"},
 			"channel_id": map[string]any{"type": "string"},
 			"from":       map[string]any{"type": "string"},
 			"role":       map[string]any{"type": "string"},
 			"content":    map[string]any{"type": "string"},
-		}, []string{"channel_id", "content"}, false),
+		}, []string{"agent_id", "content"}, false),
 		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var in args
 			if err := json.Unmarshal(raw, &in); err != nil {
-				return "", fmt.Errorf("decode post_message args: %w", err)
+				return "", fmt.Errorf("decode cast_agent args: %w", err)
+			}
+			targetAgentID := strings.TrimSpace(in.AgentID)
+			if targetAgentID == "" {
+				return "", fmt.Errorf("agent_id must not be empty")
+			}
+			target, err := rt.store.GetAgent(ctx, targetAgentID)
+			if err != nil {
+				return "", fmt.Errorf("cast_agent target lookup: %w", err)
+			}
+			channelID := strings.TrimSpace(in.ChannelID)
+			if channelID == "" {
+				channelID = strings.TrimSpace(target.ChannelID)
+			}
+			if channelID == "" {
+				return "", fmt.Errorf("cast_agent target %s has no channel_id", targetAgentID)
 			}
 			from := strings.TrimSpace(in.From)
 			if from == "" {
@@ -150,121 +164,45 @@ func newPostMessageTool(rt *Runtime) Tool {
 			if role == "" {
 				role = stringFromToolContext(ctx, toolCtxRole)
 			}
-			cursor, err := rt.ChannelPost(ctx, in.ChannelID, from, role, in.Content)
+			cursor, err := rt.ChannelCast(ctx, channelID, targetAgentID, "", from, role, in.Content)
 			if err != nil {
 				return "", err
 			}
 			return toolResultJSON(map[string]any{
-				"channel_id": in.ChannelID,
+				"agent_id":   targetAgentID,
+				"channel_id": channelID,
 				"cursor":     cursor,
-				"status":     "posted",
+				"status":     "cast",
 			})
 		},
 	}
 }
 
-func newReadMessagesTool(rt *Runtime) Tool {
-	type args struct {
-		ChannelID string `json:"channel_id"`
-		Cursor    uint64 `json:"cursor,omitempty"`
-	}
-	return Tool{
-		Name:        "read_messages",
-		Description: "Read messages from a shared channel since a cursor.",
-		Parameters: jsonSchemaObject(map[string]any{
-			"channel_id": map[string]any{"type": "string"},
-			"cursor":     map[string]any{"type": "integer", "minimum": 0},
-		}, []string{"channel_id"}, false),
-		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			var in args
-			if err := json.Unmarshal(raw, &in); err != nil {
-				return "", fmt.Errorf("decode read_messages args: %w", err)
-			}
-			messages, cursor, err := rt.ChannelRead(in.ChannelID, in.Cursor)
-			if err != nil {
-				return "", err
-			}
-			return toolResultJSON(map[string]any{
-				"channel_id": in.ChannelID,
-				"messages":   messages,
-				"cursor":     cursor,
-			})
-		},
-	}
-}
-
-func newWaitForMessageTool(rt *Runtime) Tool {
-	type args struct {
-		ChannelID string `json:"channel_id"`
-		Cursor    uint64 `json:"cursor,omitempty"`
-		TimeoutMS int    `json:"timeout_ms,omitempty"`
-	}
-	return Tool{
-		Name:        "wait_for_message",
-		Description: "Block until a new message arrives on a shared channel or the timeout expires.",
-		Parameters: jsonSchemaObject(map[string]any{
-			"channel_id": map[string]any{"type": "string"},
-			"cursor":     map[string]any{"type": "integer", "minimum": 0},
-			"timeout_ms": map[string]any{"type": "integer", "minimum": 1},
-		}, []string{"channel_id"}, false),
-		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			var in args
-			if err := json.Unmarshal(raw, &in); err != nil {
-				return "", fmt.Errorf("decode wait_for_message args: %w", err)
-			}
-			timeout := 30 * time.Second
-			if in.TimeoutMS > 0 {
-				timeout = time.Duration(in.TimeoutMS) * time.Millisecond
-			}
-			waitCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			messages, cursor, err := rt.ChannelWait(waitCtx, in.ChannelID, in.Cursor)
-			if err != nil {
-				if err == context.DeadlineExceeded || err == waitCtx.Err() {
-					return toolResultJSON(map[string]any{
-						"channel_id": in.ChannelID,
-						"messages":   []ChannelMessage{},
-						"cursor":     in.Cursor,
-						"timed_out":  true,
-					})
-				}
-				return "", err
-			}
-			return toolResultJSON(map[string]any{
-				"channel_id": in.ChannelID,
-				"messages":   messages,
-				"cursor":     cursor,
-				"timed_out":  false,
-			})
-		},
-	}
-}
-
-func newCloseAgentTool(rt *Runtime) Tool {
+func newCancelAgentTool(rt *Runtime) Tool {
 	type args struct {
 		AgentID string `json:"agent_id"`
 	}
 	return Tool{
-		Name:        "close_agent",
-		Description: "Cancel a spawned agent by agent id.",
+		Name:        "cancel_agent",
+		Description: "Cancel the latest active loop for an existing agent by agent id.",
 		Parameters: jsonSchemaObject(map[string]any{
 			"agent_id": map[string]any{"type": "string"},
 		}, []string{"agent_id"}, false),
 		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var in args
 			if err := json.Unmarshal(raw, &in); err != nil {
-				return "", fmt.Errorf("decode close_agent args: %w", err)
+				return "", fmt.Errorf("decode cancel_agent args: %w", err)
 			}
 			ownerID := stringFromToolContext(ctx, toolCtxOwnerID)
 			if ownerID == "" {
-				return "", fmt.Errorf("close_agent missing owner context")
+				return "", fmt.Errorf("cancel_agent missing owner context")
 			}
 			if err := rt.CancelAgent(ctx, in.AgentID, ownerID); err != nil {
 				return "", err
 			}
 			return toolResultJSON(map[string]any{
 				"agent_id": in.AgentID,
-				"status":   "closed",
+				"status":   "cancelled",
 			})
 		},
 	}

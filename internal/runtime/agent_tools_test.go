@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,17 +26,17 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	researcher := rt.ToolRegistryForProfile(AgentProfileResearcher)
 	vtext := rt.ToolRegistryForProfile(AgentProfileVText)
 
-	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "post_message", "save_evidence"} {
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence"} {
 		if _, ok := super.Lookup(name); !ok {
 			t.Fatalf("super missing tool %q", name)
 		}
 	}
-	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "post_message", "save_evidence"} {
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence"} {
 		if _, ok := coSuper.Lookup(name); !ok {
 			t.Fatalf("co-super missing tool %q", name)
 		}
 	}
-	for _, name := range []string{"spawn_agent", "post_message", "read_messages", "wait_for_message", "close_agent"} {
+	for _, name := range []string{"spawn_agent", "cast_agent", "cancel_agent"} {
 		if _, ok := conductor.Lookup(name); !ok {
 			t.Fatalf("conductor missing tool %q", name)
 		}
@@ -56,12 +57,12 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	if _, ok := researcher.Lookup("edit_file"); ok {
 		t.Fatalf("researcher should not have edit_file")
 	}
-	for _, name := range []string{"read_file", "web_search", "spawn_agent", "post_message", "wait_for_message", "save_evidence"} {
+	for _, name := range []string{"read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence", "submit_research_findings"} {
 		if _, ok := researcher.Lookup(name); !ok {
 			t.Fatalf("researcher missing tool %q", name)
 		}
 	}
-	for _, name := range []string{"spawn_agent", "post_message", "read_messages", "wait_for_message", "close_agent", "save_evidence", "read_evidence"} {
+	for _, name := range []string{"spawn_agent", "cast_agent", "cancel_agent", "save_evidence", "read_evidence"} {
 		if _, ok := vtext.Lookup(name); !ok {
 			t.Fatalf("vtext missing tool %q", name)
 		}
@@ -72,9 +73,12 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	if _, ok := vtext.Lookup("web_search"); ok {
 		t.Fatalf("vtext should not have web_search")
 	}
+	if _, ok := vtext.Lookup("submit_research_findings"); ok {
+		t.Fatalf("vtext should not have submit_research_findings")
+	}
 }
 
-func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
+func TestCoagentToolsSupportAddressedCastAcrossProfiles(t *testing.T) {
 	rt, s, cwd := testRuntimeWithTempCWD(t)
 	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
 		t.Fatalf("install default agent tools: %v", err)
@@ -125,12 +129,17 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 		t.Fatalf("child channel_id = %q, want shared-work", child.ChannelID)
 	}
 
-	postRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), parent), "post_message", json.RawMessage(`{
+	postRaw, err := superRegistry.Execute(
+		WithToolExecutionContext(context.Background(), parent),
+		"cast_agent",
+		json.RawMessage(fmt.Sprintf(`{
+		"agent_id":"%s",
 		"channel_id":"shared-work",
 		"content":"please inspect the runtime tool wiring"
-	}`))
+	}`, child.AgentID)),
+	)
 	if err != nil {
-		t.Fatalf("post_message: %v", err)
+		t.Fatalf("cast_agent: %v", err)
 	}
 	var postResp struct {
 		Cursor uint64 `json:"cursor"`
@@ -139,50 +148,22 @@ func TestCoagentToolsSupportSharedMessagingAcrossProfiles(t *testing.T) {
 		t.Fatalf("decode post response: %v", err)
 	}
 
-	researchRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
-	readRaw, err := researchRegistry.Execute(WithToolExecutionContext(context.Background(), &child), "read_messages", json.RawMessage(`{
-		"channel_id":"shared-work"
-	}`))
+	msgs, _, err := rt.ChannelRead("shared-work", 0)
 	if err != nil {
-		t.Fatalf("read_messages: %v", err)
+		t.Fatalf("channel read: %v", err)
 	}
-	var readResp struct {
-		Messages []ChannelMessage `json:"messages"`
+	if len(msgs) != 1 || msgs[0].Content != "please inspect the runtime tool wiring" {
+		t.Fatalf("unexpected channel messages: %+v", msgs)
 	}
-	if err := json.Unmarshal([]byte(readRaw), &readResp); err != nil {
-		t.Fatalf("decode read response: %v", err)
+	if msgs[0].ToAgentID != child.AgentID {
+		t.Fatalf("channel message to_agent_id = %q, want %q", msgs[0].ToAgentID, child.AgentID)
 	}
-	if len(readResp.Messages) != 1 || readResp.Messages[0].Content != "please inspect the runtime tool wiring" {
-		t.Fatalf("unexpected messages: %+v", readResp.Messages)
-	}
-
-	if _, err := researchRegistry.Execute(WithToolExecutionContext(context.Background(), &child), "post_message", json.RawMessage(`{
-		"channel_id":"shared-work",
-		"content":"runtime looks good; proceeding with structured findings"
-	}`)); err != nil {
-		t.Fatalf("researcher post_message: %v", err)
-	}
-
-	waitRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), parent), "wait_for_message", json.RawMessage(`{
-		"channel_id":"shared-work",
-		"cursor":1,
-		"timeout_ms":50
-	}`))
+	deliveries, err := s.ListPendingInboxDeliveries(context.Background(), "user-alice", child.AgentID, 10)
 	if err != nil {
-		t.Fatalf("wait_for_message: %v", err)
+		t.Fatalf("list inbox deliveries: %v", err)
 	}
-	var waitResp struct {
-		Messages []ChannelMessage `json:"messages"`
-		TimedOut bool             `json:"timed_out"`
-	}
-	if err := json.Unmarshal([]byte(waitRaw), &waitResp); err != nil {
-		t.Fatalf("decode wait response: %v", err)
-	}
-	if waitResp.TimedOut {
-		t.Fatalf("wait_for_message unexpectedly timed out")
-	}
-	if len(waitResp.Messages) != 1 || waitResp.Messages[0].Content != "runtime looks good; proceeding with structured findings" {
-		t.Fatalf("unexpected wait messages: %+v", waitResp.Messages)
+	if len(deliveries) != 1 || deliveries[0].Content != "please inspect the runtime tool wiring" {
+		t.Fatalf("unexpected deliveries: %+v", deliveries)
 	}
 }
 
@@ -399,6 +380,132 @@ func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	}
 	if researchSpawn.ChannelID != "doc-work" {
 		t.Fatalf("research spawn channel_id = %q, want doc-work", researchSpawn.ChannelID)
+	}
+}
+
+func TestResearcherSubmitResearchFindingsPersistsEvidenceAndDedupes(t *testing.T) {
+	rt, s, cwd := testRuntimeWithTempCWD(t)
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	vtextTask, err := rt.StartRunWithMetadata(context.Background(), "own the draft", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileVText,
+		runMetadataAgentRole:    AgentProfileVText,
+		runMetadataChannelID:    "doc-1",
+		runMetadataAgentID:      "vtext:doc-1",
+	})
+	if err != nil {
+		t.Fatalf("submit vtext task: %v", err)
+	}
+	researcherTask, err := rt.StartChildRun(context.Background(), vtextTask.RunID, "research the claim", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    "doc-1",
+	})
+	if err != nil {
+		t.Fatalf("submit researcher task: %v", err)
+	}
+
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	raw, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "submit_research_findings", json.RawMessage(`{
+		"finding_id":"finding-001",
+		"findings":["Model releases this week improved reasoning and tool use."],
+		"evidence":[
+			{
+				"kind":"web_page",
+				"source_uri":"https://example.com/release",
+				"title":"Release notes",
+				"content":"Release notes describing stronger reasoning and tool use."
+			}
+		],
+		"notes":["The claim is recent enough that priors alone are weak."],
+		"questions":["Should we mention the release date explicitly?"]
+	}`))
+	if err != nil {
+		t.Fatalf("submit_research_findings: %v", err)
+	}
+
+	var resp struct {
+		FindingID   string   `json:"finding_id"`
+		AgentID     string   `json:"agent_id"`
+		ChannelID   string   `json:"channel_id"`
+		Cursor      int64    `json:"cursor"`
+		EvidenceIDs []string `json:"evidence_ids"`
+		Status      string   `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode submit_research_findings: %v", err)
+	}
+	if resp.Status != "submitted" {
+		t.Fatalf("status = %q, want submitted", resp.Status)
+	}
+	if resp.AgentID != "vtext:doc-1" {
+		t.Fatalf("agent_id = %q, want %q", resp.AgentID, "vtext:doc-1")
+	}
+	if len(resp.EvidenceIDs) != 1 {
+		t.Fatalf("evidence_ids = %+v, want 1 id", resp.EvidenceIDs)
+	}
+
+	evidence, err := s.GetEvidence(context.Background(), resp.EvidenceIDs[0], "user-alice")
+	if err != nil {
+		t.Fatalf("get evidence: %v", err)
+	}
+	if evidence.Title != "Release notes" {
+		t.Fatalf("evidence title = %q, want %q", evidence.Title, "Release notes")
+	}
+
+	finding, err := s.GetResearchFinding(context.Background(), "user-alice", "finding-001")
+	if err != nil {
+		t.Fatalf("get research finding: %v", err)
+	}
+	if finding.MessageSeq != resp.Cursor {
+		t.Fatalf("finding message_seq = %d, want %d", finding.MessageSeq, resp.Cursor)
+	}
+
+	rawAgain, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "submit_research_findings", json.RawMessage(`{
+		"finding_id":"finding-001",
+		"findings":["Model releases this week improved reasoning and tool use."],
+		"evidence":[
+			{
+				"kind":"web_page",
+				"source_uri":"https://example.com/release",
+				"title":"Release notes",
+				"content":"Release notes describing stronger reasoning and tool use."
+			}
+		],
+		"notes":["The claim is recent enough that priors alone are weak."],
+		"questions":["Should we mention the release date explicitly?"]
+	}`))
+	if err != nil {
+		t.Fatalf("repeat submit_research_findings: %v", err)
+	}
+	var respAgain struct {
+		Cursor int64  `json:"cursor"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(rawAgain), &respAgain); err != nil {
+		t.Fatalf("decode repeated submit_research_findings: %v", err)
+	}
+	if respAgain.Status != "existing" {
+		t.Fatalf("repeat status = %q, want existing", respAgain.Status)
+	}
+	if respAgain.Cursor != resp.Cursor {
+		t.Fatalf("repeat cursor = %d, want %d", respAgain.Cursor, resp.Cursor)
+	}
+
+	messages, err := s.ListChannelMessages(context.Background(), "user-alice", "doc-1", 0, 10)
+	if err != nil {
+		t.Fatalf("list channel messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("channel messages = %d, want 1", len(messages))
+	}
+	if messages[0].ToAgentID != "vtext:doc-1" {
+		t.Fatalf("channel message to_agent_id = %q, want %q", messages[0].ToAgentID, "vtext:doc-1")
+	}
+	if !strings.Contains(messages[0].Content, resp.EvidenceIDs[0]) {
+		t.Fatalf("channel message content missing evidence id: %q", messages[0].Content)
 	}
 }
 

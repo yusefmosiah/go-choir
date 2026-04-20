@@ -81,6 +81,7 @@ func TestRunToolLoopEndTurn(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -150,6 +151,7 @@ func TestRunToolLoopWithToolUse(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -242,6 +244,7 @@ func TestRunToolLoopMultipleToolIterations(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err != nil {
@@ -288,6 +291,7 @@ func TestRunToolLoopMaxIterations(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err == nil {
@@ -314,6 +318,7 @@ func TestRunToolLoopMaxTokens(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err == nil {
@@ -333,7 +338,7 @@ func TestRunToolLoopContextCancelled(t *testing.T) {
 
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {}
 
-	_, _, err := RunToolLoop(ctx, provider, nil, nil, "", 4096, emit)
+	_, _, err := RunToolLoop(ctx, provider, nil, nil, "", 4096, emit, nil)
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
@@ -370,6 +375,7 @@ func TestRunToolLoopToolUseWithoutCalls(t *testing.T) {
 		"You are helpful.",
 		4096,
 		emit,
+		nil,
 	)
 
 	if err == nil {
@@ -385,9 +391,9 @@ func TestToolLoopAdapter(t *testing.T) {
 	adapter := &toolLoopAdapter{Provider: stub}
 
 	req := ToolLoopRequest{
-		System:     "You are helpful.",
-		Messages:   []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hello"}]}`)},
-		MaxTokens:  4096,
+		System:    "You are helpful.",
+		Messages:  []json.RawMessage{json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hello"}]}`)},
+		MaxTokens: 4096,
 	}
 
 	resp, err := adapter.CallWithTools(context.Background(), req)

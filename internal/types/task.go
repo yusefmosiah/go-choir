@@ -287,6 +287,18 @@ type ChannelMessage struct {
 	// FromRunID identifies the run that posted the message.
 	FromRunID string `json:"from_loop_id,omitempty"`
 
+	// ToAgentID identifies the addressed recipient agent for directed delivery.
+	// Empty means the message is broadcast on the channel.
+	ToAgentID string `json:"to_agent_id,omitempty"`
+
+	// ToRunID identifies the addressed recipient run for directed delivery when
+	// a specific live execution is the target. Empty means no specific run is
+	// required.
+	ToRunID string `json:"to_loop_id,omitempty"`
+
+	// TrajectoryID ties the message to the broader user-visible workflow.
+	TrajectoryID string `json:"trajectory_id,omitempty"`
+
 	// Role classifies the message (e.g., "coordinator", "worker", "status").
 	Role string `json:"role"`
 
@@ -297,18 +309,38 @@ type ChannelMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// InboxDelivery is the runtime-owned delivery queue entry for a directed
+// message. Unlike ChannelMessage, which is the audit log / trace surface, inbox
+// deliveries are consumed by the runtime and threaded back into agent loops as
+// user turns.
+type InboxDelivery struct {
+	DeliveryID        string     `json:"delivery_id"`
+	OwnerID           string     `json:"owner_id"`
+	ToAgentID         string     `json:"to_agent_id"`
+	ToRunID           string     `json:"to_loop_id,omitempty"`
+	FromAgentID       string     `json:"from_agent_id,omitempty"`
+	FromRunID         string     `json:"from_loop_id,omitempty"`
+	ChannelID         string     `json:"channel_id,omitempty"`
+	Role              string     `json:"role,omitempty"`
+	Content           string     `json:"content"`
+	TrajectoryID      string     `json:"trajectory_id,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	DeliveredToLoopID string     `json:"delivered_to_loop_id,omitempty"`
+	DeliveredAt       *time.Time `json:"delivered_at,omitempty"`
+}
+
 // AgentRecord is the durable runtime representation of an agent identity.
 // Runs are ephemeral executions owned by an agent; channels are the shared
 // coordination surface that can outlive any one run.
 type AgentRecord struct {
-	AgentID     string    `json:"agent_id"`
-	OwnerID     string    `json:"owner_id"`
-	SandboxID   string    `json:"sandbox_id"`
-	Profile     string    `json:"profile"`
-	Role        string    `json:"role"`
-	ChannelID   string    `json:"channel_id"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	AgentID   string    `json:"agent_id"`
+	OwnerID   string    `json:"owner_id"`
+	SandboxID string    `json:"sandbox_id"`
+	Profile   string    `json:"profile"`
+	Role      string    `json:"role"`
+	ChannelID string    `json:"channel_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // RuntimeHealthState represents the health state of the runtime.

@@ -1,14 +1,14 @@
 # go-choir Multiagent Architecture
 
-> Last updated: 2026-04-16. Reflects the post-refactor state: durable agents, channel-first coordination, run-oriented execution, and backend-owned vtext lifecycle.
+> Last updated: 2026-04-20. Reflects the hard cutover state: durable agents, addressed coordination channels, runtime-owned inbox delivery, loop-oriented execution, and backend-owned vtext lifecycle.
 
 ---
 
 ## System Overview
 
-go-choir is a local-first multiagent writing environment. Users submit prompts through a desktop shell; a **conductor** agent decides what to open; for writing work, **vtext** owns the canonical document and may delegate to **researcher** or **super** workers over shared channels.
+go-choir is a local-first multiagent writing environment. Users submit prompts through a desktop shell; a **conductor** agent decides what to open; for writing work, **vtext** owns the canonical document and may delegate to **researcher** or **super** workers over durable coordination channels.
 
-All execution happens inside a **sandbox** process. A **proxy** sits between the frontend and the sandbox, forwarding authenticated requests. Agent coordination is message-passing over durable channels; there is no shared mutable state between runs.
+All execution happens inside a **sandbox** process. A **proxy** sits between the frontend and the sandbox, forwarding authenticated requests. Agent coordination is message-passing over durable channels plus runtime-owned inbox delivery; there is no shared mutable state between loops.
 
 ---
 
@@ -36,7 +36,7 @@ User (desktop shell)
 | Caller     | Can spawn            | Notes                                       |
 |------------|----------------------|---------------------------------------------|
 | conductor  | vtext, researcher    | Routing-only; no file/code tools            |
-| vtext      | researcher, super    | Owns document; workers post back to channel |
+| vtext      | researcher, super    | Owns document; workers cast findings back to the vtext agent |
 | super      | researcher, co-super | Privileged execution root                   |
 | co-super   | researcher           | Supervised execution helper                 |
 | researcher | (none)               | Leaf node; read-only files + search         |
@@ -53,8 +53,13 @@ User (desktop shell)
 | Research tools    |           |       |   Y   |    Y     |     Y      |
 | Evidence tools    |           |   Y   |   Y   |    Y     |     Y      |
 | CoAgent tools     |     Y     |   Y   |   Y   |    Y     |     Y      |
+| Role-specific tools |         |       |       |          | submit_research_findings |
 
-CoAgent tools (available to all profiles): `spawn_agent`, `post_message`, `read_messages`, `wait_for_message`, `close_agent`.
+CoAgent tools (available to all profiles): `spawn_agent`, `cast_agent`, `cancel_agent`.
+
+Role-specific tools layer semantic handoffs on top of coagent messaging. Today
+the researcher gets `submit_research_findings`, which persists evidence and
+dispatches one typed findings packet back to the owning agent.
 
 ---
 
@@ -72,36 +77,26 @@ Spawn a child run with a specific role. Delegation policy enforced from caller p
   "role": "researcher", "profile": "researcher", "state": "pending" }
 ```
 
-### post_message
-Post a message to a named channel (non-blocking).
+### cast_agent
+Queue addressed work for an existing agent. The runtime persists the coordination log entry and separately enqueues inbox delivery for the target agent.
 
 ```json
-{ "channel_id": "doc-abc123", "content": "GDP = $28T (IMF 2025)", "role": "result" }
-// -> { "channel_id": "doc-abc123", "cursor": 42, "status": "posted" }
+{
+  "channel_id": "doc-abc123",
+  "agent_id": "vtext:doc-abc123",
+  "content": "GDP = $28T (IMF 2025)",
+  "role": "result"
+}
+// -> { "channel_id": "doc-abc123", "agent_id": "vtext:doc-abc123", "cursor": 42, "status": "queued" }
 ```
 
-### read_messages
-Read messages from a channel since a cursor.
-
-```json
-{ "channel_id": "doc-abc123", "cursor": 0 }
-// -> { "channel_id": "...", "messages": [...], "cursor": 42 }
-```
-
-### wait_for_message
-Block until a new message arrives or timeout expires (default 30 s).
-
-```json
-{ "channel_id": "doc-abc123", "cursor": 42, "timeout_ms": 30000 }
-// -> { "messages": [...], "cursor": 43, "timed_out": false }
-```
-
-### close_agent
-Cancel a spawned agent by its durable agent ID.
+### cancel_agent
+Cancel the latest active loop owned by an existing agent. The durable agent
+identity stays around; this only stops current work.
 
 ```json
 { "agent_id": "vtext:doc-abc123" }
-// -> { "agent_id": "vtext:doc-abc123", "status": "closed" }
+// -> { "agent_id": "vtext:doc-abc123", "status": "cancelled" }
 ```
 
 ---
@@ -127,7 +122,14 @@ events  [loop_id -> runs]
 
 channel_messages
   id INTEGER (PK autoincrement)  channel_id
-  from_loop_id  from_agent_id  role  content  ts
+  from_loop_id  from_agent_id  to_loop_id  to_agent_id
+  trajectory_id  role  content  ts
+
+inbox_deliveries
+  delivery_id TEXT (PK)  owner_id  channel_id  message_id
+  from_loop_id  from_agent_id  to_loop_id  to_agent_id
+  trajectory_id  role  content  created_at
+  delivered_at  delivered_to_loop_id
 ```
 
 ### VText tables — internal/store/vtext.go (Dolt — version-native document storage)
@@ -198,25 +200,23 @@ User types prompt
 
 ```
 System prompt = vtext.md (user override or embedded default)
-              + "\nCurrent shared channel: <doc_id>"
+              + "\nCurrent coordination channel: <doc_id>"
 User prompt   = buildAgentRevisionRequest():
   seed_prompt + current_doc_content + diff_summary + revision metadata
   + awareness of whether this document/channel already has grounded worker history
 
 Agent tool loop (up to N turns):
   spawn_agent({ role: "researcher", channel_id: doc_id, ... })
-  post_message({ channel_id: doc_id, content: "..." })
-  wait_for_message({ channel_id: doc_id, cursor: N })
-  store_evidence({ doc_id, kind: "web", ... })
+  submit_research_findings({ finding_id: "...", findings: [...], evidence: [...] })
 
 Agent final answer = complete next document version (plain text)
 
 -> handleRunCompletion() vtext side effect:
      If the document has no prior grounded worker history, require actual
-     child-worker activity on the shared channel before accepting the answer
+     child-worker activity addressed back to the vtext agent before accepting the answer
      as canonical. Follow-up transforms may reuse prior grounded history.
      CreateRevision(content, author_type="agent",
-        metadata={ source:"agent_revision", loop_id, seed_prompt, ... })
+         metadata={ source:"agent_revision", loop_id, seed_prompt, ... })
      UpdateDocument(head_revision_id = new_revision_id)
      CompleteVTextAgentMutation(loop_id)
 -> Emits vtext.agent_revision.completed
@@ -240,11 +240,17 @@ VText calls spawn_agent({ role:"researcher", channel_id:doc_id, objective:"find 
 -> StartChildRun(): profile=researcher, parent_loop_id=vtext_loop_id, channel_id=doc_id
 
 Researcher:
-  web_search("X 2025") -> store_evidence({ doc_id, ... })
-  post_message({ channel_id: doc_id, content: "X = 42 (source)" })
+  web_search("X 2025")
+  submit_research_findings({
+    finding_id:"finding-123",
+    findings:["X = 42"],
+    evidence:[...],
+    questions:["Do we trust source Y?"]
+  })
 
 VText:
-  wait_for_message({ channel_id: doc_id, cursor: prev })
+  runtime injects the addressed delivery as the next user turn for an active loop,
+  or wakes a fresh vtext loop if the agent is idle
   -> incorporate findings -> write next canonical revision
 ```
 
@@ -259,7 +265,7 @@ VText:
 | `loop.failed` | Run fails with error |
 | `loop.cancelled` | Run is cancelled |
 | `run.streaming_token` | Streaming token from LLM (SSE only) |
-| `channel.message` | Message posted to a shared channel |
+| `channel.message` | Coordination log entry, optionally addressed to a specific agent |
 | `vtext.agent_revision.started` | VText mutation run created |
 | `vtext.agent_revision.completed` | Canonical revision written |
 | `vtext.agent_revision.failed` | VText run failed |
@@ -314,7 +320,7 @@ Default prompts embedded via `//go:embed` from `internal/runtime/prompt_defaults
 |------|--------------------|
 | `conductor.md` | Route input to apps; return structured JSON decision |
 | `vtext.md` | Own document; write canonical versions; delegate to researcher/super for evidence/execution |
-| `researcher.md` | Gather evidence; post findings to channel; no further delegation |
+| `researcher.md` | Gather evidence; use `submit_research_findings` to persist and hand findings back; no further delegation |
 | `super.md` | Broad tool surface; execution-heavy coordination; delegate researcher/co-super |
 | `co-super.md` | Supervised helper under super; carry out concrete execution subtasks |
 

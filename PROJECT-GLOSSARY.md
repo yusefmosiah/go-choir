@@ -49,7 +49,7 @@
 **What it does:**
 - writes canonical versions
 - spawns workers when needed
-- reads worker messages
+- receives addressed worker deliveries threaded in by the runtime
 - synthesizes new document versions
 
 **Prior / nearby names:**
@@ -109,7 +109,7 @@
 - gathers current/external information
 - reads local context
 - persists evidentiary material into embedded Dolt
-- sends findings back over channels
+- sends findings back as addressed deliveries, usually through a typed findings handoff tool
 - does not own canonical document text
 
 **Topology rule:** researchers should usually come from a shared pool within a user microVM.
@@ -271,14 +271,14 @@
 
 ### `coagent tools`
 
-**Definition:** The tools agents use to spawn peer/child agents and exchange messages over shared channels.
+**Definition:** The tools agents use to spawn peer/child agents and send addressed work over coordination channels.
 
 **Examples:**
 - `spawn_agent`
-- `post_message`
-- `read_messages`
-- `wait_for_message`
-- `close_agent`
+- `cast_agent`
+- `cancel_agent`
+
+**Important distinction:** these are the generic coordination primitives. Role-specific tools such as `submit_research_findings` can sit above them to give an agent a clearer telos and a tighter handoff schema.
 
 **Prior / nearby names:**
 - co-agent tools
@@ -288,14 +288,16 @@
 
 ---
 
-### `shared work channel`
+### `coordination channel`
 
-**Definition:** The message channel used by related agents to exchange updates, findings, and coordination messages.
+**Definition:** The durable coordination log used by related agents to exchange updates, findings, and coordination messages.
 
 **Prior / nearby names:**
 - channel
 - work channel
 - shared channel
+
+**Important rule:** channels remain useful for audit and trace, but runtime-owned inbox delivery decides what an agent actually receives next.
 
 ---
 

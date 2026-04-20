@@ -261,8 +261,8 @@ func TestSystemPromptForVTextDefaultsToResearch(t *testing.T) {
 	if !strings.Contains(prompt, "Open researcher work first") {
 		t.Fatalf("vtext system prompt should bias toward spawning researchers first, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "Current shared channel: doc-1.") {
-		t.Fatalf("vtext system prompt should include shared channel, got %q", prompt)
+	if !strings.Contains(prompt, "Current coordination channel: doc-1.") {
+		t.Fatalf("vtext system prompt should include coordination channel, got %q", prompt)
 	}
 }
 
@@ -1040,8 +1040,8 @@ func TestBuildAppagentRevisionMetadataPreservesDurableKeys(t *testing.T) {
 	}
 
 	parentMeta, _ := json.Marshal(map[string]any{
-		"seed_prompt":      "write a haiku about cats",
-		"source_path":      "/notes/cats.md",
+		"seed_prompt":       "write a haiku about cats",
+		"source_path":       "/notes/cats.md",
 		"conductor_loop_id": "task-original-conductor",
 	})
 	parentRev := types.Revision{

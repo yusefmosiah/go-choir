@@ -841,8 +841,8 @@ func TestVTextSystemPromptSharesChoirCoreContext(t *testing.T) {
 	if !strings.Contains(prompt, "VText is a durable document owner, not a one-shot answerer.") {
 		t.Fatalf("system prompt missing vtext wake semantics: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Current shared channel: doc-1.") {
-		t.Fatalf("system prompt missing shared channel: %q", prompt)
+	if !strings.Contains(prompt, "Current coordination channel: doc-1.") {
+		t.Fatalf("system prompt missing coordination channel: %q", prompt)
 	}
 }
 
@@ -922,7 +922,7 @@ func TestVTextWorkerMessageAutoWakeCreatesFollowUpRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start research run: %v", err)
 	}
-	if _, err := rt.ChannelPost(WithToolExecutionContext(context.Background(), researchRun), docID, "researcher-1", "researcher", "Evidence: the latest public model releases shipped this week with stronger reasoning and tool use."); err != nil {
+	if _, err := rt.ChannelCast(WithToolExecutionContext(context.Background(), researchRun), docID, "vtext:"+docID, "", "researcher-1", "researcher", "Evidence: the latest public model releases shipped this week with stronger reasoning and tool use."); err != nil {
 		t.Fatalf("post worker message: %v", err)
 	}
 
@@ -952,7 +952,7 @@ func TestVTextWorkerMessageAutoWakeCreatesFollowUpRevision(t *testing.T) {
 	if wakeRun == nil {
 		t.Fatalf("expected wake-driven vtext run on channel %s, got %+v", docID, runs)
 	}
-	if !strings.Contains(wakeRun.Prompt, "Recent worker messages on the shared channel") {
+	if !strings.Contains(wakeRun.Prompt, "Recent addressed worker messages") {
 		t.Fatalf("wake run prompt missing worker message context: %q", wakeRun.Prompt)
 	}
 	if !strings.Contains(wakeRun.Prompt, "Evidence: the latest public model releases") {

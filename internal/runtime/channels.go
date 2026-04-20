@@ -288,23 +288,38 @@ func (rt *Runtime) hydrateChannel(ctx context.Context, channelID string, ch *Age
 	return nil
 }
 
-// ChannelPost posts a message to the runtime's channel manager and emits
-// a corresponding event. This is the primary way for runtime components
-// (conductor, scheduler, workers) to send coordination messages that
-// are observable through the event stream.
+// ChannelPost posts a broadcast message to the runtime's channel manager and
+// emits a corresponding event. Broadcast channel posts remain useful as the
+// audit / trace log surface and for internal parent-child status reporting, but
+// agent-facing addressed delivery should use ChannelCast.
 func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, content string) (uint64, error) {
+	return rt.ChannelCast(ctx, channelID, "", "", from, role, content)
+}
+
+// ChannelCast posts an addressed message to the channel log, enqueues a
+// delivery for the target agent, and emits the corresponding event.
+func (rt *Runtime) ChannelCast(ctx context.Context, channelID, toAgentID, toRunID, from, role, content string) (uint64, error) {
 	ch, err := rt.channelMgr.Channel(channelID)
 	if err != nil {
 		return 0, err
 	}
+	trajectoryID := ""
+	if runRec, _ := ctx.Value(toolCtxRunRecord).(*types.RunRecord); runRec != nil && runRec.Metadata != nil {
+		if id, _ := runRec.Metadata[runMetadataTrajectoryID].(string); strings.TrimSpace(id) != "" {
+			trajectoryID = strings.TrimSpace(id)
+		}
+	}
 	message := ChannelMessage{
-		ChannelID:   channelID,
-		FromAgentID: stringFromToolContext(ctx, toolCtxAgentID),
-		FromRunID:   stringFromToolContext(ctx, toolCtxRunID),
-		From:        from,
-		Role:        role,
-		Content:     content,
-		Timestamp:   time.Now().UTC(),
+		ChannelID:    channelID,
+		FromAgentID:  stringFromToolContext(ctx, toolCtxAgentID),
+		FromRunID:    stringFromToolContext(ctx, toolCtxRunID),
+		ToAgentID:    strings.TrimSpace(toAgentID),
+		ToRunID:      strings.TrimSpace(toRunID),
+		TrajectoryID: trajectoryID,
+		From:         from,
+		Role:         role,
+		Content:      content,
+		Timestamp:    time.Now().UTC(),
 	}
 	ownerID := stringFromToolContext(ctx, toolCtxOwnerID)
 	if ownerID == "" && message.FromRunID != "" {
@@ -314,6 +329,23 @@ func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, conte
 	}
 	if err := rt.store.AppendChannelMessage(ctx, &message, ownerID); err != nil {
 		return 0, err
+	}
+	if message.ToAgentID != "" {
+		if err := rt.store.EnqueueInboxDelivery(ctx, types.InboxDelivery{
+			DeliveryID:   uuid.New().String(),
+			OwnerID:      ownerID,
+			ToAgentID:    message.ToAgentID,
+			ToRunID:      message.ToRunID,
+			FromAgentID:  message.FromAgentID,
+			FromRunID:    message.FromRunID,
+			ChannelID:    message.ChannelID,
+			Role:         message.Role,
+			Content:      message.Content,
+			TrajectoryID: message.TrajectoryID,
+			CreatedAt:    message.Timestamp,
+		}); err != nil {
+			return 0, err
+		}
 	}
 
 	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
@@ -341,10 +373,13 @@ func (rt *Runtime) ChannelPost(ctx context.Context, channelID, from, role, conte
 		return 0, err
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"channel_id":  channelID,
-		"from":        message.From,
-		"role":        message.Role,
-		"content_len": len(message.Content),
+		"channel_id":    channelID,
+		"from":          message.From,
+		"to_agent_id":   message.ToAgentID,
+		"to_loop_id":    message.ToRunID,
+		"trajectory_id": message.TrajectoryID,
+		"role":          message.Role,
+		"content_len":   len(message.Content),
 	})
 	emit(types.EventChannelMessage, "channel", payload)
 	rt.maybeWakeVTextOnWorkerMessage(context.Background(), ownerID, message)

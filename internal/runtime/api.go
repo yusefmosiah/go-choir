@@ -106,7 +106,7 @@ type eventListResponse struct {
 }
 
 // channelMessageListResponse is the JSON response for GET /api/agent/channel-messages.
-// It returns durable channel message bodies for a specific shared channel.
+// It returns durable channel message bodies for a specific coordination channel.
 type channelMessageListResponse struct {
 	Messages []types.ChannelMessage `json:"messages"`
 }
@@ -499,7 +499,7 @@ func (h *APIHandler) HandleEventList(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleChannelMessageList handles GET /api/agent/channel-messages.
-// It returns persisted message bodies for a specific owner-scoped shared channel.
+// It returns persisted message bodies for a specific owner-scoped coordination channel.
 func (h *APIHandler) HandleChannelMessageList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})

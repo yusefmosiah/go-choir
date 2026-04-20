@@ -571,9 +571,9 @@ func (rt *Runtime) executeRun(ctx context.Context, rec *types.RunRecord) {
 			if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 				if kind == types.EventRunProgress {
 					progressPayload, _ := json.Marshal(map[string]string{
-						"doc_id": docID,
+						"doc_id":  docID,
 						"loop_id": rec.RunID,
-						"phase":  phase,
+						"phase":   phase,
 					})
 					rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionProgress,
 						events.CauseProviderProgress, progressPayload)
@@ -618,7 +618,9 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.RunRecord
 	}
 	ctx = WithToolExecutionContext(ctx, rec)
 
-	text, usage, err := RunToolLoop(ctx, tlp, registry, initialMessages, systemPrompt, 4096, emit)
+	text, usage, err := RunToolLoop(ctx, tlp, registry, initialMessages, systemPrompt, 4096, emit, func(finalCheckpoint bool) ([]json.RawMessage, error) {
+		return rt.injectPendingInboxTurns(context.Background(), rec, finalCheckpoint)
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			rt.handleExecutionError(ctx, rec, ctx.Err())
@@ -671,6 +673,54 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.RunRecord
 	// Notify parent channel of child run completion (VAL-CHOIR-006, VAL-CHOIR-008).
 	rt.notifyParent(persistCtx, rec)
 
+}
+
+func (rt *Runtime) injectPendingInboxTurns(ctx context.Context, rec *types.RunRecord, finalCheckpoint bool) ([]json.RawMessage, error) {
+	if rec == nil || strings.TrimSpace(rec.AgentID) == "" || strings.TrimSpace(rec.OwnerID) == "" {
+		return nil, nil
+	}
+	deliveries, err := rt.store.ListPendingInboxDeliveries(ctx, rec.OwnerID, rec.AgentID, 100)
+	if err != nil {
+		return nil, err
+	}
+	if len(deliveries) == 0 {
+		return nil, nil
+	}
+	deliveryIDs := make([]string, 0, len(deliveries))
+	lines := make([]string, 0, len(deliveries)+2)
+	lines = append(lines, "New addressed deliveries arrived for you since the last step.")
+	if finalCheckpoint {
+		lines = append(lines, "These were queued before loop termination, so they belong to this same logical loop.")
+	}
+	for _, delivery := range deliveries {
+		deliveryIDs = append(deliveryIDs, delivery.DeliveryID)
+		label := strings.TrimSpace(delivery.FromAgentID)
+		if label == "" {
+			label = strings.TrimSpace(delivery.FromRunID)
+		}
+		if label == "" {
+			label = "unknown"
+		}
+		line := fmt.Sprintf("From %s", label)
+		if strings.TrimSpace(delivery.Role) != "" {
+			line += fmt.Sprintf(" [%s]", strings.TrimSpace(delivery.Role))
+		}
+		line += ":\n" + strings.TrimSpace(delivery.Content)
+		lines = append(lines, line)
+	}
+	if err := rt.store.MarkInboxDeliveriesDelivered(ctx, deliveryIDs, rec.RunID); err != nil {
+		return nil, err
+	}
+	msg, _ := json.Marshal(map[string]any{
+		"role": "user",
+		"content": []any{
+			map[string]string{
+				"type": "text",
+				"text": strings.Join(lines, "\n\n"),
+			},
+		},
+	})
+	return []json.RawMessage{msg}, nil
 }
 
 // executeWithProvider runs the run through the simple Provider.Execute path.
@@ -903,9 +953,9 @@ func (rt *Runtime) ensureConductorVTextRoute(ctx context.Context, rec *types.Run
 	}
 
 	revMeta, _ := json.Marshal(map[string]any{
-		"seed_prompt":      decision.SeedPrompt,
+		"seed_prompt":       decision.SeedPrompt,
 		"conductor_loop_id": rec.RunID,
-		"created_from":     "conductor",
+		"created_from":      "conductor",
 	})
 	rev := types.Revision{
 		RevisionID:  uuid.New().String(),
@@ -1033,9 +1083,9 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 		log.Printf("runtime: vtext agent revision run %s: placeholder/empty content (%q), failing mutation", rec.RunID, content)
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		failPayload, _ := json.Marshal(map[string]string{
-			"doc_id": docID,
+			"doc_id":  docID,
 			"loop_id": rec.RunID,
-			"error":  "vtext agent produced no content",
+			"error":   "vtext agent produced no content",
 		})
 		rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
 			events.CauseProviderFailure, failPayload)
@@ -1152,7 +1202,8 @@ func (rt *Runtime) channelHasGroundedHistory(ctx context.Context, ownerID, chann
 func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID string, message ChannelMessage) {
 	channelID := strings.TrimSpace(message.ChannelID)
 	fromRunID := strings.TrimSpace(message.FromRunID)
-	if strings.TrimSpace(ownerID) == "" || channelID == "" || fromRunID == "" {
+	targetAgentID := strings.TrimSpace(message.ToAgentID)
+	if strings.TrimSpace(ownerID) == "" || channelID == "" || fromRunID == "" || targetAgentID == "" {
 		return
 	}
 
@@ -1176,6 +1227,9 @@ func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID st
 	}
 
 	agentID := "vtext:" + doc.DocID
+	if targetAgentID != agentID {
+		return
+	}
 	if _, err := rt.store.GetLatestActiveRunByAgent(ctx, ownerID, agentID); err == nil {
 		return
 	} else if err != store.ErrNotFound {
@@ -1186,7 +1240,7 @@ func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID st
 	req := vtextAgentRevisionRequest{
 		Intent: "integrate_worker_message",
 		Prompt: strings.TrimSpace(fmt.Sprintf(
-			"A worker sent a new message on the shared document channel. Wake now, integrate any new evidence, findings, notes, or questions into the next version, and write the next canonical revision if the message materially changes the document.\n\nLatest worker message from %s (%s):\n%s",
+			"A worker sent you a new addressed delivery for this document. Wake now, integrate any new evidence, findings, notes, or questions into the next version, and write the next canonical revision if the message materially changes the document.\n\nLatest worker message from %s (%s):\n%s",
 			strings.TrimSpace(message.From),
 			agentProfileForRun(&sourceRun),
 			strings.TrimSpace(message.Content),
@@ -1211,7 +1265,7 @@ var durableMetadataKeys = []string{
 // from the parent revision so they remain available on the next revise.
 func buildAppagentRevisionMetadata(rec *types.RunRecord, doc types.Document, ownerID string, s *store.Store) json.RawMessage {
 	meta := map[string]any{
-		"source": "agent_revision",
+		"source":  "agent_revision",
 		"loop_id": rec.RunID,
 	}
 
@@ -1290,9 +1344,9 @@ func (rt *Runtime) handleExecutionError(ctx context.Context, rec *types.RunRecor
 		_ = rt.store.FailAgentMutation(persistCtx, rec.RunID)
 		if docID, _ := rec.Metadata["doc_id"].(string); docID != "" {
 			failPayload, _ := json.Marshal(map[string]string{
-				"doc_id": docID,
+				"doc_id":  docID,
 				"loop_id": rec.RunID,
-				"error":  err.Error(),
+				"error":   err.Error(),
 			})
 			rt.emitVTextAgentEvent(persistCtx, rec, types.EventVTextAgentRevisionFailed,
 				events.CauseProviderFailure, failPayload)

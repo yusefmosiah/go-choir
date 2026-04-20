@@ -81,6 +81,12 @@ type TokenUsage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
+// InjectUserTurnsFunc allows the runtime to splice additional user turns into a
+// running loop between model iterations. This is used for runtime-owned inbox
+// delivery: queued messages are threaded in as normal user turns rather than
+// polled by the agent.
+type InjectUserTurnsFunc func(finalCheckpoint bool) ([]json.RawMessage, error)
+
 // maxToolLoopIterations prevents infinite tool-calling loops. If the LLM
 // keeps requesting tool use without reaching an end_turn, we bail out
 // after this many iterations.
@@ -100,7 +106,7 @@ const maxToolLoopIterations = 25
 //   - Tool execution emits observable events through the event bus.
 //
 // Returns the final text result, total token usage, and any error.
-func RunToolLoop(ctx context.Context, provider ToolLoopProvider, registry *ToolRegistry, initialMessages []json.RawMessage, systemPrompt string, maxTokens int, emit EventEmitFunc) (string, TokenUsage, error) {
+func RunToolLoop(ctx context.Context, provider ToolLoopProvider, registry *ToolRegistry, initialMessages []json.RawMessage, systemPrompt string, maxTokens int, emit EventEmitFunc, injectUserTurns InjectUserTurnsFunc) (string, TokenUsage, error) {
 	var totalUsage TokenUsage
 	messages := make([]json.RawMessage, len(initialMessages))
 	copy(messages, initialMessages)
@@ -144,8 +150,8 @@ func RunToolLoop(ctx context.Context, provider ToolLoopProvider, registry *ToolR
 
 			// Append the assistant's response (with tool calls) to conversation.
 			assistantMsg, _ := json.Marshal(map[string]any{
-				"role":       "assistant",
-				"content":    buildAssistantContent(resp.Text, resp.ToolCalls),
+				"role":    "assistant",
+				"content": buildAssistantContent(resp.Text, resp.ToolCalls),
 			})
 			messages = append(messages, assistantMsg)
 
@@ -158,10 +164,34 @@ func RunToolLoop(ctx context.Context, provider ToolLoopProvider, registry *ToolR
 				"content": buildToolResultContent(toolResults),
 			})
 			messages = append(messages, toolResultMsg)
+			if injectUserTurns != nil {
+				injected, err := injectUserTurns(false)
+				if err != nil {
+					return "", totalUsage, fmt.Errorf("tool loop inject turns after tools: %w", err)
+				}
+				messages = append(messages, injected...)
+			}
 
 			log.Printf("tool loop: iteration %d, executed %d tools, continuing", i+1, len(resp.ToolCalls))
 
 		case "end_turn", "":
+			if injectUserTurns != nil {
+				injected, err := injectUserTurns(true)
+				if err != nil {
+					return "", totalUsage, fmt.Errorf("tool loop final inbox checkpoint: %w", err)
+				}
+				if len(injected) > 0 {
+					if resp.Text != "" {
+						assistantMsg, _ := json.Marshal(map[string]any{
+							"role":    "assistant",
+							"content": buildAssistantContent(resp.Text, nil),
+						})
+						messages = append(messages, assistantMsg)
+					}
+					messages = append(messages, injected...)
+					continue
+				}
+			}
 			// Normal completion — return the text.
 			return resp.Text, totalUsage, nil
 
@@ -208,9 +238,9 @@ func buildToolResultContent(results []types.ToolResult) []any {
 	content := make([]any, 0, len(results))
 	for _, result := range results {
 		entry := map[string]any{
-			"type":      "tool_result",
+			"type":        "tool_result",
 			"tool_use_id": result.CallID,
-			"content":   result.Output,
+			"content":     result.Output,
 		}
 		if result.IsError {
 			entry["is_error"] = true

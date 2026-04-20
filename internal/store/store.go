@@ -96,12 +96,48 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 	seq             INTEGER NOT NULL,
 	owner_id        TEXT NOT NULL DEFAULT '',
 	from_agent_id   TEXT NOT NULL DEFAULT '',
-	from_loop_id     TEXT NOT NULL DEFAULT '',
+	from_loop_id    TEXT NOT NULL DEFAULT '',
+	to_agent_id     TEXT NOT NULL DEFAULT '',
+	to_loop_id      TEXT NOT NULL DEFAULT '',
+	trajectory_id   TEXT NOT NULL DEFAULT '',
 	from_name       TEXT NOT NULL DEFAULT '',
 	role            TEXT NOT NULL DEFAULT '',
 	content         TEXT NOT NULL,
 	created_at      DATETIME NOT NULL,
 	PRIMARY KEY (channel_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS inbox_deliveries (
+	delivery_id          TEXT PRIMARY KEY,
+	owner_id             TEXT NOT NULL DEFAULT '',
+	to_agent_id          TEXT NOT NULL DEFAULT '',
+	to_loop_id           TEXT NOT NULL DEFAULT '',
+	from_agent_id        TEXT NOT NULL DEFAULT '',
+	from_loop_id         TEXT NOT NULL DEFAULT '',
+	channel_id           TEXT NOT NULL DEFAULT '',
+	role                 TEXT NOT NULL DEFAULT '',
+	content              TEXT NOT NULL,
+	trajectory_id        TEXT NOT NULL DEFAULT '',
+	created_at           DATETIME NOT NULL,
+	delivered_to_loop_id TEXT NOT NULL DEFAULT '',
+	delivered_at         DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS research_findings (
+	owner_id          TEXT NOT NULL DEFAULT '',
+	finding_id        TEXT NOT NULL DEFAULT '',
+	agent_id          TEXT NOT NULL DEFAULT '',
+	target_agent_id   TEXT NOT NULL DEFAULT '',
+	channel_id        TEXT NOT NULL DEFAULT '',
+	message_seq       INTEGER NOT NULL DEFAULT 0,
+	trajectory_id     TEXT NOT NULL DEFAULT '',
+	findings_json     TEXT NOT NULL DEFAULT '[]',
+	evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+	notes_json        TEXT NOT NULL DEFAULT '[]',
+	questions_json    TEXT NOT NULL DEFAULT '[]',
+	content           TEXT NOT NULL DEFAULT '',
+	created_at        DATETIME NOT NULL,
+	PRIMARY KEY (owner_id, finding_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agents_owner_id ON agents(owner_id);
@@ -119,6 +155,12 @@ CREATE INDEX IF NOT EXISTS idx_events_channel_id_ts ON events(channel_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_owner_id ON channel_messages(owner_id);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_created_at ON channel_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_to_agent_id ON channel_messages(to_agent_id);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_trajectory_id ON channel_messages(trajectory_id);
+CREATE INDEX IF NOT EXISTS idx_inbox_deliveries_owner_target ON inbox_deliveries(owner_id, to_agent_id, delivered_at);
+CREATE INDEX IF NOT EXISTS idx_inbox_deliveries_created_at ON inbox_deliveries(created_at);
+CREATE INDEX IF NOT EXISTS idx_research_findings_channel_id ON research_findings(channel_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_research_findings_target_agent_id ON research_findings(target_agent_id, created_at);
 
 CREATE TABLE IF NOT EXISTS desktop_state (
 	owner_id       TEXT PRIMARY KEY,
@@ -206,6 +248,9 @@ func (s *Store) bootstrap() error {
 		{"runs", "agent_role", "TEXT NOT NULL DEFAULT ''"},
 		{"events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"events", "channel_id", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_messages", "to_agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_messages", "to_loop_id", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_messages", "trajectory_id", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(migration.table, migration.name, migration.ddl); err != nil {
 			return err
@@ -223,12 +268,12 @@ func (s *Store) ensureColumn(table, name, ddl string) error {
 
 	for rows.Next() {
 		var (
-			cid       int
-			column    string
-			colType   string
-			notNull   int
-			defaultV  sql.NullString
-			primaryK  int
+			cid      int
+			column   string
+			colType  string
+			notNull  int
+			defaultV sql.NullString
+			primaryK int
 		)
 		if err := rows.Scan(&cid, &column, &colType, &notNull, &defaultV, &primaryK); err != nil {
 			return fmt.Errorf("scan table_info(%s): %w", table, err)
@@ -444,7 +489,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.RunRecord, err
 	return s.listRunsWhere(ctx, "", nil, limit)
 }
 
-// ListRunsByChannel returns runs for a specific shared channel, ordered by creation time descending.
+// ListRunsByChannel returns runs for a specific coordination channel, ordered by creation time descending.
 func (s *Store) ListRunsByChannel(ctx context.Context, ownerID, channelID string, limit int) ([]types.RunRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -511,7 +556,7 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
- 	// Compute the next sequence number for this run.
+	// Compute the next sequence number for this run.
 	row := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE loop_id = ?`,
 		rec.RunID,
@@ -661,7 +706,7 @@ func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afte
 	return events, nil
 }
 
-// ListEventsByChannel returns recent events for the given shared channel.
+// ListEventsByChannel returns recent events for the given coordination channel.
 func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID string, limit int) ([]types.EventRecord, error) {
 	if limit <= 0 {
 		limit = 200
@@ -696,7 +741,7 @@ func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID stri
 	return events, nil
 }
 
-// AppendChannelMessage persists a message to a shared channel and assigns the next cursor sequence.
+// AppendChannelMessage persists a message to a coordination channel and assigns the next cursor sequence.
 func (s *Store) AppendChannelMessage(ctx context.Context, message *types.ChannelMessage, ownerID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -716,13 +761,16 @@ func (s *Store) AppendChannelMessage(ctx context.Context, message *types.Channel
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_loop_id, from_name, role, content, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_loop_id, to_agent_id, to_loop_id, trajectory_id, from_name, role, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		message.ChannelID,
 		message.Seq,
 		ownerID,
 		message.FromAgentID,
 		message.FromRunID,
+		message.ToAgentID,
+		message.ToRunID,
+		message.TrajectoryID,
 		message.From,
 		message.Role,
 		message.Content,
@@ -742,7 +790,7 @@ func (s *Store) ListChannelMessages(ctx context.Context, ownerID, channelID stri
 	if limit <= 0 {
 		limit = 200
 	}
-	query := `SELECT channel_id, seq, from_agent_id, from_loop_id, from_name, role, content, created_at
+	query := `SELECT channel_id, seq, from_agent_id, from_loop_id, to_agent_id, to_loop_id, trajectory_id, from_name, role, content, created_at
 		   FROM channel_messages
 		  WHERE channel_id = ?
 		    AND seq > ?`
@@ -771,6 +819,232 @@ func (s *Store) ListChannelMessages(ctx context.Context, ownerID, channelID stri
 		return nil, fmt.Errorf("iterate channel messages: %w", err)
 	}
 	return messages, nil
+}
+
+// EnqueueInboxDelivery persists a directed delivery for later runtime-owned
+// threading into an agent loop.
+func (s *Store) EnqueueInboxDelivery(ctx context.Context, delivery types.InboxDelivery) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO inbox_deliveries (delivery_id, owner_id, to_agent_id, to_loop_id, from_agent_id, from_loop_id, channel_id, role, content, trajectory_id, created_at, delivered_to_loop_id, delivered_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		delivery.DeliveryID,
+		delivery.OwnerID,
+		delivery.ToAgentID,
+		delivery.ToRunID,
+		delivery.FromAgentID,
+		delivery.FromRunID,
+		delivery.ChannelID,
+		delivery.Role,
+		delivery.Content,
+		delivery.TrajectoryID,
+		delivery.CreatedAt.UTC().Format(time.RFC3339Nano),
+		delivery.DeliveredToLoopID,
+		formatTimePtr(delivery.DeliveredAt),
+	)
+	if err != nil {
+		return fmt.Errorf("insert inbox delivery: %w", err)
+	}
+	return nil
+}
+
+// ListPendingInboxDeliveries returns undelivered inbox items for the given
+// target agent ordered by creation time.
+func (s *Store) ListPendingInboxDeliveries(ctx context.Context, ownerID, toAgentID string, limit int) ([]types.InboxDelivery, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT delivery_id, owner_id, to_agent_id, to_loop_id, from_agent_id, from_loop_id, channel_id, role, content, trajectory_id, created_at, delivered_to_loop_id, delivered_at
+		   FROM inbox_deliveries
+		  WHERE owner_id = ?
+		    AND to_agent_id = ?
+		    AND delivered_at IS NULL
+		  ORDER BY created_at ASC
+		  LIMIT ?`,
+		ownerID, toAgentID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query inbox deliveries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []types.InboxDelivery
+	for rows.Next() {
+		rec, err := scanInboxDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate inbox deliveries: %w", err)
+	}
+	return out, nil
+}
+
+// MarkInboxDeliveriesDelivered marks the given deliveries as consumed by the
+// specified loop.
+func (s *Store) MarkInboxDeliveriesDelivered(ctx context.Context, deliveryIDs []string, loopID string) error {
+	if len(deliveryIDs) == 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(deliveryIDs)), ",")
+	args := make([]any, 0, len(deliveryIDs)+3)
+	args = append(args, loopID, now)
+	for _, id := range deliveryIDs {
+		args = append(args, id)
+	}
+	query := fmt.Sprintf(
+		`UPDATE inbox_deliveries
+		    SET delivered_to_loop_id = ?,
+		        delivered_at = ?
+		  WHERE delivery_id IN (%s)
+		    AND delivered_at IS NULL
+		    AND delivered_to_loop_id = ''`,
+		placeholders,
+	)
+	_, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("mark inbox deliveries delivered: %w", err)
+	}
+	return nil
+}
+
+// GetResearchFinding returns a previously dispatched researcher findings bundle.
+func (s *Store) GetResearchFinding(ctx context.Context, ownerID, findingID string) (types.ResearchFindingRecord, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT owner_id, finding_id, agent_id, target_agent_id, channel_id, message_seq, trajectory_id, findings_json, evidence_ids_json, notes_json, questions_json, content, created_at
+		   FROM research_findings
+		  WHERE owner_id = ? AND finding_id = ?`,
+		ownerID, findingID,
+	)
+	return scanResearchFinding(row)
+}
+
+// DispatchResearchFinding atomically persists the addressed channel message,
+// inbox delivery, and finding dispatch record inside the runtime SQLite store.
+// Evidence durability remains in the vtext workspace and should be handled
+// before calling this method with deterministic evidence IDs.
+func (s *Store) DispatchResearchFinding(ctx context.Context, finding types.ResearchFindingRecord, message *types.ChannelMessage, delivery types.InboxDelivery) (types.ResearchFindingRecord, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("begin research finding transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	existing, err := scanResearchFinding(tx.QueryRowContext(ctx,
+		`SELECT owner_id, finding_id, agent_id, target_agent_id, channel_id, message_seq, trajectory_id, findings_json, evidence_ids_json, notes_json, questions_json, content, created_at
+		   FROM research_findings
+		  WHERE owner_id = ? AND finding_id = ?`,
+		finding.OwnerID, finding.FindingID,
+	))
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return types.ResearchFindingRecord{}, false, err
+	}
+
+	row := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM channel_messages WHERE channel_id = ?`,
+		message.ChannelID,
+	)
+	if err := row.Scan(&message.Seq); err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("query next research finding message sequence: %w", err)
+	}
+	if message.Timestamp.IsZero() {
+		message.Timestamp = time.Now().UTC()
+	}
+	if delivery.CreatedAt.IsZero() {
+		delivery.CreatedAt = message.Timestamp
+	}
+	finding.MessageSeq = message.Seq
+	if finding.CreatedAt.IsZero() {
+		finding.CreatedAt = message.Timestamp
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO channel_messages (channel_id, seq, owner_id, from_agent_id, from_loop_id, to_agent_id, to_loop_id, trajectory_id, from_name, role, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		message.ChannelID,
+		message.Seq,
+		finding.OwnerID,
+		message.FromAgentID,
+		message.FromRunID,
+		message.ToAgentID,
+		message.ToRunID,
+		message.TrajectoryID,
+		message.From,
+		message.Role,
+		message.Content,
+		message.Timestamp.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("insert research finding channel message: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO inbox_deliveries (delivery_id, owner_id, to_agent_id, to_loop_id, from_agent_id, from_loop_id, channel_id, role, content, trajectory_id, created_at, delivered_to_loop_id, delivered_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		delivery.DeliveryID,
+		delivery.OwnerID,
+		delivery.ToAgentID,
+		delivery.ToRunID,
+		delivery.FromAgentID,
+		delivery.FromRunID,
+		delivery.ChannelID,
+		delivery.Role,
+		delivery.Content,
+		delivery.TrajectoryID,
+		delivery.CreatedAt.UTC().Format(time.RFC3339Nano),
+		delivery.DeliveredToLoopID,
+		formatTimePtr(delivery.DeliveredAt),
+	)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("insert research finding inbox delivery: %w", err)
+	}
+
+	findingsJSON, err := marshalStringSliceJSON(finding.Findings)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("marshal research findings findings: %w", err)
+	}
+	evidenceIDsJSON, err := marshalStringSliceJSON(finding.EvidenceIDs)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("marshal research findings evidence ids: %w", err)
+	}
+	notesJSON, err := marshalStringSliceJSON(finding.Notes)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("marshal research findings notes: %w", err)
+	}
+	questionsJSON, err := marshalStringSliceJSON(finding.Questions)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("marshal research findings questions: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO research_findings (owner_id, finding_id, agent_id, target_agent_id, channel_id, message_seq, trajectory_id, findings_json, evidence_ids_json, notes_json, questions_json, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		finding.OwnerID,
+		finding.FindingID,
+		finding.AgentID,
+		finding.TargetAgentID,
+		finding.ChannelID,
+		finding.MessageSeq,
+		finding.TrajectoryID,
+		string(findingsJSON),
+		string(evidenceIDsJSON),
+		string(notesJSON),
+		string(questionsJSON),
+		finding.Content,
+		finding.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("insert research finding record: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return types.ResearchFindingRecord{}, false, fmt.Errorf("commit research finding transaction: %w", err)
+	}
+	return finding, true, nil
 }
 
 // scanRun scans a run record from a single row.
@@ -903,6 +1177,9 @@ func scanChannelMessage(row interface{ Scan(...any) error }) (types.ChannelMessa
 		&msg.Seq,
 		&msg.FromAgentID,
 		&msg.FromRunID,
+		&msg.ToAgentID,
+		&msg.ToRunID,
+		&msg.TrajectoryID,
 		&msg.From,
 		&msg.Role,
 		&msg.Content,
@@ -919,6 +1196,101 @@ func scanChannelMessage(row interface{ Scan(...any) error }) (types.ChannelMessa
 		return types.ChannelMessage{}, fmt.Errorf("parse channel message timestamp: %w", err)
 	}
 	return msg, nil
+}
+
+func scanInboxDelivery(row interface{ Scan(...any) error }) (types.InboxDelivery, error) {
+	var rec types.InboxDelivery
+	var createdAt string
+	var deliveredAt sql.NullString
+	err := row.Scan(
+		&rec.DeliveryID,
+		&rec.OwnerID,
+		&rec.ToAgentID,
+		&rec.ToRunID,
+		&rec.FromAgentID,
+		&rec.FromRunID,
+		&rec.ChannelID,
+		&rec.Role,
+		&rec.Content,
+		&rec.TrajectoryID,
+		&createdAt,
+		&rec.DeliveredToLoopID,
+		&deliveredAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.InboxDelivery{}, ErrNotFound
+		}
+		return types.InboxDelivery{}, fmt.Errorf("scan inbox delivery: %w", err)
+	}
+	rec.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return types.InboxDelivery{}, fmt.Errorf("parse inbox delivery created_at: %w", err)
+	}
+	if deliveredAt.Valid {
+		ts, err := time.Parse(time.RFC3339Nano, deliveredAt.String)
+		if err != nil {
+			return types.InboxDelivery{}, fmt.Errorf("parse inbox delivery delivered_at: %w", err)
+		}
+		rec.DeliveredAt = &ts
+	}
+	return rec, nil
+}
+
+func scanResearchFinding(row interface{ Scan(...any) error }) (types.ResearchFindingRecord, error) {
+	var (
+		rec             types.ResearchFindingRecord
+		findingsJSON    string
+		evidenceIDsJSON string
+		notesJSON       string
+		questionsJSON   string
+		createdAt       string
+	)
+	err := row.Scan(
+		&rec.OwnerID,
+		&rec.FindingID,
+		&rec.AgentID,
+		&rec.TargetAgentID,
+		&rec.ChannelID,
+		&rec.MessageSeq,
+		&rec.TrajectoryID,
+		&findingsJSON,
+		&evidenceIDsJSON,
+		&notesJSON,
+		&questionsJSON,
+		&rec.Content,
+		&createdAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.ResearchFindingRecord{}, ErrNotFound
+		}
+		return types.ResearchFindingRecord{}, fmt.Errorf("scan research finding: %w", err)
+	}
+	if err := json.Unmarshal([]byte(findingsJSON), &rec.Findings); err != nil {
+		return types.ResearchFindingRecord{}, fmt.Errorf("decode research finding findings: %w", err)
+	}
+	if err := json.Unmarshal([]byte(evidenceIDsJSON), &rec.EvidenceIDs); err != nil {
+		return types.ResearchFindingRecord{}, fmt.Errorf("decode research finding evidence ids: %w", err)
+	}
+	if err := json.Unmarshal([]byte(notesJSON), &rec.Notes); err != nil {
+		return types.ResearchFindingRecord{}, fmt.Errorf("decode research finding notes: %w", err)
+	}
+	if err := json.Unmarshal([]byte(questionsJSON), &rec.Questions); err != nil {
+		return types.ResearchFindingRecord{}, fmt.Errorf("decode research finding questions: %w", err)
+	}
+	rec.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return types.ResearchFindingRecord{}, fmt.Errorf("parse research finding created_at: %w", err)
+	}
+	return rec, nil
+}
+
+func marshalStringSliceJSON(items []string) ([]byte, error) {
+	if items == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(items)
 }
 
 // marshalJSON marshals a value to JSON, returning "{}" for nil.

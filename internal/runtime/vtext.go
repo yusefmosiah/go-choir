@@ -783,7 +783,7 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 
 	// Emit the vtext-specific agent revision started event.
 	startedPayload, _ := json.Marshal(map[string]string{
-		"doc_id": doc.DocID,
+		"doc_id":  doc.DocID,
 		"loop_id": rec.RunID,
 	})
 	rt.emitVTextAgentEvent(ctx, rec, types.EventVTextAgentRevisionStarted,
@@ -843,7 +843,7 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 		b.WriteString(diffSummary)
 	}
 	if len(recentWorkerMessages) > 0 {
-		b.WriteString("\n\nRecent worker messages on the shared channel:\n")
+		b.WriteString("\n\nRecent addressed worker messages:\n")
 		for _, message := range recentWorkerMessages {
 			b.WriteString("- [")
 			if !message.Timestamp.IsZero() {
@@ -886,7 +886,7 @@ func buildAgentRevisionRequest(current types.Revision, previous *types.Revision,
 		b.WriteString("\nTreat this latest user-authored revision as the canonical input for the next version.")
 	}
 	if hasGroundedHistory {
-		b.WriteString("\nThis document already has grounded workflow history on the shared channel.")
+		b.WriteString("\nThis document already has grounded workflow history on the coordination channel.")
 		b.WriteString("\nReuse the informed context already present in the current document and prior worker messages.")
 		b.WriteString("\nOpen new researcher or super work when this follow-up needs facts, evidence, or validation beyond what the workflow has already grounded.")
 	} else {
@@ -920,7 +920,11 @@ func (rt *Runtime) recentWorkerMessages(ctx context.Context, ownerID, channelID 
 		runProfiles[run.RunID] = agentProfileForRun(&run)
 	}
 	filtered := make([]ChannelMessage, 0, len(messages))
+	targetAgentID := "vtext:" + strings.TrimSpace(channelID)
 	for _, message := range messages {
+		if strings.TrimSpace(message.ToAgentID) != targetAgentID {
+			continue
+		}
 		switch runProfiles[strings.TrimSpace(message.FromRunID)] {
 		case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
 			filtered = append(filtered, message)

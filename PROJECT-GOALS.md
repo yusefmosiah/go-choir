@@ -46,7 +46,7 @@ flowchart TD
     K --> L["Researcher agents<br/>read document, gather current/external info"]
     K --> M["Super agent<br/>execution-oriented coordinator with full tool surface"]
 
-    L --> N["Workers send messages back to VText agent<br/>via coagent tools / shared channels"]
+    L --> N["Workers send messages back to VText agent<br/>via coagent tools / addressed coordination channels"]
     M --> N
     N --> O["VText agent synthesizes messages into new document versions"]
     O --> P["V2, V3, V4..."]
