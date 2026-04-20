@@ -310,7 +310,12 @@ func (m *Manager) Stop() {
 // config files, or process arguments (VAL-VM-011).
 func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			m.mu.Unlock()
+		}
+	}()
 
 	// Check if the VM already exists.
 	if inst, ok := m.vms[cfg.VMID]; ok {
@@ -438,12 +443,21 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 		return nil, fmt.Errorf("launch firecracker for VM %s: %w", cfg.VMID, err)
 	}
 
+	// Do not hold the global manager lock while waiting for guest readiness.
+	// Fresh boots should be allowed to overlap; only the shared state mutation
+	// needs serialization.
+	m.mu.Unlock()
+	locked = false
 	if err := m.waitForGuestReady(hostURL); err != nil {
+		m.mu.Lock()
+		locked = true
 		inst.State = StateFailed
 		inst.Healthy = false
 		m.killFirecrackerProcess(inst)
 		return nil, fmt.Errorf("wait for guest ready for VM %s: %w", cfg.VMID, err)
 	}
+	m.mu.Lock()
+	locked = true
 
 	inst.State = StateRunning
 	inst.Healthy = true
@@ -511,7 +525,12 @@ func (m *Manager) HibernateVM(vmID string) error {
 // distinguish fresh boot from resume (VAL-CROSS-117).
 func (m *Manager) ResumeVM(vmID string) (*VMInstance, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			m.mu.Unlock()
+		}
+	}()
 
 	inst, ok := m.vms[vmID]
 	if !ok {
@@ -548,12 +567,18 @@ func (m *Manager) ResumeVM(vmID string) (*VMInstance, error) {
 		return nil, fmt.Errorf("resume firecracker for VM %s: %w", vmID, err)
 	}
 
+	m.mu.Unlock()
+	locked = false
 	if err := m.waitForGuestReady(hostURL); err != nil {
+		m.mu.Lock()
+		locked = true
 		inst.State = StateFailed
 		inst.Healthy = false
 		m.killFirecrackerProcess(inst)
 		return nil, fmt.Errorf("wait for resumed guest ready for VM %s: %w", vmID, err)
 	}
+	m.mu.Lock()
+	locked = true
 
 	inst.State = StateRunning
 	inst.Healthy = true
