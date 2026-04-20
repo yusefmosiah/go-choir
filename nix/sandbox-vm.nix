@@ -120,26 +120,23 @@
     after = [ "network-online.target" "go-choir-extract-cmdline.service" ];
     wants = [ "network-online.target" ];
     requires = [ "go-choir-extract-cmdline.service" ];
+    environment = {
+      # VM health checks and host forwarding reach the guest via its tap IP,
+      # so the sandbox must listen on all guest interfaces, not loopback only.
+      SERVER_HOST = "0.0.0.0";
+      # Default port; overridden by guest_port= in kernel cmdline.
+      SANDBOX_PORT = "8085";
+      SANDBOX_ID = "sandbox-guest";
+      # Persistent state directory on the virtio-blk data volume.
+      RUNTIME_STORE_PATH = "/mnt/persistent/state";
+    };
     serviceConfig = {
       ExecStart = "${goChoirPackages.sandbox}/bin/sandbox";
       Restart = "on-failure";
       RestartSec = 1;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
       EnvironmentFile = [ "-/run/go-choir-sandbox.env" ];
-      Environment = [
-        # VM health checks and host forwarding reach the guest via its tap IP,
-        # so the sandbox must listen on all guest interfaces, not loopback only.
-        "SERVER_HOST=0.0.0.0"
-        # Default port; overridden by guest_port= in kernel cmdline
-        "SANDBOX_PORT=8085"
-        "SANDBOX_ID=sandbox-guest"
-        # Persistent state directory (on the virtio-blk data volume)
-        "RUNTIME_STORE_PATH=/mnt/persistent/state"
-        # Gateway URL — the host-side gateway IP is configured by
-        # vmmanager via iptables DNAT so the guest reaches it at
-        # the host tap IP (e.g., 172.X.0.1:8084).
-        # The exact URL is set by the init network config based on
-        # the ip= kernel parameter from vmmanager.
-      ];
     };
   };
 
