@@ -913,3 +913,18 @@ func TestBuildFirecrackerConfig_SubnetIsolation(t *testing.T) {
 		t.Error("expected different boot args for different host ports")
 	}
 }
+
+func TestGuestAndHostIP_TracksPerVMSubnet(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	mgr := NewManager(cfg)
+
+	guestIP, hostIP := mgr.guestAndHostIP(9000)
+	if guestIP != "172.1.0.2" || hostIP != "172.1.0.1" {
+		t.Fatalf("port 9000: got guest=%s host=%s", guestIP, hostIP)
+	}
+
+	guestIP, hostIP = mgr.guestAndHostIP(9001)
+	if guestIP != "172.2.0.2" || hostIP != "172.2.0.1" {
+		t.Fatalf("port 9001: got guest=%s host=%s", guestIP, hostIP)
+	}
+}

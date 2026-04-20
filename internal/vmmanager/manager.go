@@ -125,8 +125,8 @@ type VMInstance struct {
 	State VMState
 
 	// HostURL is the URL where this VM's sandbox runtime is reachable
-	// from the host (e.g., "http://192.168.X.Y:8085" for tap networking
-	// or "http://127.0.0.1:PORT" for host-forwarded networking).
+	// from the host. On the Firecracker tap path this is the guest IP on the
+	// per-VM /30 subnet (for example "http://172.X.0.2:8085").
 	HostURL string
 
 	// PID is the Firecracker process ID (0 if not running).
@@ -244,6 +244,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 		vms:      make(map[string]*VMInstance),
 		nextPort: cfg.HostBasePort,
 	}
+}
+
+func (m *Manager) guestAndHostIP(hostPort int) (guestIP, hostIP string) {
+	subnetIndex := hostPort - m.cfg.HostBasePort + 1
+	return fmt.Sprintf("172.%d.0.2", subnetIndex), fmt.Sprintf("172.%d.0.1", subnetIndex)
 }
 
 // Start begins the manager's background health checking loop.
@@ -409,7 +414,8 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	// Provider credentials are explicitly NOT included here (VAL-VM-011).
 	fcConfig := m.buildFirecrackerConfig(cfg, hostPort)
 
-	hostURL := fmt.Sprintf("http://127.0.0.1:%d", hostPort)
+	guestIP, _ := m.guestAndHostIP(hostPort)
+	hostURL := fmt.Sprintf("http://%s:%d", guestIP, cfg.GuestPort)
 
 	inst := &VMInstance{
 		Config:    cfg,
@@ -514,7 +520,8 @@ func (m *Manager) ResumeVM(vmID string) (*VMInstance, error) {
 	hostPort := m.nextPort
 	m.nextPort++
 
-	hostURL := fmt.Sprintf("http://127.0.0.1:%d", hostPort)
+	guestIP, _ := m.guestAndHostIP(hostPort)
+	hostURL := fmt.Sprintf("http://%s:%d", guestIP, inst.Config.GuestPort)
 	inst.HostURL = hostURL
 
 	// Reuse the existing epoch (no increment on resume).
@@ -677,9 +684,7 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// Calculate the /30 subnet for this VM based on host port.
 	// hostPort is 9000+N, so subnetIndex = N.
 	// Host gets 172.(N+1).0.1, guest gets 172.(N+1).0.2.
-	subnetIndex := hostPort - m.cfg.HostBasePort + 1
-	guestIP := fmt.Sprintf("172.%d.0.2", subnetIndex)
-	hostIP := fmt.Sprintf("172.%d.0.1", subnetIndex)
+	guestIP, hostIP := m.guestAndHostIP(hostPort)
 
 	// Build drives list.
 	// With the upstream microvm.nix approach:
@@ -830,9 +835,7 @@ func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}
 	// Configure host-side networking for the tap device.
 	// Assign the host IP in the /30 subnet and set up DNAT
 	// so traffic to the host port reaches the guest.
-	subnetIndex := hostPort - m.cfg.HostBasePort + 1
-	hostIP := fmt.Sprintf("172.%d.0.1", subnetIndex)
-	guestIP := fmt.Sprintf("172.%d.0.2", subnetIndex)
+	guestIP, hostIP := m.guestAndHostIP(hostPort)
 	if err := m.setupHostNetworking(tapName, hostIP, hostPort, guestIP, guestPort); err != nil {
 		log.Printf("vmmanager: warning: host networking setup failed for %s: %v", tapName, err)
 	}
