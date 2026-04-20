@@ -1194,6 +1194,12 @@ func (m *Manager) setupHostNetworking(tapName, hostIP string, hostPort int, gues
 		"-i", tapName, "-j", "ACCEPT").Run()
 	_ = exec.Command(iptBin, "-A", "FORWARD",
 		"-o", tapName, "-j", "ACCEPT").Run()
+	// Allow guest sandboxes to reach the host-side gateway listener on the tap
+	// subnet without opening 8084 beyond VM tap interfaces.
+	_ = exec.Command(iptBin, "-A", "INPUT",
+		"-i", tapName,
+		"-p", "tcp", "--dport", "8084",
+		"-j", "ACCEPT").Run()
 
 	// Set up MASQUERADE (SNAT) for outbound guest traffic.
 	// This is critical: without it, the guest can send packets to the
