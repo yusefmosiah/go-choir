@@ -220,10 +220,10 @@ func DefaultManagerConfig() ManagerConfig {
 // It provides thread-safe VM boot, stop, resume, and health-check
 // operations that vmctl delegates to.
 type Manager struct {
-	cfg    ManagerConfig
-	mu     sync.RWMutex
-	vms    map[string]*VMInstance // vmID → instance
-	nextPort int                  // next host port to assign
+	cfg      ManagerConfig
+	mu       sync.RWMutex
+	vms      map[string]*VMInstance // vmID → instance
+	nextPort int                    // next host port to assign
 
 	// healthCancel is used to stop the background health checker.
 	healthCancel chan struct{}
@@ -236,9 +236,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		cfg.HostBasePort = 9000
 	}
 	return &Manager{
-		cfg:       cfg,
-		vms:       make(map[string]*VMInstance),
-		nextPort:  cfg.HostBasePort,
+		cfg:      cfg,
+		vms:      make(map[string]*VMInstance),
+		nextPort: cfg.HostBasePort,
 	}
 }
 
@@ -691,19 +691,19 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 		// The NixOS init (systemd) mounts /nix/store from this erofs disk.
 		// The root filesystem itself is a tmpfs managed by the NixOS initrd.
 		drives = append(drives, map[string]interface{}{
-			"drive_id":      "store",
-			"path_on_host":  cfg.StoreDiskPath,
+			"drive_id":       "store",
+			"path_on_host":   cfg.StoreDiskPath,
 			"is_root_device": true,
-			"is_read_only":  true,
+			"is_read_only":   true,
 		})
 	} else if cfg.RootfsPath != "" {
 		// Legacy approach: ext4 rootfs as the writable root device.
 		// This is the old custom init script approach with init=/bin/init.
 		drives = append(drives, map[string]interface{}{
-			"drive_id":      "rootfs",
-			"path_on_host":  cfg.RootfsPath,
+			"drive_id":       "rootfs",
+			"path_on_host":   cfg.RootfsPath,
 			"is_root_device": true,
-			"is_read_only":  false,
+			"is_read_only":   false,
 		})
 	}
 
@@ -711,10 +711,10 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// vmmanager creates a data.img per-VM in the state directory.
 	dataImgPath := filepath.Join(m.cfg.StateDir, cfg.VMID, "data.img")
 	drives = append(drives, map[string]interface{}{
-		"drive_id":      "data",
-		"path_on_host":  dataImgPath,
+		"drive_id":       "data",
+		"path_on_host":   dataImgPath,
 		"is_root_device": false,
-		"is_read_only":  false,
+		"is_read_only":   false,
 	})
 
 	// Build the guest kernel boot arguments.
@@ -770,15 +770,15 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	// No secrets, no provider credentials, no host paths (VAL-VM-011).
 	fcConfig := map[string]interface{}{
 		"boot-source": bootSource,
-		"drives":       drives,
+		"drives":      drives,
 		"machine-config": map[string]interface{}{
-			"vcpu_count":  cfg.MachineCPUCount,
+			"vcpu_count":   cfg.MachineCPUCount,
 			"mem_size_mib": cfg.MachineMemSizeMib,
 		},
 		"network-interfaces": []map[string]interface{}{
 			{
-				"iface_id":     "eth0",
-				"guest_mac":    fmt.Sprintf("AA:FC:00:00:00:%02X", hostPort%256),
+				"iface_id":      "eth0",
+				"guest_mac":     fmt.Sprintf("AA:FC:00:00:00:%02X", hostPort%256),
 				"host_dev_name": fmt.Sprintf("vm-%s-tap", cfg.VMID[:8]),
 			},
 		},
@@ -979,6 +979,18 @@ func (m *Manager) copyFile(src, dst string) error {
 // This is used by the microvm.nix approach where the rootfs is read-only
 // (erofs store disk) and per-VM mutable state goes on a separate volume.
 func (m *Manager) createDataImage(path string, sizeMB int) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create data image dir %s: %w", filepath.Dir(path), err)
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("create data image %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close data image %s: %w", path, err)
+	}
+
 	// Create a sparse file of the desired size.
 	if err := os.Truncate(path, int64(sizeMB)*1024*1024); err != nil {
 		return fmt.Errorf("truncate data image %s: %w", path, err)
@@ -1213,5 +1225,3 @@ func (m *Manager) checkAllHealth() {
 		}
 	}
 }
-
-

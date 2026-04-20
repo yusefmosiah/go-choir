@@ -68,13 +68,13 @@ func TestManagerBuildFirecrackerConfig_NoSecrets(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-test-123",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-test-123",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
@@ -215,8 +215,8 @@ func TestManagerMarkFailed(t *testing.T) {
 	mgr := NewManager(DefaultManagerConfig())
 
 	inst := &VMInstance{
-		Config: VMConfig{VMID: "test-vm-1"},
-		State:  StateRunning,
+		Config:  VMConfig{VMID: "test-vm-1"},
+		State:   StateRunning,
 		Healthy: true,
 	}
 	mgr.mu.Lock()
@@ -237,10 +237,10 @@ func TestManagerForceKillVM(t *testing.T) {
 	mgr := NewManager(DefaultManagerConfig())
 
 	inst := &VMInstance{
-		Config: VMConfig{VMID: "test-vm-1"},
-		State:  StateRunning,
+		Config:  VMConfig{VMID: "test-vm-1"},
+		State:   StateRunning,
 		Healthy: true,
-		done:   make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	mgr.mu.Lock()
 	mgr.vms["test-vm-1"] = inst
@@ -259,10 +259,10 @@ func TestManagerStopVM(t *testing.T) {
 	mgr := NewManager(DefaultManagerConfig())
 
 	inst := &VMInstance{
-		Config: VMConfig{VMID: "test-vm-1"},
-		State:  StateRunning,
+		Config:  VMConfig{VMID: "test-vm-1"},
+		State:   StateRunning,
 		Healthy: true,
-		done:   make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	mgr.mu.Lock()
 	mgr.vms["test-vm-1"] = inst
@@ -289,10 +289,10 @@ func TestManagerHibernateVM(t *testing.T) {
 	mgr := NewManager(DefaultManagerConfig())
 
 	inst := &VMInstance{
-		Config: VMConfig{VMID: "test-vm-1"},
-		State:  StateRunning,
+		Config:  VMConfig{VMID: "test-vm-1"},
+		State:   StateRunning,
 		Healthy: true,
-		done:   make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	mgr.mu.Lock()
 	mgr.vms["test-vm-1"] = inst
@@ -396,6 +396,35 @@ func TestManagerPersistentDirCreation(t *testing.T) {
 	}
 }
 
+func TestCreateDataImage_CreatesMissingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll binDir: %v", err)
+	}
+
+	mkfsPath := filepath.Join(binDir, "mkfs.ext4")
+	if err := os.WriteFile(mkfsPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile mkfs.ext4: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	mgr := NewManager(DefaultManagerConfig())
+	dataImg := filepath.Join(tmpDir, "nested", "data.img")
+
+	if err := mgr.createDataImage(dataImg, 8); err != nil {
+		t.Fatalf("createDataImage: %v", err)
+	}
+
+	info, err := os.Stat(dataImg)
+	if err != nil {
+		t.Fatalf("Stat data.img: %v", err)
+	}
+	if info.Size() != 8*1024*1024 {
+		t.Fatalf("expected data.img size %d, got %d", 8*1024*1024, info.Size())
+	}
+}
+
 // --- Guest Isolation Tests (VAL-VM-007, VAL-VM-011) ---
 
 func TestBuildFirecrackerConfig_NoHostControlPlaneAccess(t *testing.T) {
@@ -411,13 +440,13 @@ func TestBuildFirecrackerConfig_NoHostControlPlaneAccess(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-isolation-test",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-isolation-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
@@ -475,13 +504,13 @@ func TestBuildFirecrackerConfig_ComprehensiveSecretExclusion(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-secret-test",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-secret-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
@@ -569,13 +598,13 @@ func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-bootargs-test",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-bootargs-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	fcConfig := mgr.buildFirecrackerConfig(vmCfg, 9001)
@@ -764,13 +793,13 @@ func TestBuildFirecrackerConfig_IPConfigInBootArgs(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-ip-test",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-ip-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	// hostPort 9001 → subnetIndex = 9001-9000+1 = 2
@@ -797,13 +826,13 @@ func TestBuildFirecrackerConfig_SubnetIsolation(t *testing.T) {
 	mgr := NewManager(cfg)
 
 	vmCfg := VMConfig{
-		VMID:             "vm-subnet-test",
-		KernelImagePath:  cfg.KernelImagePath,
-		RootfsPath:       cfg.RootfsPath,
-		GuestPort:        8085,
-		MachineCPUCount:  2,
+		VMID:              "vm-subnet-test",
+		KernelImagePath:   cfg.KernelImagePath,
+		RootfsPath:        cfg.RootfsPath,
+		GuestPort:         8085,
+		MachineCPUCount:   2,
 		MachineMemSizeMib: 512,
-		Epoch:            1,
+		Epoch:             1,
 	}
 
 	// VM on port 9000 → subnetIndex=1 → 172.1.0.0/30
