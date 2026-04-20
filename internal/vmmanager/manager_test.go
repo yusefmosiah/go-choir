@@ -634,12 +634,11 @@ func TestBuildFirecrackerConfig_GuestPortInBootArgs(t *testing.T) {
 	}
 }
 
-func TestBuildFirecrackerConfig_MicrovmUsesRootfsAndStoreDisk(t *testing.T) {
+func TestBuildFirecrackerConfig_MicrovmUsesStoreDiskAndKernelParams(t *testing.T) {
 	cfg := DefaultManagerConfig()
 	cfg.StateDir = t.TempDir()
 	cfg.KernelImagePath = "/opt/go-choir/guest/vmlinux"
 	cfg.InitrdPath = "/opt/go-choir/guest/initrd"
-	cfg.RootfsPath = "/opt/go-choir/guest/rootfs.ext4"
 	cfg.StoreDiskPath = "/opt/go-choir/guest/storedisk.erofs"
 	cfg.KernelParams = "root=fstab init=/nix/store/example-init regInfo=/nix/store/example-reginfo"
 
@@ -649,7 +648,6 @@ func TestBuildFirecrackerConfig_MicrovmUsesRootfsAndStoreDisk(t *testing.T) {
 		VMID:              "vm-microvm-test",
 		KernelImagePath:   cfg.KernelImagePath,
 		InitrdPath:        cfg.InitrdPath,
-		RootfsPath:        cfg.RootfsPath,
 		StoreDiskPath:     cfg.StoreDiskPath,
 		GuestPort:         8085,
 		MachineCPUCount:   2,
@@ -662,24 +660,26 @@ func TestBuildFirecrackerConfig_MicrovmUsesRootfsAndStoreDisk(t *testing.T) {
 	if !ok {
 		t.Fatal("expected drives slice")
 	}
-	if len(drives) != 3 {
-		t.Fatalf("expected rootfs, store, and data drives; got %d", len(drives))
+	if len(drives) != 2 {
+		t.Fatalf("expected store and data drives; got %d", len(drives))
 	}
-	if drives[0]["drive_id"] != "rootfs" || drives[0]["is_root_device"] != true {
-		t.Fatalf("expected first drive to be rootfs root device, got %#v", drives[0])
+	if drives[0]["drive_id"] != "store" || drives[0]["is_root_device"] != false {
+		t.Fatalf("expected first drive to be store disk, got %#v", drives[0])
 	}
-	if drives[1]["drive_id"] != "store" || drives[1]["is_root_device"] != false {
-		t.Fatalf("expected second drive to be store disk, got %#v", drives[1])
-	}
-	if drives[2]["drive_id"] != "data" {
-		t.Fatalf("expected third drive to be data disk, got %#v", drives[2])
+	if drives[1]["drive_id"] != "data" {
+		t.Fatalf("expected second drive to be data disk, got %#v", drives[1])
 	}
 
 	bootArgs := fcConfig["boot-source"].(map[string]interface{})["boot_args"].(string)
 	for _, arg := range []string{
+		"console=ttyS0,115200",
 		"root=fstab",
 		"init=/nix/store/example-init",
 		"regInfo=/nix/store/example-reginfo",
+		"i8042.noaux",
+		"i8042.nomux",
+		"i8042.nopnp",
+		"i8042.dumbkbd",
 		"guest_port=8085",
 		"vm_id=vm-microvm-test",
 		"epoch=1",

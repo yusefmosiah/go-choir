@@ -379,17 +379,6 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 	}
 
 	// Prepare per-VM disk images.
-	if cfg.RootfsPath != "" {
-		// Keep the boot disk as a writable per-VM copy so rootfs mutations do
-		// not collide across users. The shared nix-store closure remains on the
-		// separate read-only StoreDiskPath artifact when configured.
-		vmRootfs := filepath.Join(m.cfg.StateDir, cfg.VMID, "rootfs.ext4")
-		if err := m.copyFile(cfg.RootfsPath, vmRootfs); err != nil {
-			return nil, fmt.Errorf("copy rootfs for VM %s: %w", cfg.VMID, err)
-		}
-		cfg.RootfsPath = vmRootfs
-	}
-
 	if cfg.StoreDiskPath != "" {
 		// The erofs nix-store disk is shared and read-only. Only the mutable
 		// per-VM data image is created here.
@@ -404,6 +393,16 @@ func (m *Manager) BootVM(cfg VMConfig) (*VMInstance, error) {
 				return nil, fmt.Errorf("create data image for VM %s: %w", cfg.VMID, err)
 			}
 		}
+	} else if cfg.RootfsPath != "" {
+		// Legacy approach: create a per-VM writable copy of the rootfs.
+		// The base rootfs image is read-only (from the Nix store or
+		// /var/lib/go-choir/guest/), but Firecracker needs write access.
+		// Each VM gets its own copy so state is isolated per-user (VAL-VM-005).
+		vmRootfs := filepath.Join(m.cfg.StateDir, cfg.VMID, "rootfs.ext4")
+		if err := m.copyFile(cfg.RootfsPath, vmRootfs); err != nil {
+			return nil, fmt.Errorf("copy rootfs for VM %s: %w", cfg.VMID, err)
+		}
+		cfg.RootfsPath = vmRootfs
 	}
 
 	// Build the Firecracker configuration.
@@ -684,21 +683,11 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 
 	// Build drives list.
 	// With the upstream microvm.nix approach:
-	//   - Rootfs boot disk as writable virtio-blk at /dev/vda
-	//   - Shared nix-store disk (erofs) as a separate read-only virtio-blk
+	//   - Shared nix-store disk (erofs) as a read-only virtio-blk drive
 	//   - Per-VM data volume for mutable sandbox state
 	// With legacy rootfs (old approach):
 	//   - Rootfs ext4 as writable virtio-blk at /dev/vda
 	var drives []map[string]interface{}
-
-	if cfg.RootfsPath != "" {
-		drives = append(drives, map[string]interface{}{
-			"drive_id":       "rootfs",
-			"path_on_host":   cfg.RootfsPath,
-			"is_root_device": true,
-			"is_read_only":   false,
-		})
-	}
 
 	if cfg.StoreDiskPath != "" {
 		// Shared nix-store disk mounted read-only by the guest init.
@@ -708,7 +697,7 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 			"is_root_device": false,
 			"is_read_only":   true,
 		})
-	} else if cfg.RootfsPath != "" && len(drives) == 0 {
+	} else if cfg.RootfsPath != "" {
 		// Legacy approach: ext4 rootfs as the writable root device.
 		// This is the old custom init script approach with init=/bin/init.
 		drives = append(drives, map[string]interface{}{
@@ -745,10 +734,13 @@ func (m *Manager) buildFirecrackerConfig(cfg VMConfig, hostPort int) map[string]
 	var bootArgs string
 	if cfg.StoreDiskPath != "" && strings.TrimSpace(m.cfg.KernelParams) != "" {
 		runtimeArgs := []string{
-			"console=ttyS0",
+			"console=ttyS0,115200",
 			"reboot=k",
 			"panic=1",
-			"pci=off",
+			"i8042.noaux",
+			"i8042.nomux",
+			"i8042.nopnp",
+			"i8042.dumbkbd",
 			fmt.Sprintf("guest_port=%d", cfg.GuestPort),
 			"persistent=/mnt/persistent",
 			fmt.Sprintf("vm_id=%s", cfg.VMID),
@@ -847,10 +839,13 @@ func (m *Manager) launchFirecracker(vmID string, fcConfig map[string]interface{}
 
 	// Build the Firecracker command.
 	// --no-api disables the Firecracker API socket (we use config file).
+	// --enable-pci matches the upstream microvm runner so the guest sees the
+	// expected Firecracker device model.
 	// --id sets the VM identifier.
 	// --config-file provides the VM configuration.
 	cmd := exec.Command(bin,
 		"--no-api",
+		"--enable-pci",
 		"--id", vmID,
 		"--config-file", configPath,
 	)
