@@ -443,6 +443,7 @@ func TestHandleIssueCredential(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "localhost:8084"
+	req.RemoteAddr = "127.0.0.1:12345"
 
 	w := httptest.NewRecorder()
 	h.HandleIssueCredential(w, req)
@@ -470,6 +471,24 @@ func TestHandleIssueCredential_NonLocalhost(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "10.0.0.1:8084"
+	req.RemoteAddr = "10.0.0.1:45678"
+
+	w := httptest.NewRecorder()
+	h.HandleIssueCredential(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandleIssueCredential_SpoofedLocalhostHostDenied(t *testing.T) {
+	h, _ := setupHandlerNoProvider(t)
+
+	body := `{"sandbox_id": "sandbox-test"}`
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "localhost:8084"
+	req.RemoteAddr = "10.10.10.10:45678"
 
 	w := httptest.NewRecorder()
 	h.HandleIssueCredential(w, req)
@@ -490,6 +509,7 @@ func TestHandleRevokeCredential(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/revoke", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "localhost:8084"
+	req.RemoteAddr = "127.0.0.1:12345"
 
 	w := httptest.NewRecorder()
 	h.HandleRevokeCredential(w, req)
@@ -516,6 +536,7 @@ func TestHandleRotateCredential(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/rotate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "localhost:8084"
+	req.RemoteAddr = "127.0.0.1:12345"
 
 	w := httptest.NewRecorder()
 	h.HandleRotateCredential(w, req)

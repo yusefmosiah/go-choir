@@ -280,6 +280,11 @@ in
       EnvironmentFile = "-/var/lib/go-choir/gateway-provider.env";
       ReadWritePaths = [ "/var/lib/go-choir" ];
       Environment = [
+        # Guest sandboxes call the host gateway via the tap subnet
+        # (172.X.0.1:8084). Keep operator-only credential endpoints locked to
+        # loopback at the handler layer, but let the process accept guest
+        # traffic on tap addresses.
+        "SERVER_HOST=0.0.0.0"
         "GATEWAY_PORT=8084"
         # Tokens are currently issued at sandbox/VM bootstrap and not
         # proactively rotated. Use a longer TTL in staging to avoid

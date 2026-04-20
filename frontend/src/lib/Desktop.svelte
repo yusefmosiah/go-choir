@@ -366,7 +366,7 @@
         dispatch('authexpired');
         return;
       }
-      showToast(err.message || 'Conductor submission failed');
+      showToast(err.message || 'Conductor submission failed', { kind: 'error' });
     }
   }
 
@@ -406,12 +406,14 @@
     scheduleSave();
   }
 
-  function showToast(message) {
+  function showToast(message, options = {}) {
     const id = ++toastCounter;
-    toasts = [...toasts, { id, message }];
+    const kind = options.kind || 'info';
+    const durationMs = options.durationMs ?? (kind === 'error' ? 9000 : 2400);
+    toasts = [...toasts, { id, message, kind }];
     setTimeout(() => {
       toasts = toasts.filter((toast) => toast.id !== id);
-    }, 2400);
+    }, durationMs);
   }
 
   // ---- Lifecycle ----
@@ -516,7 +518,7 @@
   {#if toasts.length > 0}
     <div class="toast-stack" aria-live="polite" aria-atomic="true">
       {#each toasts as toast (toast.id)}
-        <div class="toast">{toast.message}</div>
+        <div class="toast" class:error={toast.kind === 'error'} role={toast.kind === 'error' ? 'alert' : undefined}>{toast.message}</div>
       {/each}
     </div>
   {/if}
@@ -594,6 +596,12 @@
     padding: 0.6rem 0.95rem;
     font-size: 0.82rem;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  }
+
+  .toast.error {
+    background: rgba(69, 10, 10, 0.94);
+    border-color: rgba(248, 113, 113, 0.42);
+    color: #fee2e2;
   }
 
   .app-header {

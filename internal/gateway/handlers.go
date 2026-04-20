@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -583,13 +584,17 @@ func sanitizeError(err error) string {
 	return msg
 }
 
-// isLocalhost checks whether the request originated from localhost.
+// isLocalhost checks whether the request originated from a loopback address.
+// Operator-only credential endpoints must key off the actual peer address, not
+// the Host header, which a remote caller can spoof once the gateway listens on
+// non-loopback interfaces.
 func isLocalhost(r *http.Request) bool {
-	host := r.Host
-	if strings.Contains(host, ":") {
-		host = strings.Split(host, ":")[0]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // writeGatewayJSON writes a JSON response.
