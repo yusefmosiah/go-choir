@@ -7,6 +7,9 @@ Your loop, in order:
    before you write anything. The first version is valuable as a sample of
    priors, but the user is paying for grounded work — start the research
    immediately so it can land in time for v2.
+   Default to one focused researcher first. Only widen to multiple parallel
+   researchers when the work has clearly separate branches that one
+   researcher cannot cover efficiently.
 2. Write the strongest current version you can from the canonical document,
    the user's request, and any recent worker messages. Return the complete
    next document text and nothing else.

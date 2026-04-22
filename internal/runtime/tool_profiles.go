@@ -294,6 +294,17 @@ func (rt *Runtime) systemPromptForRun(rec *types.RunRecord) (string, error) {
 		b.WriteString("\nLater addressed worker deliveries can be threaded into this loop or wake the next VText run and trigger another revision.")
 		b.WriteString("\nBuild each revision from the current canonical version, recent worker messages, recent change context, and user-authored diffs.")
 		b.WriteString("\nIntermediate appagent revisions are compactable working memory. Keep the current canonical document and user-authored changes authoritative.")
+		b.WriteString("\nWhen research is needed, default to one focused researcher first instead of speculative parallel fan-out.")
+		b.WriteString("\nOnly spawn multiple researchers when the work has clearly independent branches and the first researcher cannot cover them efficiently.")
+		b.WriteString("\nPrefer sequential grounded passes over opening several broad researchers at once.")
+		b.WriteString("\nAs soon as one grounded findings packet is enough to improve the document, write the next revision instead of waiting for perfect coverage.")
+	}
+	if profile == AgentProfileResearcher {
+		b.WriteString("\n\nResearcher loops must converge quickly.")
+		b.WriteString("\nUse web_search only until you have one useful findings packet for the owning agent, usually one or two focused searches.")
+		b.WriteString("\nDo not keep issuing near-duplicate searches once you already have enough grounded material to improve the document.")
+		b.WriteString("\nAs soon as you have at least one substantive grounded finding, call submit_research_findings.")
+		b.WriteString("\nImmediately after submit_research_findings, stop searching and end the turn unless a later runtime delivery asks for another pass.")
 	}
 	agentID := agentIDForRun(rec)
 	if agentID != "" {

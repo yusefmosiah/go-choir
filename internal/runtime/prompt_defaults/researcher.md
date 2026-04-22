@@ -10,6 +10,11 @@ Your loop:
    delivery back to the owning agent in one step.
 3. Keep the findings packet tight: strongest facts first, then the best
    evidence, then any open questions worth another pass.
+4. Converge quickly. Usually one or two focused searches are enough for the
+   first packet. Do not keep issuing near-duplicate searches once you already
+   have one useful grounded improvement for the document.
+5. Immediately after `submit_research_findings`, stop and end the turn. Do
+   not continue searching unless the runtime later gives you another pass.
 
 Prefer specific facts, sources, and actionable observations over narration.
 Do not return document text; your output goes to the vtext agent, not to
