@@ -1,8 +1,27 @@
 import { test, expect } from './helpers/fixtures.js';
+import { registerPasskey } from './helpers/auth.js';
+
+const BASE_URL = 'http://localhost:4173';
+
+function uniqueEmail() {
+  return `vtext-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+}
+
+async function registerAndLoadDesktop(page, authenticator, email) {
+  await page.goto(BASE_URL);
+  await registerPasskey(page, email, BASE_URL);
+  await page.reload();
+  await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
+}
 
 async function openFilesApp(page) {
   await page.locator('[data-desktop-icon-id="files"]').dblclick();
-  await page.locator('[data-file-list]').waitFor({ state: 'visible', timeout: 10000 });
+  const filesWindow = page.locator('[data-files-app]').last();
+  await filesWindow.waitFor({ state: 'visible', timeout: 10000 });
+  const rootBreadcrumb = filesWindow.locator('[data-breadcrumb-segment]').first();
+  await rootBreadcrumb.click();
+  await filesWindow.locator('[data-file-list]').waitFor({ state: 'visible', timeout: 10000 });
+  return filesWindow;
 }
 
 async function openVText(page) {
@@ -25,12 +44,12 @@ async function seedTextFile(page, fileName, content) {
 }
 
 async function openFileInVText(page, fileName) {
-  await openFilesApp(page);
+  const filesWindow = await openFilesApp(page);
   const openResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === 'POST' && url.pathname === '/api/vtext/files/open';
   });
-  const fileItem = page.locator('[data-file-item]').filter({ hasText: fileName }).first();
+  const fileItem = filesWindow.locator('[data-file-item]').filter({ hasText: fileName }).first();
   await expect(fileItem).toBeVisible({ timeout: 5000 });
   await fileItem.click();
   await page.locator('[data-vtext-app]').last().waitFor({ state: 'visible', timeout: 10000 });
@@ -101,8 +120,8 @@ async function submitTestResearchFindings(page, payload) {
   }, payload);
 }
 
-test('vtext auto-follows latest head when the editor is clean', async ({ desktopSession }) => {
-  const { page } = desktopSession;
+test('vtext auto-follows latest head when the editor is clean', async ({ page, authenticator }) => {
+  await registerAndLoadDesktop(page, authenticator, uniqueEmail());
   const fileName = `auto-follow-${Date.now()}.txt`;
   const initialContent = 'Initial version from file open';
   const externalContent = 'External clean-head update';
@@ -119,8 +138,8 @@ test('vtext auto-follows latest head when the editor is clean', async ({ desktop
   await expect(page.locator('[data-vtext-new-version]')).toHaveCount(0);
 });
 
-test('vtext keeps dirty edits and offers latest-head jump instead of auto-clobbering', async ({ desktopSession }) => {
-  const { page } = desktopSession;
+test('vtext keeps dirty edits and offers latest-head jump instead of auto-clobbering', async ({ page, authenticator }) => {
+  await registerAndLoadDesktop(page, authenticator, uniqueEmail());
   const fileName = `dirty-protection-${Date.now()}.txt`;
   const initialContent = 'Seed content from file open';
   const dirtyContent = 'Local unsaved draft that must stay put';
@@ -143,8 +162,8 @@ test('vtext keeps dirty edits and offers latest-head jump instead of auto-clobbe
   await expect(updateButton).toHaveCount(0);
 });
 
-test('reopening the same file path resolves to the same canonical vtext doc', async ({ desktopSession }) => {
-  const { page } = desktopSession;
+test('reopening the same file path resolves to the same canonical vtext doc', async ({ page, authenticator }) => {
+  await registerAndLoadDesktop(page, authenticator, uniqueEmail());
   const fileName = `canonical-alias-${Date.now()}.txt`;
   const initialContent = 'Alias seed content';
 
@@ -171,8 +190,8 @@ test('reopening the same file path resolves to the same canonical vtext doc', as
   expect(revisions.revisions[0].content).toBe(initialContent);
 });
 
-test('vtext file-backed window restores on reload with the latest canonical head', async ({ desktopSession }) => {
-  const { page } = desktopSession;
+test('vtext file-backed window restores on reload with the latest canonical head', async ({ page, authenticator }) => {
+  await registerAndLoadDesktop(page, authenticator, uniqueEmail());
   const fileName = `restart-recovery-${Date.now()}.txt`;
   const initialContent = 'Initial restart content';
   const externalContent = 'Recovered latest head after reload';
@@ -195,8 +214,8 @@ test('vtext file-backed window restores on reload with the latest canonical head
   await expect(restoredEditor).toHaveValue(externalContent, { timeout: 10000 });
 });
 
-test('submit_research_findings batches rapid worker updates into one auto-advanced next version', async ({ desktopSession }) => {
-  const { page } = desktopSession;
+test('submit_research_findings batches rapid worker updates into one auto-advanced next version', async ({ page, authenticator }) => {
+  await registerAndLoadDesktop(page, authenticator, uniqueEmail());
   const initialContent = 'Base draft that should get a findings-driven follow-up.';
 
   await openVText(page);

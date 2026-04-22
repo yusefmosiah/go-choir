@@ -73,6 +73,13 @@ type vtextEnsureManifestResponse struct {
 	SourcePath string `json:"source_path"`
 }
 
+type vtextShortcutFile struct {
+	Kind       string `json:"kind"`
+	DocID      string `json:"doc_id"`
+	Title      string `json:"title"`
+	SourcePath string `json:"source_path"`
+}
+
 // vtextDocumentResponse is the JSON response for GET /api/vtext/documents/{id}.
 type vtextDocumentResponse struct {
 	DocID             string `json:"doc_id"`
@@ -231,6 +238,19 @@ func shortDocIDSuffix(docID string) string {
 	return base
 }
 
+func isVTextShortcutPath(sourcePath string) bool {
+	return strings.EqualFold(pathpkg.Ext(strings.TrimSpace(sourcePath)), ".vtext")
+}
+
+func marshalVTextShortcutFile(doc types.Document, sourcePath string) ([]byte, error) {
+	return json.MarshalIndent(vtextShortcutFile{
+		Kind:       "vtext",
+		DocID:      doc.DocID,
+		Title:      doc.Title,
+		SourcePath: sourcePath,
+	}, "", "  ")
+}
+
 func writeSSEData(w http.ResponseWriter, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -387,8 +407,8 @@ func (h *APIHandler) HandleVTextOpenFile(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleVTextEnsureManifest ensures a canonical vtext document has a
-// filesystem manifestation so it appears in Files and future writes can
-// write-through to a stable path.
+// filesystem shortcut so it appears in Files while the real document state
+// stays canonical in Dolt.
 func (h *APIHandler) HandleVTextEnsureManifest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
@@ -438,13 +458,9 @@ func (h *APIHandler) ensureVTextManifest(ctx context.Context, ownerID string, do
 		}
 	}
 
-	content := ""
-	if strings.TrimSpace(doc.CurrentRevisionID) != "" {
-		rev, err := h.rt.Store().GetRevision(ctx, doc.CurrentRevisionID, ownerID)
-		if err != nil {
-			return "", err
-		}
-		content = rev.Content
+	content, err := marshalVTextShortcutFile(doc, sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("marshal vtext shortcut: %w", err)
 	}
 
 	filesRoot := sandbox.ResolveFilesRoot("")
@@ -452,7 +468,7 @@ func (h *APIHandler) ensureVTextManifest(ctx context.Context, ownerID string, do
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return "", fmt.Errorf("create manifest directory: %w", err)
 	}
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(absPath, content, 0o644); err != nil {
 		return "", fmt.Errorf("write manifest file: %w", err)
 	}
 	if err := h.rt.Store().UpsertDocumentAlias(ctx, ownerID, sourcePath, doc.DocID, time.Now().UTC()); err != nil {
@@ -465,8 +481,8 @@ func (h *APIHandler) allocateVTextManifestPath(ctx context.Context, ownerID stri
 	stem := slugifyVTextManifestStem(doc.Title)
 	suffix := shortDocIDSuffix(doc.DocID)
 	candidates := []string{
-		fmt.Sprintf("%s.md", stem),
-		fmt.Sprintf("%s-%s.md", stem, suffix),
+		fmt.Sprintf("%s.vtext", stem),
+		fmt.Sprintf("%s-%s.vtext", stem, suffix),
 	}
 	filesRoot := sandbox.ResolveFilesRoot("")
 	for _, candidate := range candidates {
@@ -488,7 +504,7 @@ func (h *APIHandler) allocateVTextManifestPath(ctx context.Context, ownerID stri
 		}
 		return candidate, nil
 	}
-	return fmt.Sprintf("%s-%s.md", stem, uuid.New().String()[:8]), nil
+	return fmt.Sprintf("%s-%s.vtext", stem, uuid.New().String()[:8]), nil
 }
 
 // HandleVTextListDocuments handles GET /api/vtext/documents.

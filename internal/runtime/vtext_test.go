@@ -1265,6 +1265,9 @@ func TestVTextEnsureManifestCreatesAliasAndFile(t *testing.T) {
 	if resp.SourcePath == "" {
 		t.Fatal("response source_path should not be empty")
 	}
+	if filepath.Ext(resp.SourcePath) != ".vtext" {
+		t.Fatalf("response source_path extension = %q, want .vtext", filepath.Ext(resp.SourcePath))
+	}
 
 	aliasedDocID, err := s.GetDocumentAlias(context.Background(), "user-1", resp.SourcePath)
 	if err != nil {
@@ -1278,8 +1281,18 @@ func TestVTextEnsureManifestCreatesAliasAndFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read manifest file: %v", err)
 	}
-	if string(bytes) != "Hello, world!" {
-		t.Fatalf("manifest file content = %q, want %q", string(bytes), "Hello, world!")
+	var shortcut vtextShortcutFile
+	if err := json.Unmarshal(bytes, &shortcut); err != nil {
+		t.Fatalf("unmarshal shortcut file: %v\nraw=%s", err, string(bytes))
+	}
+	if shortcut.Kind != "vtext" {
+		t.Fatalf("shortcut kind = %q, want %q", shortcut.Kind, "vtext")
+	}
+	if shortcut.DocID != docID {
+		t.Fatalf("shortcut doc_id = %q, want %q", shortcut.DocID, docID)
+	}
+	if shortcut.SourcePath != resp.SourcePath {
+		t.Fatalf("shortcut source_path = %q, want %q", shortcut.SourcePath, resp.SourcePath)
 	}
 }
 

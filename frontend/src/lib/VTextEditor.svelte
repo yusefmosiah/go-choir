@@ -75,6 +75,10 @@
     return '/api/files/' + sourcePath.split('/').map(encodeURIComponent).join('/');
   }
 
+  function isVTextShortcutPath(sourcePath) {
+    return typeof sourcePath === 'string' && sourcePath.toLowerCase().endsWith('.vtext');
+  }
+
   function sortRevisionsChronologically(items) {
     return [...items].sort((left, right) => {
       return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
@@ -163,6 +167,7 @@
 
   async function writeThroughToFile(content) {
     if (!appContext.sourcePath) return;
+    if (isVTextShortcutPath(appContext.sourcePath)) return;
     const filePath = buildFilePath(appContext.sourcePath);
     const fileRes = await fetchWithRenewal(filePath, {
       method: 'PUT',

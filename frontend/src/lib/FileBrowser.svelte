@@ -265,6 +265,10 @@
     }
   }
 
+  function isVTextShortcutName(name) {
+    return typeof name === 'string' && name.toLowerCase().endsWith('.vtext');
+  }
+
   function isTextFileName(name) {
     const lower = name.toLowerCase();
     if (lower === 'makefile' || lower === 'dockerfile') return true;
@@ -272,7 +276,7 @@
     const ext = parts.length > 1 ? parts.pop() : '';
     if (!ext) return true;
     return [
-      'txt', 'md', 'markdown', 'rst', 'org',
+      'txt', 'md', 'markdown', 'rst', 'org', 'vtext',
       'json', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
       'csv', 'tsv', 'log',
       'js', 'jsx', 'ts', 'tsx', 'svelte',
@@ -280,6 +284,12 @@
       'css', 'scss', 'html', 'htm', 'xml', 'svg',
       'c', 'h', 'cpp', 'hpp', 'java', 'kt', 'swift', 'rb', 'php', 'pl', 'lua', 'sql',
     ].includes(ext);
+  }
+
+  function fileIconFor(entry) {
+    if (entry.type === 'directory') return '📁';
+    if (isVTextShortcutName(entry.name)) return '📝';
+    return '📄';
   }
 
   function handleNewFolderClick() {
@@ -465,7 +475,7 @@
           {#if deleteTarget && deleteTarget.name === entry.name}
             <!-- Delete confirmation row -->
             <div class="file-item delete-confirm-row" data-file-item data-entry-type={entry.type}>
-              <span class="file-icon" data-file-icon>{entry.type === 'directory' ? '📁' : '📄'}</span>
+              <span class="file-icon" data-file-icon>{fileIconFor(entry)}</span>
               <span class="file-name" data-file-name>{entry.name}</span>
               <span class="delete-prompt">Delete?</span>
               <button
@@ -495,7 +505,7 @@
               data-entry-type={entry.type}
               on:click={() => handleFileClick(entry)}
             >
-              <span class="file-icon" data-file-icon>{entry.type === 'directory' ? '📁' : '📄'}</span>
+              <span class="file-icon" data-file-icon>{fileIconFor(entry)}</span>
               <span class="file-name" data-file-name>{entry.name}</span>
               {#if entry.type === 'file'}
                 <span class="file-size" data-file-size>{formatFileSize(entry.size)}</span>

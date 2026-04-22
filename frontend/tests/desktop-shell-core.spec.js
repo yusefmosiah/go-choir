@@ -256,53 +256,64 @@ test('prompt bar routes normal input through conductor and opens vtext', async (
   await expect(vtextWindow.locator('[data-vtext-editor-area]')).toHaveValue('Draft a project outline');
 });
 
-test('prompt-created vtext gets a file manifestation and revise writes through', async ({ page, authenticator }) => {
+test('prompt-created vtext gets a .vtext shortcut and keeps state canonical in vtext', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);
-
-  const manifestResponsePromise = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === 'POST' && /\/api\/vtext\/documents\/[^/]+\/manifest$/.test(url.pathname);
-  });
 
   const promptInput = page.locator('[data-prompt-input]');
   await promptInput.fill('Ahaha');
   await promptInput.press('Enter');
-
-  const manifestResponse = await manifestResponsePromise;
-  expect(manifestResponse.status()).toBe(200);
-  const manifest = await manifestResponse.json();
-  expect(manifest.source_path).toBeTruthy();
-
-  const filePath = '/api/files/' + manifest.source_path.split('/').map(encodeURIComponent).join('/');
-  const fileName = manifest.source_path.split('/').pop();
 
   const vtextWindow = page.locator('[data-vtext-app]').last();
   await expect(vtextWindow).toBeVisible({ timeout: 5000 });
   const editor = vtextWindow.locator('[data-vtext-editor-area]');
   await expect(editor).toHaveValue('Ahaha');
 
-  const fileWritePromise = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === 'PUT' && url.pathname === filePath;
-  });
+  const fileNameHandle = await page.waitForFunction(async () => {
+    const res = await fetch('/api/files', { credentials: 'include' });
+    if (!res.ok) return null;
+    const entries = await res.json();
+    const entry = Array.isArray(entries) ? entries.find((item) => item?.name?.endsWith('.vtext')) : null;
+    return entry?.name || null;
+  }, null, { timeout: 10000 });
+  const fileName = await fileNameHandle.jsonValue();
+  expect(fileName.endsWith('.vtext')).toBe(true);
+
+  const filePath = '/api/files/' + encodeURIComponent(fileName);
+
+  const shortcutBefore = await page.evaluate(async (path) => {
+    const res = await fetch(path, { credentials: 'include' });
+    return res.text();
+  }, filePath);
+  const parsedBefore = JSON.parse(shortcutBefore);
+  expect(parsedBefore.kind).toBe('vtext');
+  expect(parsedBefore.doc_id).toBeTruthy();
+  const manifestDocId = parsedBefore.doc_id;
 
   const revisedContent = 'Ahaha with a real file alias';
   await editor.fill(revisedContent);
   await vtextWindow.locator('[data-vtext-prompt]').click();
 
-  const fileWriteResponse = await fileWritePromise;
-  expect(fileWriteResponse.ok()).toBeTruthy();
-
-  const persistedContent = await page.evaluate(async (path) => {
+  const shortcutAfter = await page.evaluate(async (path) => {
     const res = await fetch(path, { credentials: 'include' });
     return res.text();
   }, filePath);
-  expect(persistedContent).toBe(revisedContent);
+  const parsedAfter = JSON.parse(shortcutAfter);
+  expect(parsedAfter.kind).toBe('vtext');
+  expect(parsedAfter.doc_id).toBe(manifestDocId);
 
   await openAppViaIcon(page, 'files');
   const fileItem = page.locator('[data-file-item]').filter({ hasText: fileName }).first();
   await expect(fileItem).toBeVisible({ timeout: 5000 });
+
+  const openResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'POST' && url.pathname === '/api/vtext/files/open';
+  });
+  await fileItem.click();
+  const openResponse = await openResponsePromise;
+  const openJSON = await openResponse.json();
+  expect(openJSON.doc_id).toBe(manifestDocId);
 });
 
 test('prompt bar sends greetings through conductor instead of frontend pattern matching', async ({ page, authenticator }) => {
