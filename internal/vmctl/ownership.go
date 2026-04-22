@@ -166,9 +166,9 @@ type WorkerVMHandle struct {
 	State         VMState `json:"state"`
 }
 
-// IsReady returns true if the VM is in a state that can serve requests.
+// IsReady returns true if the VM is in a state that can serve routed requests.
 func (o *VMOwnership) IsReady() bool {
-	return o.State == VMStateActive || o.State == VMStateBooting
+	return o.State == VMStateActive
 }
 
 // VMManager is the interface the OwnershipRegistry uses to manage real
@@ -442,8 +442,10 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 }
 
 // ResolveOrAssignDesktop resolves the VM ownership for the given user/desktop
-// pair. If the desktop already has an active or booting VM, it is returned. If
-// not, a new VM is assigned. Concurrent first requests for the same
+// pair. If the desktop already has an active VM, it is returned. If the VM is
+// still booting, concurrent callers wait for that same boot to finish instead
+// of routing to a placeholder sandbox URL. If no VM exists, a new VM is
+// assigned. Concurrent first requests for the same
 // user/desktop pair collapse onto one assignment.
 func (r *OwnershipRegistry) ResolveOrAssignDesktop(userID, desktopID string) (*VMOwnership, error) {
 	desktopID = normalizeDesktopID(desktopID)
@@ -492,7 +494,10 @@ func (r *OwnershipRegistry) ResolveOrAssignDesktop(userID, desktopID string) (*V
 	}
 
 	// Check if a VM assignment is already in progress for this user/desktop.
-	if waiters, ok := r.pendingWaiters[key]; ok && len(waiters) > 0 {
+	// The zero-waiter case still means a first caller is actively booting the VM,
+	// so later callers must join that in-flight boot rather than minting a second
+	// VM or routing to the placeholder sandbox URL.
+	if waiters, ok := r.pendingWaiters[key]; ok {
 		ch := make(chan *VMOwnership, 1)
 		r.pendingWaiters[key] = append(waiters, ch)
 		r.mu.Unlock()

@@ -384,6 +384,28 @@ func TestIsFirecrackerAvailable(t *testing.T) {
 	_ = IsFirecrackerAvailable()
 }
 
+func TestHostProcessFallbackEnabled(t *testing.T) {
+	t.Setenv("VMCTL_ALLOW_HOST_PROCESS", "")
+	if !HostProcessFallbackEnabled() {
+		t.Fatal("expected host-process fallback to default to enabled")
+	}
+
+	t.Setenv("VMCTL_ALLOW_HOST_PROCESS", "false")
+	if HostProcessFallbackEnabled() {
+		t.Fatal("expected false to disable host-process fallback")
+	}
+
+	t.Setenv("VMCTL_ALLOW_HOST_PROCESS", "0")
+	if HostProcessFallbackEnabled() {
+		t.Fatal("expected 0 to disable host-process fallback")
+	}
+
+	t.Setenv("VMCTL_ALLOW_HOST_PROCESS", "true")
+	if !HostProcessFallbackEnabled() {
+		t.Fatal("expected true to enable host-process fallback")
+	}
+}
+
 func TestManagerPersistentDirCreation(t *testing.T) {
 	// Verify that BootVM creates the persistent directory.
 	tmpDir := t.TempDir()

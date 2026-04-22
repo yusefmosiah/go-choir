@@ -145,6 +145,111 @@ func TestOwnershipRegistry_ConcurrentRequestsCollapseToOneVM(t *testing.T) {
 	}
 }
 
+type blockingBootVMManager struct {
+	mu        sync.Mutex
+	boots     []VMManagerConfig
+	started   chan struct{}
+	release   chan struct{}
+	hostURL   string
+	startOnce sync.Once
+}
+
+func newBlockingBootVMManager(hostURL string) *blockingBootVMManager {
+	return &blockingBootVMManager{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		hostURL: hostURL,
+	}
+}
+
+func (m *blockingBootVMManager) BootVM(cfg VMManagerConfig) (*VMInstanceInfo, error) {
+	m.mu.Lock()
+	m.boots = append(m.boots, cfg)
+	m.mu.Unlock()
+	m.startOnce.Do(func() { close(m.started) })
+	<-m.release
+	return &VMInstanceInfo{HostURL: m.hostURL, Epoch: 1, Healthy: true, State: "running"}, nil
+}
+
+func (m *blockingBootVMManager) StopVM(vmID string) error      { return nil }
+func (m *blockingBootVMManager) HibernateVM(vmID string) error { return nil }
+func (m *blockingBootVMManager) ResumeVM(vmID string) (*VMInstanceInfo, error) {
+	return &VMInstanceInfo{HostURL: m.hostURL, Epoch: 1, Healthy: true, State: "running"}, nil
+}
+func (m *blockingBootVMManager) RecoverVM(vmID string) (*VMInstanceInfo, error) {
+	return &VMInstanceInfo{HostURL: m.hostURL, Epoch: 2, Healthy: true, State: "running"}, nil
+}
+func (m *blockingBootVMManager) GetVM(vmID string) *VMInstanceInfo     { return nil }
+func (m *blockingBootVMManager) CheckHealth(vmID string) (bool, error) { return true, nil }
+
+func TestOwnershipRegistry_BootingRequestsWaitForReadyVM(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+	manager := newBlockingBootVMManager("http://127.0.0.1:9009")
+	reg.SetVMManager(manager)
+
+	firstDone := make(chan struct{})
+	var firstOwn *VMOwnership
+	var firstErr error
+	go func() {
+		firstOwn, firstErr = reg.ResolveOrAssign("user-booting")
+		close(firstDone)
+	}()
+
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("expected first resolve to start VM boot")
+	}
+
+	secondDone := make(chan struct{})
+	var secondOwn *VMOwnership
+	var secondErr error
+	go func() {
+		secondOwn, secondErr = reg.ResolveOrAssign("user-booting")
+		close(secondDone)
+	}()
+
+	select {
+	case <-secondDone:
+		t.Fatal("second resolve returned before the VM finished booting")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(manager.release)
+
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first resolve did not finish after boot release")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second resolve did not finish after boot release")
+	}
+
+	if firstErr != nil {
+		t.Fatalf("first resolve: %v", firstErr)
+	}
+	if secondErr != nil {
+		t.Fatalf("second resolve: %v", secondErr)
+	}
+	if firstOwn.VMID != secondOwn.VMID {
+		t.Fatalf("expected both resolves to share one VM, got %s and %s", firstOwn.VMID, secondOwn.VMID)
+	}
+	if firstOwn.SandboxURL != "http://127.0.0.1:9009" {
+		t.Fatalf("first resolve sandbox URL = %q, want VM URL", firstOwn.SandboxURL)
+	}
+	if secondOwn.SandboxURL != "http://127.0.0.1:9009" {
+		t.Fatalf("second resolve sandbox URL = %q, want VM URL", secondOwn.SandboxURL)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.boots) != 1 {
+		t.Fatalf("expected exactly one VM boot, got %d", len(manager.boots))
+	}
+}
+
 func TestOwnershipRegistry_ActiveCount(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
@@ -305,8 +410,8 @@ func TestOwnershipRegistry_IsReady(t *testing.T) {
 	}
 
 	own.State = VMStateBooting
-	if !own.IsReady() {
-		t.Error("expected booting VM to be ready")
+	if own.IsReady() {
+		t.Error("expected booting VM to wait for readiness")
 	}
 
 	own.State = VMStateStopped

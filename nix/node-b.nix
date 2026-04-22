@@ -118,9 +118,10 @@ in
 
   # ── Systemd services ──────────────────────────────────────────────────
   # 5 host services: auth, proxy, vmctl, gateway, sandbox
-  # The placeholder sandbox on 8085 runs as a host service for dev.
-  # In production, sandbox workloads run inside Firecracker microVMs
-  # managed by vmctl, and the host-process sandbox is a fallback only.
+  # Sandbox workloads for authenticated traffic are expected to run inside
+  # Firecracker microVMs managed by vmctl. Node B disables vmctl's
+  # host-process fallback so deployed routing fails closed instead of silently
+  # landing on the placeholder host sandbox.
   #
   # Guest images are repo-built (VAL-VM-010):
   #   nix build .#guest-image  →  kernel (vmlinux) + rootfs (ext4) + initrd
@@ -247,6 +248,7 @@ in
         # Gateway URL for issuing sandbox credentials to VM guests.
         # vmctl calls this endpoint to get a token before booting each VM.
         "VMCTL_GATEWAY_URL=http://127.0.0.1:8084"
+        "VMCTL_ALLOW_HOST_PROCESS=false"
         # Path to system binaries (ip, iptables, mkfs.ext4) for network/disk setup.
         "PATH=/run/current-system/sw/bin:/bin:/usr/bin"
       ];
@@ -296,10 +298,10 @@ in
   };
 
   # Host-process sandbox — routes LLM calls through the gateway.
-  # NOT exposed through Caddy or the firewall; reachable only via the
-  # proxy on 127.0.0.1:8085. When Firecracker VMs are active, vmctl
-  # routes per-user requests to VM-backed sandboxes and this host
-  # process is only a fallback (VAL-VM-002).
+  # NOT exposed through Caddy or the firewall; reachable only on
+  # 127.0.0.1:8085. Deployed authenticated routing is expected to use
+  # vmctl-resolved Firecracker sandboxes; node-b disables vmctl's
+  # host-process fallback so this service is not the steady-state app path.
   # The proxy's /health endpoint reports upstream reachability, making
   # sandbox health observable through the proxy (VAL-DEPLOY-008).
   #

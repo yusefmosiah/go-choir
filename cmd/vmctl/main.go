@@ -42,8 +42,8 @@ func main() {
 	// If so, create a VM manager for real Firecracker lifecycle management
 	// and wire it to the ownership registry so that VM boot/stop/resume
 	// operations are delegated to real Firecracker VMs (VAL-VM-010).
-	// If not, vmctl runs in host-process mode where all VMs share the
-	// same sandbox URL (for macOS development and non-KVM environments).
+	// If not, vmctl can still run in host-process mode for local development,
+	// but deployed environments should disable that fallback explicitly.
 	if vmmanager.IsFirecrackerAvailable() {
 		mgrCfg := vmmanager.LoadConfigFromEnv()
 		if err := mgrCfg.Validate(); err != nil {
@@ -59,6 +59,9 @@ func main() {
 
 		log.Printf("vmctl: Firecracker VM manager started (kernel=%s rootfs=%s)", mgrCfg.KernelImagePath, mgrCfg.RootfsPath)
 	} else {
+		if !vmmanager.HostProcessFallbackEnabled() {
+			log.Fatal("vmctl: Firecracker not available and host-process fallback is disabled")
+		}
 		log.Printf("vmctl: Firecracker not available, using host-process sandbox mode")
 	}
 

@@ -127,6 +127,22 @@ func IsFirecrackerAvailable() bool {
 	return true
 }
 
+// HostProcessFallbackEnabled reports whether vmctl may run in host-process
+// sandbox mode when Firecracker is unavailable. Development defaults to true,
+// but deployed environments can force VM-only routing by setting
+// VMCTL_ALLOW_HOST_PROCESS=false.
+func HostProcessFallbackEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("VMCTL_ALLOW_HOST_PROCESS")))
+	switch v {
+	case "", "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 func findInPath(name string) (string, error) {
 	path := os.Getenv("PATH")
 	if path == "" {
