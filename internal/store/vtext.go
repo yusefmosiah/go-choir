@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 	loop_id             VARCHAR(255) NOT NULL,
 	owner_id            VARCHAR(255) NOT NULL,
 	state               VARCHAR(64) NOT NULL DEFAULT 'pending',
+	scheduled_message_seq BIGINT NOT NULL DEFAULT 0,
 	revision_id         VARCHAR(255) NOT NULL DEFAULT '',
 	created_at          DATETIME NOT NULL,
 	completed_at        DATETIME,
@@ -89,6 +90,16 @@ CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_doc ON vtext_agent_mutations(doc_id);
 CREATE INDEX IF NOT EXISTS idx_vtext_mutations_run ON vtext_agent_mutations(loop_id);
+
+CREATE TABLE IF NOT EXISTS vtext_controller_checkpoints (
+	doc_id                 VARCHAR(255) NOT NULL,
+	owner_id               VARCHAR(255) NOT NULL,
+	integrated_message_seq BIGINT NOT NULL DEFAULT 0,
+	updated_at             DATETIME NOT NULL,
+	PRIMARY KEY (doc_id, owner_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vtext_controller_owner ON vtext_controller_checkpoints(owner_id);
 
 CREATE TABLE IF NOT EXISTS agent_evidence (
 	evidence_id    VARCHAR(255) PRIMARY KEY,
@@ -214,6 +225,31 @@ func (s *Store) bootstrapVText() error {
 	if err != nil {
 		return fmt.Errorf("apply vtext schema: %w", err)
 	}
+	if err := s.ensureVTextColumn("vtext_agent_mutations", "scheduled_message_seq", "BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureVTextColumn(table, name, ddl string) error {
+	var count int
+	if err := s.vtextHandle().QueryRow(`
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = ?
+  AND column_name = ?`,
+		table,
+		name,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("information_schema.columns(%s.%s): %w", table, name, err)
+	}
+	if count > 0 {
+		return nil
+	}
+	if _, err := s.vtextHandle().Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, ddl)); err != nil {
+		return fmt.Errorf("alter %s add %s: %w", table, name, err)
+	}
 	return nil
 }
 
@@ -284,6 +320,37 @@ func (s *Store) ListDocumentsByOwner(ctx context.Context, ownerID string, limit 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate vtext documents: %w", err)
+	}
+	return docs, nil
+}
+
+// ListAllDocuments returns documents across owners ordered by updated_at
+// descending. This is used for controller reconciliation on restart.
+func (s *Store) ListAllDocuments(ctx context.Context, limit int) ([]types.Document, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.vtextHandle().QueryContext(ctx,
+		`SELECT doc_id, owner_id, title, current_revision_id, created_at, updated_at
+		   FROM vtext_documents
+		  ORDER BY updated_at DESC
+		  LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query all vtext documents: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var docs []types.Document
+	for rows.Next() {
+		doc, err := scanDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all vtext documents: %w", err)
 	}
 	return docs, nil
 }
@@ -1102,13 +1169,21 @@ func scanRevision(row interface{ Scan(...any) error }) (types.Revision, error) {
 // enabling idempotent handling so that renewal/retry does not create a
 // duplicate canonical revision.
 type AgentMutation struct {
-	DocID       string     `json:"doc_id"`
-	RunID       string     `json:"loop_id"`
-	OwnerID     string     `json:"owner_id"`
-	State       string     `json:"state"` // "pending", "completed", "failed"
-	RevisionID  string     `json:"revision_id,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	DocID               string     `json:"doc_id"`
+	RunID               string     `json:"loop_id"`
+	OwnerID             string     `json:"owner_id"`
+	State               string     `json:"state"` // "pending", "completed", "failed"
+	ScheduledMessageSeq int64      `json:"scheduled_message_seq,omitempty"`
+	RevisionID          string     `json:"revision_id,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+}
+
+type VTextControllerCheckpoint struct {
+	DocID                string
+	OwnerID              string
+	IntegratedMessageSeq int64
+	UpdatedAt            time.Time
 }
 
 // CreateAgentMutation records a new in-flight appagent mutation. It uses
@@ -1120,12 +1195,13 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 		completedAt = m.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.vtextHandle().ExecContext(ctx,
-		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT IGNORE INTO vtext_agent_mutations (doc_id, loop_id, owner_id, state, scheduled_message_seq, revision_id, created_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.DocID,
 		m.RunID,
 		m.OwnerID,
 		m.State,
+		m.ScheduledMessageSeq,
 		m.RevisionID,
 		m.CreatedAt.UTC().Format(time.RFC3339Nano),
 		completedAt,
@@ -1142,7 +1218,7 @@ func (s *Store) CreateAgentMutation(ctx context.Context, m AgentMutation) error 
 // (VAL-CROSS-122).
 func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, loop_id, owner_id, state, scheduled_message_seq, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
 		  WHERE doc_id = ? AND owner_id = ? AND state = 'pending'
 		  ORDER BY created_at DESC
@@ -1157,7 +1233,7 @@ func (s *Store) GetPendingAgentMutationByDoc(ctx context.Context, docID, ownerID
 // been created (VAL-CROSS-122: no duplicate canonical revision).
 func (s *Store) GetAgentMutationByRun(ctx context.Context, runID string) (*AgentMutation, error) {
 	row := s.vtextHandle().QueryRowContext(ctx,
-		`SELECT doc_id, loop_id, owner_id, state, revision_id, created_at, completed_at
+		`SELECT doc_id, loop_id, owner_id, state, scheduled_message_seq, revision_id, created_at, completed_at
 		   FROM vtext_agent_mutations
 		  WHERE loop_id = ?`,
 		runID,
@@ -1192,6 +1268,50 @@ func (s *Store) CompleteAgentMutation(ctx context.Context, runID, revisionID str
 	}
 	if rows == 0 {
 		return ErrMutationAlreadyCompleted
+	}
+	return nil
+}
+
+func (s *Store) GetVTextControllerCheckpoint(ctx context.Context, docID, ownerID string) (*VTextControllerCheckpoint, error) {
+	row := s.vtextHandle().QueryRowContext(ctx,
+		`SELECT doc_id, owner_id, integrated_message_seq, updated_at
+		   FROM vtext_controller_checkpoints
+		  WHERE doc_id = ? AND owner_id = ?`,
+		docID, ownerID,
+	)
+	var checkpoint VTextControllerCheckpoint
+	var updatedAt string
+	if err := row.Scan(&checkpoint.DocID, &checkpoint.OwnerID, &checkpoint.IntegratedMessageSeq, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query vtext controller checkpoint: %w", err)
+	}
+	ts, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse vtext controller checkpoint updated_at: %w", err)
+	}
+	checkpoint.UpdatedAt = ts
+	return &checkpoint, nil
+}
+
+func (s *Store) UpsertVTextControllerCheckpoint(ctx context.Context, checkpoint VTextControllerCheckpoint) error {
+	if checkpoint.UpdatedAt.IsZero() {
+		checkpoint.UpdatedAt = time.Now().UTC()
+	}
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT INTO vtext_controller_checkpoints (doc_id, owner_id, integrated_message_seq, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE
+		   integrated_message_seq = VALUES(integrated_message_seq),
+		   updated_at = VALUES(updated_at)`,
+		checkpoint.DocID,
+		checkpoint.OwnerID,
+		checkpoint.IntegratedMessageSeq,
+		checkpoint.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert vtext controller checkpoint: %w", err)
 	}
 	return nil
 }
@@ -1310,6 +1430,7 @@ func scanAgentMutation(row interface{ Scan(...any) error }) (*AgentMutation, err
 		&m.RunID,
 		&m.OwnerID,
 		&m.State,
+		&m.ScheduledMessageSeq,
 		&m.RevisionID,
 		&createdAt,
 		&completedAt,

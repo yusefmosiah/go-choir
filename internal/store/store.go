@@ -87,7 +87,9 @@ CREATE TABLE IF NOT EXISTS events (
 	agent_id   TEXT NOT NULL DEFAULT '',
 	channel_id TEXT NOT NULL DEFAULT '',
 	owner_id   TEXT NOT NULL DEFAULT '',
+	trajectory_id TEXT NOT NULL DEFAULT '',
 	seq        INTEGER NOT NULL,
+	stream_seq INTEGER NOT NULL DEFAULT 0,
 	ts         DATETIME NOT NULL,
 	kind       TEXT NOT NULL,
 	phase      TEXT NOT NULL DEFAULT '',
@@ -263,6 +265,8 @@ func (s *Store) bootstrap() error {
 		{"runs", "agent_role", "TEXT NOT NULL DEFAULT ''"},
 		{"events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"events", "channel_id", "TEXT NOT NULL DEFAULT ''"},
+		{"events", "trajectory_id", "TEXT NOT NULL DEFAULT ''"},
+		{"events", "stream_seq", "INTEGER NOT NULL DEFAULT 0"},
 		{"channel_messages", "to_agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"channel_messages", "to_loop_id", "TEXT NOT NULL DEFAULT ''"},
 		{"channel_messages", "trajectory_id", "TEXT NOT NULL DEFAULT ''"},
@@ -270,6 +274,15 @@ func (s *Store) bootstrap() error {
 		if err := s.ensureColumn(migration.table, migration.name, migration.ddl); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.Exec(`UPDATE events SET stream_seq = rowid WHERE stream_seq = 0`); err != nil {
+		return fmt.Errorf("backfill events.stream_seq: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_owner_stream_seq ON events(owner_id, stream_seq)`); err != nil {
+		return fmt.Errorf("create idx_events_owner_stream_seq: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_trajectory_stream_seq ON events(trajectory_id, stream_seq)`); err != nil {
+		return fmt.Errorf("create idx_events_trajectory_stream_seq: %w", err)
 	}
 	if _, err := s.db.Exec(`
 		INSERT INTO desktop_workspaces (owner_id, desktop_id, windows_json, active_window, updated_at)
@@ -599,16 +612,24 @@ func (s *Store) AppendEvent(ctx context.Context, rec *types.EventRecord) error {
 	if err := row.Scan(&rec.Seq); err != nil {
 		return fmt.Errorf("query next event sequence: %w", err)
 	}
+	row = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(stream_seq), 0) + 1 FROM events`,
+	)
+	if err := row.Scan(&rec.StreamSeq); err != nil {
+		return fmt.Errorf("query next event stream sequence: %w", err)
+	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO events (event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.EventID,
 		rec.RunID,
 		rec.AgentID,
 		rec.ChannelID,
 		rec.OwnerID,
+		rec.TrajectoryID,
 		rec.Seq,
+		rec.StreamSeq,
 		rec.Timestamp.UTC().Format(time.RFC3339Nano),
 		rec.Kind,
 		rec.Phase,
@@ -638,7 +659,7 @@ func (s *Store) ListEventsAfter(ctx context.Context, runID string, afterSeq int6
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE loop_id = ?
 		    AND seq > ?
@@ -675,7 +696,7 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		  ORDER BY ts DESC
@@ -702,8 +723,8 @@ func (s *Store) ListEventsByOwner(ctx context.Context, ownerID string, limit int
 	return events, nil
 }
 
-// ListEventsByOwnerAfter returns events for the given owner with sequence >
-// afterSeq across all runs, ordered by timestamp ascending, limited to the
+// ListEventsByOwnerAfter returns events for the given owner with stream_seq >
+// afterSeq across all runs, ordered by stream_seq ascending, limited to the
 // given count. This supports SSE catch-up after reconnection where the client
 // needs events newer than a previously seen sequence number.
 func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
@@ -712,11 +733,11 @@ func (s *Store) ListEventsByOwnerAfter(ctx context.Context, ownerID string, afte
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
-		    AND seq > ?
-		  ORDER BY ts ASC
+		    AND stream_seq > ?
+		  ORDER BY stream_seq ASC
 		  LIMIT ?`,
 		ownerID,
 		afterSeq,
@@ -747,7 +768,7 @@ func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID stri
 		limit = 200
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, seq, ts, kind, phase, payload_json
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
 		   FROM events
 		  WHERE owner_id = ?
 		    AND channel_id = ?
@@ -1182,7 +1203,9 @@ func scanEvent(row interface{ Scan(...any) error }) (types.EventRecord, error) {
 		&rec.AgentID,
 		&rec.ChannelID,
 		&rec.OwnerID,
+		&rec.TrajectoryID,
 		&rec.Seq,
+		&rec.StreamSeq,
 		&ts,
 		&rec.Kind,
 		&rec.Phase,

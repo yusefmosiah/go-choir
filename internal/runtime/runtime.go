@@ -194,6 +194,7 @@ func WithChannelManager(mgr *ChannelManager) RuntimeOption {
 // previous sandbox process exit.
 func (rt *Runtime) Start(ctx context.Context) {
 	rt.recoverInterruptedRuns(ctx)
+	rt.reconcileAllVTextDocuments(ctx)
 	log.Printf("runtime: started (sandbox=%s)", rt.cfg.SandboxID)
 }
 
@@ -488,20 +489,20 @@ func (rt *Runtime) SetHealth(state types.RuntimeHealthState) {
 		"current":  string(state),
 	})
 
+	evRec := &types.EventRecord{
+		EventID:   uuid.New().String(),
+		Timestamp: time.Now().UTC(),
+		Kind:      kind,
+		Payload:   payload,
+	}
+	if err := rt.store.AppendEvent(ctx, evRec); err != nil {
+		log.Printf("runtime: persist health event %s: %v", evRec.EventID, err)
+	}
 	rt.bus.Publish(events.RuntimeEvent{
-		Record: types.EventRecord{
-			EventID:   uuid.New().String(),
-			Timestamp: time.Now().UTC(),
-			Kind:      kind,
-			Payload:   payload,
-		},
-		Actor: events.ActorSupervisor,
-		Cause: cause,
+		Record: *evRec,
+		Actor:  events.ActorSupervisor,
+		Cause:  cause,
 	})
-
-	// Also persist the health event for post-restart recovery visibility.
-	var rec types.RunRecord // runtime-level events have no specific task
-	_ = rt.persistEvent(ctx, &rec, kind, payload)
 }
 
 // EventBus returns the runtime event bus for SSE subscription.
@@ -553,6 +554,11 @@ func (rt *Runtime) recoverInterruptedRuns(ctx context.Context) {
 			if err := rt.store.UpdateRun(ctx, *rec); err != nil {
 				log.Printf("runtime: recovery: update run %s: %v", rec.RunID, err)
 				continue
+			}
+			if metadataString(rec.Metadata, "type") == "vtext_agent_revision" {
+				if err := rt.store.FailAgentMutation(ctx, rec.RunID); err != nil {
+					log.Printf("runtime: recovery: fail mutation %s: %v", rec.RunID, err)
+				}
 			}
 			rt.emitEvent(ctx, rec, types.EventRunFailed, events.CauseSupervisorRecovery,
 				json.RawMessage(`{"recovery":"interrupted_on_restart"}`))
@@ -690,6 +696,7 @@ func (rt *Runtime) executeWithToolLoop(ctx context.Context, rec *types.RunRecord
 		log.Printf("runtime: update run %s to completed: %v", rec.RunID, err)
 		return
 	}
+	rt.reconcileCompletedVTextRun(rec)
 	resultLenPayload, _ := json.Marshal(map[string]any{
 		"result_length": len(text),
 		"input_tokens":  usage.InputTokens,
@@ -800,6 +807,7 @@ func (rt *Runtime) executeWithProvider(ctx context.Context, rec *types.RunRecord
 		log.Printf("runtime: update run %s to completed: %v", rec.RunID, err)
 		return
 	}
+	rt.reconcileCompletedVTextRun(rec)
 	resultLenPayload, _ := json.Marshal(map[string]int{"result_length": len(result)})
 	rt.emitEvent(persistCtx, rec, types.EventRunCompleted, events.CauseTaskLifecycle, resultLenPayload)
 
@@ -1003,7 +1011,7 @@ func (rt *Runtime) ensureConductorVTextRoute(ctx context.Context, rec *types.Run
 	initialRun, err := rt.submitVTextAgentRevisionRun(ctx, doc, rec.OwnerID, vtextAgentRevisionRequest{
 		Intent: "create",
 		Prompt: strings.TrimSpace(objective),
-	}, rec.RunID)
+	}, rec.RunID, 0)
 	if err != nil {
 		return conductorDecision{}, fmt.Errorf("submit initial vtext revision: %w", err)
 	}
@@ -1173,6 +1181,16 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 			log.Printf("runtime: vtext agent revision run %s: complete mutation: %v", rec.RunID, err)
 		}
 	}
+	if mutation.ScheduledMessageSeq > 0 {
+		if err := rt.store.UpsertVTextControllerCheckpoint(persistCtx, store.VTextControllerCheckpoint{
+			DocID:                docID,
+			OwnerID:              ownerID,
+			IntegratedMessageSeq: mutation.ScheduledMessageSeq,
+			UpdatedAt:            time.Now().UTC(),
+		}); err != nil {
+			log.Printf("runtime: vtext agent revision run %s: update controller checkpoint: %v", rec.RunID, err)
+		}
+	}
 
 	// Emit the vtext-specific agent revision completed event with doc_id
 	// and revision_id so the frontend can correlate to the open document
@@ -1187,6 +1205,23 @@ func (rt *Runtime) handleRunCompletion(ctx context.Context, rec *types.RunRecord
 
 	log.Printf("runtime: vtext agent revision run %s: created canonical revision %s for doc %s", rec.RunID, rev.RevisionID, docID)
 	return nil
+}
+
+func (rt *Runtime) reconcileCompletedVTextRun(rec *types.RunRecord) {
+	if rec == nil {
+		return
+	}
+	taskType, _ := rec.Metadata["type"].(string)
+	if taskType != "vtext_agent_revision" {
+		return
+	}
+	docID, _ := rec.Metadata["doc_id"].(string)
+	if strings.TrimSpace(docID) == "" || strings.TrimSpace(rec.OwnerID) == "" {
+		return
+	}
+	if err := rt.reconcileVTextWorkerState(context.Background(), rec.OwnerID, docID); err != nil {
+		log.Printf("runtime: vtext agent revision run %s: post-complete reconcile: %v", rec.RunID, err)
+	}
 }
 
 func (rt *Runtime) channelHasGroundedHistory(ctx context.Context, ownerID, channelID string, before time.Time) (bool, error) {
@@ -1432,18 +1467,29 @@ func ensureTrajectoryID(metadata map[string]any, parent *types.RunRecord, selfRu
 	return metadata
 }
 
+func trajectoryIDForRun(rec *types.RunRecord) string {
+	if rec == nil || rec.Metadata == nil {
+		return ""
+	}
+	if inherited, _ := rec.Metadata[runMetadataTrajectoryID].(string); strings.TrimSpace(inherited) != "" {
+		return strings.TrimSpace(inherited)
+	}
+	return ""
+}
+
 // emitEvent creates and persists an event record, then publishes it on the
 // event bus for live streaming.
 func (rt *Runtime) emitEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
 	evRec := &types.EventRecord{
-		EventID:   uuid.New().String(),
-		RunID:     rec.RunID,
-		AgentID:   rec.AgentID,
-		ChannelID: rec.ChannelID,
-		OwnerID:   rec.OwnerID,
-		Timestamp: time.Now().UTC(),
-		Kind:      kind,
-		Payload:   payload,
+		EventID:      uuid.New().String(),
+		RunID:        rec.RunID,
+		AgentID:      rec.AgentID,
+		ChannelID:    rec.ChannelID,
+		OwnerID:      rec.OwnerID,
+		TrajectoryID: trajectoryIDForRun(rec),
+		Timestamp:    time.Now().UTC(),
+		Kind:         kind,
+		Payload:      payload,
 	}
 
 	if err := rt.store.AppendEvent(ctx, evRec); err != nil {
@@ -1461,14 +1507,15 @@ func (rt *Runtime) emitEvent(ctx context.Context, rec *types.RunRecord, kind typ
 // Used for recovery events that may have occurred before subscribers connect.
 func (rt *Runtime) persistEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, payload json.RawMessage) error {
 	evRec := &types.EventRecord{
-		EventID:   uuid.New().String(),
-		RunID:     rec.RunID,
-		AgentID:   rec.AgentID,
-		ChannelID: rec.ChannelID,
-		OwnerID:   rec.OwnerID,
-		Timestamp: time.Now().UTC(),
-		Kind:      kind,
-		Payload:   payload,
+		EventID:      uuid.New().String(),
+		RunID:        rec.RunID,
+		AgentID:      rec.AgentID,
+		ChannelID:    rec.ChannelID,
+		OwnerID:      rec.OwnerID,
+		TrajectoryID: trajectoryIDForRun(rec),
+		Timestamp:    time.Now().UTC(),
+		Kind:         kind,
+		Payload:      payload,
 	}
 	return rt.store.AppendEvent(ctx, evRec)
 }

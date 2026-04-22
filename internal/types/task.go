@@ -217,6 +217,10 @@ type EventRecord struct {
 	// cursors.
 	Seq int64 `json:"seq"`
 
+	// StreamSeq is the owner/global monotonic sequence used for cross-loop
+	// catch-up and streaming.
+	StreamSeq int64 `json:"stream_seq,omitempty"`
+
 	// Timestamp is when the event occurred.
 	Timestamp time.Time `json:"ts"`
 
@@ -233,6 +237,9 @@ type EventRecord struct {
 	// OwnerID is the authenticated user who owns the run, used for
 	// caller-scoped event streaming (VAL-RUNTIME-006).
 	OwnerID string `json:"owner_id,omitempty"`
+
+	// TrajectoryID ties the event to the broader user-visible workflow.
+	TrajectoryID string `json:"trajectory_id,omitempty"`
 
 	// Kind is the event kind from the vocabulary above.
 	Kind EventKind `json:"kind"`

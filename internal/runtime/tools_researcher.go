@@ -366,14 +366,15 @@ func (rt *Runtime) emitChannelMessageEvent(ctx context.Context, message types.Ch
 		return
 	}
 	evRec := &types.EventRecord{
-		EventID:   uuid.New().String(),
-		RunID:     message.FromRunID,
-		AgentID:   message.FromAgentID,
-		ChannelID: message.ChannelID,
-		OwnerID:   ownerID,
-		Timestamp: time.Now().UTC(),
-		Kind:      types.EventChannelMessage,
-		Payload:   payload,
+		EventID:      uuid.New().String(),
+		RunID:        message.FromRunID,
+		AgentID:      message.FromAgentID,
+		ChannelID:    message.ChannelID,
+		OwnerID:      ownerID,
+		TrajectoryID: message.TrajectoryID,
+		Timestamp:    time.Now().UTC(),
+		Kind:         types.EventChannelMessage,
+		Payload:      payload,
 	}
 	if err := rt.store.AppendEvent(ctx, evRec); err != nil {
 		log.Printf("runtime: persist channel event: %v", err)

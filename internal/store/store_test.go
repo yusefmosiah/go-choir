@@ -70,7 +70,7 @@ func TestCreateAndGetRun(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	rec := types.RunRecord{
-		RunID:    "task-001",
+		RunID:     "task-001",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
 		State:     types.RunPending,
@@ -130,7 +130,7 @@ func TestUpdateRun(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	rec := types.RunRecord{
-		RunID:    "task-002",
+		RunID:     "task-002",
 		OwnerID:   "user-bob",
 		SandboxID: "sandbox-dev",
 		State:     types.RunPending,
@@ -189,7 +189,7 @@ func TestUpdateRunNotFound(t *testing.T) {
 
 	rec := types.RunRecord{
 		RunID: "nonexistent",
-		State:  types.RunRunning,
+		State: types.RunRunning,
 	}
 
 	err := s.UpdateRun(ctx, rec)
@@ -208,7 +208,7 @@ func TestListRunsByOwner(t *testing.T) {
 	for i, owner := range []string{"alice", "bob", "alice"} {
 		taskID := fmtRunID(i)
 		rec := types.RunRecord{
-			RunID:    taskID,
+			RunID:     taskID,
 			OwnerID:   owner,
 			SandboxID: "sandbox-dev",
 			State:     types.RunPending,
@@ -253,7 +253,7 @@ func TestListRunsByState(t *testing.T) {
 	for i, state := range states {
 		taskID := fmtRunID(i)
 		rec := types.RunRecord{
-			RunID:    taskID,
+			RunID:     taskID,
 			OwnerID:   "user-test",
 			SandboxID: "sandbox-dev",
 			State:     state,
@@ -297,7 +297,7 @@ func TestListRuns(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		taskID := fmtRunID(i)
 		rec := types.RunRecord{
-			RunID:    taskID,
+			RunID:     taskID,
 			OwnerID:   "user-test",
 			SandboxID: "sandbox-dev",
 			State:     types.RunPending,
@@ -330,7 +330,7 @@ func TestTaskStateTransitionFromPendingToRunning(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	rec := types.RunRecord{
-		RunID:    "task-transition",
+		RunID:     "task-transition",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
 		State:     types.RunPending,
@@ -375,7 +375,7 @@ func TestTaskStateTransitionFromPendingToRunning(t *testing.T) {
 
 	// Runtime should remain available for new runs after failure.
 	nextTask := types.RunRecord{
-		RunID:    "task-after-failure",
+		RunID:     "task-after-failure",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
 		State:     types.RunPending,
@@ -406,7 +406,7 @@ func TestAppendAndListEvents(t *testing.T) {
 	for i, kind := range kinds {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-001",
+			RunID:     "task-001",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      kind,
@@ -448,7 +448,7 @@ func TestListEventsAfter(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-002",
+			RunID:     "task-002",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      types.EventRunProgress,
@@ -486,7 +486,7 @@ func TestListEventsByOwner(t *testing.T) {
 	for i, owner := range []string{"alice", "bob", "alice"} {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-" + owner,
+			RunID:     "task-" + owner,
 			OwnerID:   owner,
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      types.EventRunSubmitted,
@@ -525,7 +525,7 @@ func TestTaskRecoveryAcrossReopen(t *testing.T) {
 	}
 
 	rec := types.RunRecord{
-		RunID:    "task-recovery",
+		RunID:     "task-recovery",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
 		State:     types.RunRunning,
@@ -581,7 +581,7 @@ func TestEventRecoveryAcrossReopen(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-event-recovery",
+			RunID:     "task-event-recovery",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      types.EventRunProgress,
@@ -626,7 +626,7 @@ func TestAppendEventDefaultPayload(t *testing.T) {
 
 	rec := &types.EventRecord{
 		EventID:   "evt-default-payload",
-		RunID:    "task-001",
+		RunID:     "task-001",
 		Timestamp: time.Now().UTC(),
 		Kind:      types.EventRunSubmitted,
 		Payload:   nil, // should default to {}
@@ -655,7 +655,7 @@ func TestTaskWithFailedStatePersistsError(t *testing.T) {
 	finishedAt := now.Add(5 * time.Second)
 
 	rec := types.RunRecord{
-		RunID:     "task-failed",
+		RunID:      "task-failed",
 		OwnerID:    "user-alice",
 		SandboxID:  "sandbox-dev",
 		State:      types.RunFailed,
@@ -691,7 +691,7 @@ func TestTaskWithBlockedState(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	rec := types.RunRecord{
-		RunID:    "task-blocked",
+		RunID:     "task-blocked",
 		OwnerID:   "user-alice",
 		SandboxID: "sandbox-dev",
 		State:     types.RunBlocked,
@@ -742,7 +742,7 @@ func TestListEventsByOwnerAfter(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-001",
+			RunID:     "task-001",
 			OwnerID:   "user-alice",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      types.EventRunProgress,
@@ -775,6 +775,71 @@ func TestListEventsByOwnerAfter(t *testing.T) {
 	}
 }
 
+func TestAppendEventAssignsOwnerWideStreamSeqAcrossRuns(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	eventsToAppend := []*types.EventRecord{
+		{
+			EventID:      "evt-stream-1",
+			RunID:        "run-a",
+			OwnerID:      "user-alice",
+			TrajectoryID: "traj-1",
+			Timestamp:    now,
+			Kind:         types.EventRunSubmitted,
+			Payload:      json.RawMessage(`{"step":"a1"}`),
+		},
+		{
+			EventID:      "evt-stream-2",
+			RunID:        "run-b",
+			OwnerID:      "user-alice",
+			TrajectoryID: "traj-2",
+			Timestamp:    now.Add(1 * time.Second),
+			Kind:         types.EventRunProgress,
+			Payload:      json.RawMessage(`{"step":"b1"}`),
+		},
+		{
+			EventID:      "evt-stream-3",
+			RunID:        "run-a",
+			OwnerID:      "user-alice",
+			TrajectoryID: "traj-1",
+			Timestamp:    now.Add(2 * time.Second),
+			Kind:         types.EventRunCompleted,
+			Payload:      json.RawMessage(`{"step":"a2"}`),
+		},
+	}
+	for _, rec := range eventsToAppend {
+		if err := s.AppendEvent(ctx, rec); err != nil {
+			t.Fatalf("append %s: %v", rec.EventID, err)
+		}
+	}
+
+	if eventsToAppend[0].Seq != 1 || eventsToAppend[0].StreamSeq != 1 {
+		t.Fatalf("first event seqs = (%d,%d), want (1,1)", eventsToAppend[0].Seq, eventsToAppend[0].StreamSeq)
+	}
+	if eventsToAppend[1].Seq != 1 || eventsToAppend[1].StreamSeq != 2 {
+		t.Fatalf("second event seqs = (%d,%d), want (1,2)", eventsToAppend[1].Seq, eventsToAppend[1].StreamSeq)
+	}
+	if eventsToAppend[2].Seq != 2 || eventsToAppend[2].StreamSeq != 3 {
+		t.Fatalf("third event seqs = (%d,%d), want (2,3)", eventsToAppend[2].Seq, eventsToAppend[2].StreamSeq)
+	}
+
+	got, err := s.ListEventsByOwnerAfter(ctx, "user-alice", 1, 10)
+	if err != nil {
+		t.Fatalf("list events by owner after stream seq: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("events after stream seq 1: got %d, want 2", len(got))
+	}
+	if got[0].EventID != "evt-stream-2" || got[0].TrajectoryID != "traj-2" || got[0].StreamSeq != 2 {
+		t.Fatalf("first catch-up event = %+v, want evt-stream-2 traj-2 stream_seq=2", got[0])
+	}
+	if got[1].EventID != "evt-stream-3" || got[1].TrajectoryID != "traj-1" || got[1].StreamSeq != 3 {
+		t.Fatalf("second catch-up event = %+v, want evt-stream-3 traj-1 stream_seq=3", got[1])
+	}
+}
+
 func TestListEventsByOwnerAfterFiltersByOwner(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -785,7 +850,7 @@ func TestListEventsByOwnerAfterFiltersByOwner(t *testing.T) {
 	for i, owner := range []string{"alice", "bob", "alice"} {
 		rec := &types.EventRecord{
 			EventID:   fmtEventID(i),
-			RunID:    "task-" + owner,
+			RunID:     "task-" + owner,
 			OwnerID:   owner,
 			Timestamp: now.Add(time.Duration(i) * time.Second),
 			Kind:      types.EventRunSubmitted,

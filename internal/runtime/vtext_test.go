@@ -1128,6 +1128,314 @@ func TestSubmitResearchFindingsWakeUsesSameDebouncedPath(t *testing.T) {
 	}
 }
 
+func TestVTextWorkerMessageDuringActiveRevisionTriggersLaterFollowUp(t *testing.T) {
+	provider := NewStubProvider(300 * time.Millisecond)
+	provider.Result = "Integrated content after the run completed."
+
+	h, s, rt := vtextAPISetupWithProvider(t, provider, false)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
+		map[string]string{"prompt": "Produce the next draft now"})
+	w := httptest.NewRecorder()
+	h.HandleVTextAgentRevision(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("agent revision: status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+	var initialResp vtextAgentRevisionResponse
+	if err := json.NewDecoder(w.Body).Decode(&initialResp); err != nil {
+		t.Fatalf("decode initial agent revision response: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	initialRunStarted := false
+	for time.Now().Before(deadline) {
+		rec, err := rt.GetRun(context.Background(), initialResp.RunID, "user-1")
+		if err != nil {
+			t.Fatalf("get initial vtext run: %v", err)
+		}
+		if rec.State == types.RunRunning {
+			initialRunStarted = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !initialRunStarted {
+		t.Fatalf("initial vtext run never reached running state before posting the late worker message")
+	}
+
+	researchRun, err := rt.StartRunWithMetadata(context.Background(), "Send one late finding", "user-1", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    docID,
+	})
+	if err != nil {
+		t.Fatalf("start research run: %v", err)
+	}
+	if _, err := rt.ChannelCast(WithToolExecutionContext(context.Background(), researchRun), docID, "vtext:"+docID, "", "researcher-1", "researcher", "Late finding: a sourced correction arrived while the vtext run was already active."); err != nil {
+		t.Fatalf("post late worker message: %v", err)
+	}
+
+	revs := waitForRevisionCount(t, s, docID, "user-1", 3, 8*time.Second)
+	var appAgentContents []string
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent {
+			appAgentContents = append(appAgentContents, rev.Content)
+		}
+	}
+	if len(appAgentContents) != 2 {
+		t.Fatalf("expected two appagent revisions, got %d: %+v", len(appAgentContents), revs)
+	}
+	for _, content := range appAgentContents {
+		if !strings.Contains(content, "Integrated content after the run completed.") {
+			t.Fatalf("unexpected appagent revision content: %+v", appAgentContents)
+		}
+	}
+
+	var wakeRun *types.RunRecord
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := rt.Store().ListRunsByChannel(context.Background(), "user-1", docID, 20)
+		if err != nil {
+			t.Fatalf("list channel runs: %v", err)
+		}
+		for i := range runs {
+			if agentProfileForRun(&runs[i]) == AgentProfileVText && runs[i].ParentRunID == researchRun.RunID && runs[i].RunID != initialResp.RunID {
+				wakeRun = &runs[i]
+				break
+			}
+		}
+		if wakeRun != nil && wakeRun.State.Terminal() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if wakeRun == nil {
+		t.Fatalf("expected a follow-up vtext wake run after the active run completed")
+	}
+	if !strings.Contains(wakeRun.Prompt, "Late finding: a sourced correction arrived while the vtext run was already active.") {
+		t.Fatalf("wake run prompt missing late worker message: %q", wakeRun.Prompt)
+	}
+
+	checkpoint, err := s.GetVTextControllerCheckpoint(context.Background(), docID, "user-1")
+	if err != nil {
+		t.Fatalf("get controller checkpoint: %v", err)
+	}
+	if checkpoint == nil || checkpoint.IntegratedMessageSeq == 0 {
+		t.Fatalf("expected controller checkpoint to advance after follow-up, got %+v", checkpoint)
+	}
+
+	pending, err := s.GetPendingAgentMutationByDoc(context.Background(), docID, "user-1")
+	if err != nil {
+		t.Fatalf("get pending mutation: %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("expected no pending mutation after both revisions completed, got %+v", pending)
+	}
+}
+
+func TestRestartRecoveryClearsInterruptedVTextMutationAndRelaunches(t *testing.T) {
+	dir := filepath.Join(os.TempDir(), "go-choir-m3-vtext-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(dir, t.Name()+".db")
+	promptRoot := filepath.Join(dir, t.Name()+"-prompts")
+	_ = os.Remove(dbPath)
+	_ = os.RemoveAll(promptRoot)
+
+	ctx := context.Background()
+	s1, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store 1: %v", err)
+	}
+
+	now := time.Now().UTC()
+	doc := types.Document{
+		DocID:     "doc-restart-reconcile",
+		OwnerID:   "user-1",
+		Title:     "Restart reconcile",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s1.CreateDocument(ctx, doc); err != nil {
+		t.Fatalf("create document: %v", err)
+	}
+	userRev := types.Revision{
+		RevisionID:  "rev-user-restart",
+		DocID:       doc.DocID,
+		OwnerID:     doc.OwnerID,
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "alice",
+		Content:     "Base draft before the restart.",
+		CreatedAt:   now.Add(1 * time.Second),
+	}
+	if err := s1.CreateRevision(ctx, userRev); err != nil {
+		t.Fatalf("create user revision: %v", err)
+	}
+
+	researchRun := types.RunRecord{
+		RunID:     "research-run-restart",
+		OwnerID:   "user-1",
+		SandboxID: "sandbox-vtext-test",
+		ChannelID: doc.DocID,
+		State:     types.RunCompleted,
+		Prompt:    "Gather the missing fact",
+		CreatedAt: now.Add(2 * time.Second),
+		UpdatedAt: now.Add(2 * time.Second),
+		Metadata: map[string]any{
+			runMetadataAgentProfile: AgentProfileResearcher,
+			runMetadataAgentRole:    AgentProfileResearcher,
+			runMetadataChannelID:    doc.DocID,
+		},
+	}
+	if err := s1.CreateRun(ctx, researchRun); err != nil {
+		t.Fatalf("create research run: %v", err)
+	}
+
+	message := &types.ChannelMessage{
+		ChannelID:    doc.DocID,
+		TrajectoryID: "traj-restart-1",
+		From:         "researcher",
+		FromRunID:    researchRun.RunID,
+		FromAgentID:  "researcher-1",
+		ToAgentID:    "vtext:" + doc.DocID,
+		Role:         "researcher",
+		Content:      "Durable finding: the corrected fact landed while the sandbox was about to restart.",
+		Timestamp:    now.Add(3 * time.Second),
+	}
+	if err := s1.AppendChannelMessage(ctx, message, "user-1"); err != nil {
+		t.Fatalf("append channel message: %v", err)
+	}
+
+	interruptedRun := types.RunRecord{
+		RunID:       "vtext-interrupted-restart",
+		OwnerID:     "user-1",
+		SandboxID:   "sandbox-vtext-test",
+		ChannelID:   doc.DocID,
+		State:       types.RunRunning,
+		Prompt:      "Integrate the durable finding",
+		ParentRunID: researchRun.RunID,
+		CreatedAt:   now.Add(4 * time.Second),
+		UpdatedAt:   now.Add(4 * time.Second),
+		Metadata: map[string]any{
+			"type":                  "vtext_agent_revision",
+			"doc_id":                doc.DocID,
+			"current_revision_id":   userRev.RevisionID,
+			"scheduled_message_seq": message.Seq,
+			runMetadataAgentProfile: AgentProfileVText,
+			runMetadataAgentRole:    AgentProfileVText,
+			runMetadataChannelID:    doc.DocID,
+			runMetadataAgentID:      "vtext:" + doc.DocID,
+			runMetadataTrajectoryID: message.TrajectoryID,
+		},
+	}
+	if err := s1.CreateRun(ctx, interruptedRun); err != nil {
+		t.Fatalf("create interrupted vtext run: %v", err)
+	}
+	if err := s1.CreateAgentMutation(ctx, store.AgentMutation{
+		DocID:               doc.DocID,
+		RunID:               interruptedRun.RunID,
+		OwnerID:             "user-1",
+		State:               "pending",
+		ScheduledMessageSeq: message.Seq,
+		CreatedAt:           now.Add(4 * time.Second),
+	}); err != nil {
+		t.Fatalf("create interrupted mutation: %v", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("close store 1: %v", err)
+	}
+
+	s2, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store 2: %v", err)
+	}
+	provider := NewStubProvider(20 * time.Millisecond)
+	provider.Result = "Recovered after restart and integrated the durable finding."
+	rt := New(Config{
+		SandboxID:           "sandbox-vtext-test",
+		StorePath:           dbPath,
+		PromptRoot:          promptRoot,
+		ProviderTimeout:     2 * time.Second,
+		SupervisionInterval: 5 * time.Second,
+		VTextWakeDebounce:   50 * time.Millisecond,
+	}, s2, events.NewEventBus(), provider)
+
+	t.Cleanup(func() {
+		rt.Stop()
+		_ = s2.Close()
+		_ = os.RemoveAll(promptRoot)
+	})
+	rt.Start(ctx)
+
+	revs := waitForRevisionCount(t, s2, doc.DocID, "user-1", 2, 5*time.Second)
+	foundRecoveredRevision := false
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "Recovered after restart and integrated the durable finding.") {
+			foundRecoveredRevision = true
+		}
+	}
+	if !foundRecoveredRevision {
+		t.Fatalf("expected recovered appagent revision, got %+v", revs)
+	}
+
+	gotInterrupted, err := rt.GetRun(ctx, interruptedRun.RunID, "user-1")
+	if err != nil {
+		t.Fatalf("get interrupted run after restart: %v", err)
+	}
+	if gotInterrupted.State != types.RunFailed {
+		t.Fatalf("interrupted run state = %q, want %q", gotInterrupted.State, types.RunFailed)
+	}
+	if gotInterrupted.Error != "runtime restarted, run interrupted" {
+		t.Fatalf("interrupted run error = %q, want runtime restarted, run interrupted", gotInterrupted.Error)
+	}
+
+	mutation, err := s2.GetAgentMutationByRun(ctx, interruptedRun.RunID)
+	if err != nil {
+		t.Fatalf("get interrupted mutation: %v", err)
+	}
+	if mutation == nil || mutation.State != "failed" {
+		t.Fatalf("expected interrupted mutation to be failed after recovery, got %+v", mutation)
+	}
+	pending, err := s2.GetPendingAgentMutationByDoc(ctx, doc.DocID, "user-1")
+	if err != nil {
+		t.Fatalf("get pending mutation after recovery: %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("expected no pending mutation after recovery replay, got %+v", pending)
+	}
+
+	runs, err := s2.ListRunsByChannel(ctx, "user-1", doc.DocID, 20)
+	if err != nil {
+		t.Fatalf("list channel runs after restart: %v", err)
+	}
+	var recoveredRun *types.RunRecord
+	for i := range runs {
+		if agentProfileForRun(&runs[i]) == AgentProfileVText && runs[i].RunID != interruptedRun.RunID {
+			recoveredRun = &runs[i]
+			break
+		}
+	}
+	if recoveredRun == nil {
+		t.Fatalf("expected a replacement vtext run after restart, got %+v", runs)
+	}
+	if recoveredRun.ParentRunID != researchRun.RunID {
+		t.Fatalf("replacement run parent = %q, want %q", recoveredRun.ParentRunID, researchRun.RunID)
+	}
+	if !strings.Contains(recoveredRun.Prompt, "Durable finding: the corrected fact landed while the sandbox was about to restart.") {
+		t.Fatalf("replacement run prompt missing durable finding: %q", recoveredRun.Prompt)
+	}
+
+	checkpoint, err := s2.GetVTextControllerCheckpoint(ctx, doc.DocID, "user-1")
+	if err != nil {
+		t.Fatalf("get controller checkpoint after recovery: %v", err)
+	}
+	if checkpoint == nil || checkpoint.IntegratedMessageSeq != message.Seq {
+		t.Fatalf("checkpoint after recovery = %+v, want integrated_message_seq=%d", checkpoint, message.Seq)
+	}
+}
+
 func TestHandleTestVTextResearchFindingsUsesResearcherToolPath(t *testing.T) {
 	provider := NewStubProvider(1 * time.Millisecond)
 	provider.Result = "Browser test findings revision."

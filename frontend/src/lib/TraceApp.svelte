@@ -299,7 +299,7 @@
       afterSeq: lastSeq,
       onEvent: (eventRecord) => {
         streamStatus = 'connected';
-        lastSeq = Math.max(lastSeq, eventRecord.seq || 0);
+        lastSeq = Math.max(lastSeq, eventRecord.stream_seq || eventRecord.seq || 0);
         scheduleWorkflowRefresh();
         if (
           selectedChannelId &&

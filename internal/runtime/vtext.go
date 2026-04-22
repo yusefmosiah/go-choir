@@ -27,8 +27,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	pathpkg "path"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -1160,7 +1160,7 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	rec, err := h.rt.submitVTextAgentRevisionRun(r.Context(), doc, ownerID, req, "")
+	rec, err := h.rt.submitVTextAgentRevisionRun(r.Context(), doc, ownerID, req, "", 0)
 	if err != nil {
 		log.Printf("vtext api: submit agent revision run: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to submit agent revision"})
@@ -1284,7 +1284,7 @@ func (h *APIHandler) HandleTestVTextResearchFindings(w http.ResponseWriter, r *h
 	writeAPIJSON(w, http.StatusAccepted, resp)
 }
 
-func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Document, ownerID string, req vtextAgentRevisionRequest, parentRunID string) (*types.RunRecord, error) {
+func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Document, ownerID string, req vtextAgentRevisionRequest, parentRunID string, scheduledMessageSeq int64) (*types.RunRecord, error) {
 	// Build the backend-owned vtext revision request from current document state.
 	var currentRevision types.Revision
 	var currentRevisionLoaded bool
@@ -1342,6 +1342,9 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 		"request_intent":      strings.TrimSpace(req.Intent),
 		"original_prompt":     strings.TrimSpace(req.Prompt),
 	}
+	if scheduledMessageSeq > 0 {
+		runMetadata["scheduled_message_seq"] = scheduledMessageSeq
+	}
 	for _, key := range durableMetadataKeys {
 		if val := metadataString(metadata, key); val != "" {
 			runMetadata[key] = val
@@ -1363,11 +1366,12 @@ func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Do
 
 	// Record the agent mutation for idempotency tracking (VAL-CROSS-122).
 	if err := rt.Store().CreateAgentMutation(ctx, store.AgentMutation{
-		DocID:     doc.DocID,
-		RunID:     rec.RunID,
-		OwnerID:   ownerID,
-		State:     "pending",
-		CreatedAt: time.Now().UTC(),
+		DocID:               doc.DocID,
+		RunID:               rec.RunID,
+		OwnerID:             ownerID,
+		State:               "pending",
+		ScheduledMessageSeq: scheduledMessageSeq,
+		CreatedAt:           time.Now().UTC(),
 	}); err != nil {
 		log.Printf("vtext api: create agent mutation: %v", err)
 	}
@@ -1628,30 +1632,26 @@ func summarizeDiffResult(diff types.DiffResult) string {
 // event, carrying the doc_id in the payload so the frontend can correlate
 // progress to the open document (VAL-ETEXT-004).
 func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.RunRecord, kind types.EventKind, cause events.EventCause, payload json.RawMessage) {
-	rt.bus.Publish(events.RuntimeEvent{
-		Record: types.EventRecord{
-			EventID:   uuid.New().String(),
-			RunID:     rec.RunID,
-			OwnerID:   rec.OwnerID,
-			Timestamp: time.Now().UTC(),
-			Kind:      kind,
-			Payload:   payload,
-		},
-		Actor: events.ActorRuntime,
-		Cause: cause,
-	})
-
-	// Also persist for catch-up.
-	if err := rt.store.AppendEvent(ctx, &types.EventRecord{
-		EventID:   uuid.New().String(),
-		RunID:     rec.RunID,
-		OwnerID:   rec.OwnerID,
-		Timestamp: time.Now().UTC(),
-		Kind:      kind,
-		Payload:   payload,
-	}); err != nil {
-		log.Printf("runtime: persist vtext agent event: %v", err)
+	evRec := &types.EventRecord{
+		EventID:      uuid.New().String(),
+		RunID:        rec.RunID,
+		AgentID:      rec.AgentID,
+		ChannelID:    rec.ChannelID,
+		OwnerID:      rec.OwnerID,
+		TrajectoryID: trajectoryIDForRun(rec),
+		Timestamp:    time.Now().UTC(),
+		Kind:         kind,
+		Payload:      payload,
 	}
+	if err := rt.store.AppendEvent(ctx, evRec); err != nil {
+		log.Printf("runtime: persist vtext agent event: %v", err)
+		return
+	}
+	rt.bus.Publish(events.RuntimeEvent{
+		Record: *evRec,
+		Actor:  events.ActorRuntime,
+		Cause:  cause,
+	})
 }
 
 func (rt *Runtime) emitVTextDocumentRevisionEvent(ctx context.Context, ownerID string, rev types.Revision) {
@@ -1664,19 +1664,20 @@ func (rt *Runtime) emitVTextDocumentRevisionEvent(ctx context.Context, ownerID s
 		log.Printf("runtime: marshal vtext document revision event: %v", err)
 		return
 	}
-	evRec := types.EventRecord{
+	evRec := &types.EventRecord{
 		EventID:   uuid.New().String(),
 		OwnerID:   ownerID,
 		Timestamp: time.Now().UTC(),
 		Kind:      types.EventVTextDocumentRevisionCreated,
 		Payload:   payload,
 	}
+	if err := rt.store.AppendEvent(ctx, evRec); err != nil {
+		log.Printf("runtime: persist vtext document revision event: %v", err)
+		return
+	}
 	rt.bus.Publish(events.RuntimeEvent{
-		Record: evRec,
+		Record: *evRec,
 		Actor:  events.ActorRuntime,
 		Cause:  events.CauseTaskLifecycle,
 	})
-	if err := rt.store.AppendEvent(ctx, &evRec); err != nil {
-		log.Printf("runtime: persist vtext document revision event: %v", err)
-	}
 }
