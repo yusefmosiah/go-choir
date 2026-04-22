@@ -1996,6 +1996,9 @@ func TestIssueGatewayToken_Success(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
+		if got := r.Header.Get("X-Internal-Caller"); got != "true" {
+			t.Errorf("expected X-Internal-Caller=true, got %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		// Mirror the real gateway CredentialResult JSON shape.
@@ -2021,6 +2024,9 @@ func TestIssueGatewayToken_Success(t *testing.T) {
 func TestIssueGatewayToken_LegacyJSONShapeStillWorks(t *testing.T) {
 	credValue := "vm-test-legacy:changedplaceholder"
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Internal-Caller"); got != "true" {
+			t.Errorf("expected X-Internal-Caller=true, got %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]string{
 			"sandbox_id": "vm-test-legacy",

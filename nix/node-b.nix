@@ -105,7 +105,7 @@ in
           reverse_proxy 127.0.0.1:8082
         }
         handle /provider/* {
-          reverse_proxy 127.0.0.1:8084
+          respond "provider routes are not available from the public edge" 403
         }
         handle {
           root * ${goChoirPackages.frontend}
@@ -327,6 +327,7 @@ in
             token=$(${pkgs.curl}/bin/curl -sf -X POST \
               http://127.0.0.1:8084/provider/v1/credentials/issue \
               -H "Content-Type: application/json" \
+              -H "X-Internal-Caller: true" \
               -d '{"sandbox_id":"sandbox-m1"}' 2>/dev/null \
               | ${pkgs.jq}/bin/jq -r .RawToken 2>/dev/null) || true
             if [ -n "$token" ] && [ "$token" != "null" ]; then

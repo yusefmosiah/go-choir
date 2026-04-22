@@ -8,9 +8,9 @@ Distributed multiagent operating system -- Go rewrite of ChoirOS, informed by Co
 Browser --> Caddy (TLS, static assets, Svelte SPA)
              |-- /auth/*      --> auth     (8081)
              |-- /api/*       --> proxy    (8082)
-             |-- /provider/*  --> gateway  (8084)
 
 vmctl (8083) -- manages VM ownership and lifecycle, using host-process fallback locally and Firecracker on Linux/KVM hosts
+gateway (8084) -- host-side provider/search gateway, reachable from host-local callers and guest VMs, not from the public browser edge
 sandbox (8085) -- local runtime + desktop apps + agent/tool loop; host-process fallback locally, target runtime moves into per-user microVMs
 ```
 
@@ -119,7 +119,7 @@ GATEWAY_PORT=8084 \
 
 SANDBOX_PORT=8085 SANDBOX_ID="sandbox-dev" go run ./cmd/sandbox
 
-# Frontend (serves on http://localhost:4173, proxies /auth/*, /api/*, /provider/* to backend)
+# Frontend (serves on http://localhost:4173, proxies /auth/* and /api/* to backend)
 cd frontend && pnpm install && pnpm dev
 ```
 

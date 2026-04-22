@@ -402,6 +402,7 @@ func (r *OwnershipRegistry) issueGatewayToken(sandboxID string) string {
 		return ""
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

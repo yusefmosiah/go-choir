@@ -22,9 +22,9 @@ All five Go binaries are built in the **`go-choir`** repository, with a clean mo
 Browser → Caddy (edge, TLS termination, serves Svelte static assets)
            ├── /auth/*      → auth service (Go)
            ├── /api/*       → proxy service (Go) → sandbox VM (vsock/virtio-net)
-           └── /provider/*  → gateway service (Go)
 
 vmctl (Go) runs independently, manages VM lifecycle via Firecracker API socket
+sandbox VMs / host-local callers → gateway service (Go)
 sandbox (Go, inside each microVM) — conductor, scheduler, agent runtime, apps, vtext (Dolt), tools, persistence
 ```
 
@@ -45,7 +45,6 @@ sandbox (Go, inside each microVM) — conductor, scheduler, agent runtime, apps,
 │                                                                                │
 │   /auth/*  ──────────────┐                                                     │
 │   /api/*   ──────────┐   │                                                     │
-│   /provider/* ───┐   │   │                                                     │
 └──────────────────┼───┼───┼─────────────────────────────────────────────────────┘
                    │   │   │
          ┌─────────┘   │   └──────────┐
@@ -129,7 +128,7 @@ All built from the same Go module in `go-choir`, different `cmd/` entry points:
 ### 2.4 Caddy (Edge)
 
 - Serves the Svelte frontend as static assets
-- Reverse-proxies to auth, proxy, and gateway services
+- Reverse-proxies to auth and proxy services
 - TLS termination
 - Already deployed in the current infrastructure
 - Not a custom binary — standard Caddy with a Caddyfile
@@ -465,7 +464,7 @@ const (
 |---------|-----------|---------|
 | Static asset serving | **Caddy** | Serves the compiled Svelte SPA as static files |
 | TLS termination | **Caddy** | Handles HTTPS certificates |
-| Route dispatch | **Caddy** | Routes `/auth/*`, `/api/*`, `/provider/*` to respective services |
+| Route dispatch | **Caddy** | Routes `/auth/*` and `/api/*` to the auth/proxy services and serves the frontend for everything else |
 | Session validation | **proxy** service | Validates auth tokens on every API request before forwarding to sandbox |
 | WebSocket proxying | **proxy** service | Upgrades HTTP to WebSocket and proxies bidirectionally to sandbox VMs |
 | Request routing to VMs | **proxy** service | Maps authenticated user → correct sandbox VM via vmctl registry |
@@ -743,7 +742,7 @@ VM lifecycle: boot → running → (idle timeout) → hibernated/stopped. Idle w
 - choiros-rs: `provider_gateway.rs` (Anthropic, OpenAI, Z.AI, Kimi, Inception, OpenRouter, Tavily, Brave, Exa, AWS Bedrock proxying, per-sandbox rate limiting, Bedrock request rewriting)
 - cogent: provider configuration (ZAI, Bedrock, ChatGPT, direct Anthropic, direct OpenAI), web search API key management (Exa, Tavily, Brave, Serper)
 
-**Design**: The gateway is a standalone host service. Sandbox binaries send LLM requests to the gateway via HTTP (over vsock or virtio-net). The gateway injects the real API key and proxies to the upstream provider. The gateway is NOT directly accessible from the browser — Caddy routes `/provider/*` to it, but this is for administrative endpoints only.
+**Design**: The gateway is a standalone host service. Sandbox binaries send LLM requests to the gateway via HTTP (over vsock or virtio-net). The gateway injects the real API key and proxies to the upstream provider. The gateway is not browser-facing. Public browser traffic stops at Caddy and the proxy, while guest sandboxes and host-local bootstrap callers reach the gateway over the internal host/tap network only.
 
 ```go
 // ProviderGateway routes LLM API calls to upstream providers,

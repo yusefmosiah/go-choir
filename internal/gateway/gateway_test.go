@@ -278,6 +278,29 @@ func TestHandleInference_AuthSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleInference_DeniesExternalPeerWithValidToken(t *testing.T) {
+	h, reg, _ := setupHandler(t)
+
+	result, _ := reg.IssueCredential("sandbox-1")
+
+	payload := ProviderRequest{
+		Messages: []provider.Message{{Role: "user", Content: []provider.Block{{Type: "text", Text: "Hello"}}}},
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/inference", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+result.RawToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "8.8.8.8:12345"
+
+	w := httptest.NewRecorder()
+	h.HandleInference(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestHandleInference_MissingAuth(t *testing.T) {
 	h, _, _ := setupHandler(t)
 
@@ -442,6 +465,7 @@ func TestHandleIssueCredential(t *testing.T) {
 	body := `{"sandbox_id": "sandbox-test"}`
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 	req.Host = "localhost:8084"
 	req.RemoteAddr = "127.0.0.1:12345"
 
@@ -470,6 +494,7 @@ func TestHandleIssueCredential_NonLocalhost(t *testing.T) {
 	body := `{"sandbox_id": "sandbox-test"}`
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 	req.Host = "10.0.0.1:8084"
 	req.RemoteAddr = "10.0.0.1:45678"
 
@@ -487,8 +512,26 @@ func TestHandleIssueCredential_SpoofedLocalhostHostDenied(t *testing.T) {
 	body := `{"sandbox_id": "sandbox-test"}`
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 	req.Host = "localhost:8084"
 	req.RemoteAddr = "10.10.10.10:45678"
+
+	w := httptest.NewRecorder()
+	h.HandleIssueCredential(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandleIssueCredential_MissingInternalHeaderDenied(t *testing.T) {
+	h, _ := setupHandlerNoProvider(t)
+
+	body := `{"sandbox_id": "sandbox-test"}`
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/issue", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "localhost:8084"
+	req.RemoteAddr = "127.0.0.1:12345"
 
 	w := httptest.NewRecorder()
 	h.HandleIssueCredential(w, req)
@@ -508,6 +551,7 @@ func TestHandleRevokeCredential(t *testing.T) {
 	body := `{"sandbox_id": "sandbox-test"}`
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/revoke", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 	req.Host = "localhost:8084"
 	req.RemoteAddr = "127.0.0.1:12345"
 
@@ -535,6 +579,7 @@ func TestHandleRotateCredential(t *testing.T) {
 	body := `{"sandbox_id": "sandbox-test"}`
 	req := httptest.NewRequest(http.MethodPost, "/provider/v1/credentials/rotate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
 	req.Host = "localhost:8084"
 	req.RemoteAddr = "127.0.0.1:12345"
 

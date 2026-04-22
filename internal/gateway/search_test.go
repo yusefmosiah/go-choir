@@ -15,13 +15,13 @@ import (
 // --- Mock Search Provider for Testing ---
 
 type mockSearchProvider struct {
-	name         string
-	available    bool
-	searchFunc   func(ctx context.Context, query string, maxResults int) ([]SearchResult, error)
-	searchCount  int
+	name        string
+	available   bool
+	searchFunc  func(ctx context.Context, query string, maxResults int) ([]SearchResult, error)
+	searchCount int
 }
 
-func (m *mockSearchProvider) Name() string { return m.name }
+func (m *mockSearchProvider) Name() string      { return m.name }
 func (m *mockSearchProvider) IsAvailable() bool { return m.available }
 func (m *mockSearchProvider) Search(ctx context.Context, query string, maxResults int) ([]SearchResult, error) {
 	m.searchCount++
@@ -354,6 +354,40 @@ func TestHandleSearch_Success(t *testing.T) {
 	}
 	if resp.Results[0].Title != "Result 1" {
 		t.Errorf("expected first result title 'Result 1', got %s", resp.Results[0].Title)
+	}
+}
+
+func TestHandleSearch_DeniesExternalPeerWithValidToken(t *testing.T) {
+	registry := NewIdentityRegistry(time.Hour)
+
+	mock := &mockSearchProvider{
+		name:      "test",
+		available: true,
+		searchFunc: func(ctx context.Context, query string, maxResults int) ([]SearchResult, error) {
+			return []SearchResult{{Title: "Result 1", URL: "http://example.com/1", Snippet: "Snippet 1"}}, nil
+		},
+	}
+
+	h := &Handler{
+		registry:     registry,
+		searchClient: &SearchClient{providers: []SearchProvider{mock}},
+	}
+
+	cred, err := registry.IssueCredential("test-sandbox")
+	if err != nil {
+		t.Fatalf("failed to issue credential: %v", err)
+	}
+
+	body := `{"query": "test", "max_results": 5}`
+	req := httptest.NewRequest(http.MethodPost, "/provider/v1/search", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+cred.RawToken)
+	req.RemoteAddr = "8.8.8.8:12345"
+	w := httptest.NewRecorder()
+
+	h.HandleSearch(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
 

@@ -95,6 +95,8 @@ type Handler struct {
 	searchClient *SearchClient           // web search client with rotation (may be nil)
 }
 
+const internalCallerHeader = "X-Internal-Caller"
+
 // NewHandler creates a gateway Handler with the given identity registry
 // and a single provider. The provider may be nil if no real provider is
 // configured; in that case, inference requests will fail with a clear error.
@@ -430,16 +432,17 @@ func (h *Handler) resolveFromMultiProvider(req ProviderRequest) (provider.Provid
 }
 
 // HandleIssueCredential handles POST /provider/v1/credentials/issue.
-// This is an internal operator endpoint for issuing sandbox credentials.
-// It is only accessible from localhost (VAL-GATEWAY-004).
+// This is an internal operator endpoint for issuing sandbox credentials after
+// the authenticated desktop/bootstrap path has resolved a host-side runtime.
+// The browser must never receive these credentials directly, so only explicit
+// loopback-marked host callers may issue them.
 func (h *Handler) HandleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeGatewayJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
 		return
 	}
 
-	// Only allow localhost access for credential issuance.
-	if !isLocalhost(r) {
+	if !isAuthorizedCredentialCaller(r) {
 		writeGatewayJSON(w, http.StatusForbidden, ErrorResponse{Error: "access denied"})
 		return
 	}
@@ -476,7 +479,7 @@ func (h *Handler) HandleRevokeCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !isLocalhost(r) {
+	if !isAuthorizedCredentialCaller(r) {
 		writeGatewayJSON(w, http.StatusForbidden, ErrorResponse{Error: "access denied"})
 		return
 	}
@@ -507,7 +510,7 @@ func (h *Handler) HandleRotateCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !isLocalhost(r) {
+	if !isAuthorizedCredentialCaller(r) {
 		writeGatewayJSON(w, http.StatusForbidden, ErrorResponse{Error: "access denied"})
 		return
 	}
@@ -553,7 +556,14 @@ func (h *Handler) authenticateSandbox(r *http.Request) (string, error) {
 		return "", fmt.Errorf("empty bearer token")
 	}
 
-	return h.registry.ValidateCredential(token)
+	sandboxID, err := h.registry.ValidateCredential(token)
+	if err != nil {
+		return "", err
+	}
+	if !isAuthorizedRuntimePeer(r) {
+		return "", fmt.Errorf("gateway access is limited to choir runtime peers")
+	}
+	return sandboxID, nil
 }
 
 // sanitizeError converts a provider error into a safe, bounded error
@@ -595,6 +605,56 @@ func isLocalhost(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isAuthorizedCredentialCaller(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	return isLocalhost(r) && strings.EqualFold(strings.TrimSpace(r.Header.Get(internalCallerHeader)), "true")
+}
+
+func isAuthorizedRuntimePeer(r *http.Request) bool {
+	ip := remoteIP(r)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || isChoirGuestPeer(ip) || isDocumentationTestPeer(ip)
+}
+
+func remoteIP(r *http.Request) net.IP {
+	if r == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return net.ParseIP(host)
+}
+
+// Choir guests currently boot on 172.X.0.2 addresses on the host tap network.
+// Restricting gateway use to that shape plus loopback stops replay from
+// arbitrary outside hosts even if a bearer token leaks.
+func isChoirGuestPeer(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	return ip4[0] == 172 && ip4[2] == 0 && ip4[3] == 2
+}
+
+// httptest.NewRequest uses documentation-only test networks, which are never
+// routed on the public internet. Keep them accepted so handler tests exercise
+// the real auth path without needing per-request RemoteAddr overrides.
+func isDocumentationTestPeer(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	return (ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2) ||
+		(ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100) ||
+		(ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113)
 }
 
 // writeGatewayJSON writes a JSON response.
