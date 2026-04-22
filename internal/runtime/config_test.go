@@ -51,3 +51,12 @@ func TestLoadConfigFallsBackOnInvalidResearcherCount(t *testing.T) {
 		t.Fatalf("researcher_count = %d, want fallback %d", cfg.ResearcherCount, DefaultResearcherCount)
 	}
 }
+
+func TestLoadConfigReadsEnableTestAPIs(t *testing.T) {
+	t.Setenv("RUNTIME_ENABLE_TEST_APIS", "true")
+
+	cfg := LoadConfig()
+	if !cfg.EnableTestAPIs {
+		t.Fatal("enable_test_apis = false, want true")
+	}
+}

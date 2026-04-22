@@ -919,6 +919,15 @@ type vtextAgentRevisionResponse struct {
 	CreatedAt string         `json:"created_at"`
 }
 
+type testVTextResearchFindingsRequest struct {
+	DocID     string                         `json:"doc_id"`
+	FindingID string                         `json:"finding_id"`
+	Findings  []string                       `json:"findings,omitempty"`
+	Evidence  []researchFindingEvidenceInput `json:"evidence,omitempty"`
+	Notes     []string                       `json:"notes,omitempty"`
+	Questions []string                       `json:"questions,omitempty"`
+}
+
 // HandleVTextAgentRevision handles POST
 // /api/vtext/documents/{id}/agent-revision.
 //
@@ -994,6 +1003,115 @@ func (h *APIHandler) HandleVTextAgentRevision(w http.ResponseWriter, r *http.Req
 		State:     rec.State,
 		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
 	})
+}
+
+// HandleTestVTextResearchFindings is a local-only browser test seam that routes
+// through the real researcher tool path instead of inventing a fake direct
+// revision shortcut. It must stay disabled outside local/test environments.
+func (h *APIHandler) HandleTestVTextResearchFindings(w http.ResponseWriter, r *http.Request) {
+	if !h.rt.cfg.EnableTestAPIs {
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "test endpoint not found"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	var req testVTextResearchFindingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+	req.DocID = strings.TrimSpace(req.DocID)
+	req.FindingID = strings.TrimSpace(req.FindingID)
+	if req.DocID == "" || req.FindingID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "doc_id and finding_id are required"})
+		return
+	}
+
+	if _, err := h.rt.Store().GetDocument(r.Context(), req.DocID, ownerID); err != nil {
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "document not found"})
+		return
+	}
+
+	runs, err := h.rt.Store().ListRunsByChannel(r.Context(), ownerID, req.DocID, 50)
+	if err != nil {
+		log.Printf("vtext test api: list channel runs: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to resolve vtext agent"})
+		return
+	}
+
+	var parent *types.RunRecord
+	for i := len(runs) - 1; i >= 0; i-- {
+		if agentProfileForRun(&runs[i]) == AgentProfileVText {
+			parent = &runs[i]
+			break
+		}
+	}
+	if parent == nil {
+		writeAPIJSON(w, http.StatusConflict, apiError{Error: "vtext agent is not initialized for this document"})
+		return
+	}
+
+	targetAgentID := strings.TrimSpace(agentIDForRun(parent))
+	if targetAgentID == "" {
+		writeAPIJSON(w, http.StatusConflict, apiError{Error: "vtext agent is missing an agent_id"})
+		return
+	}
+
+	researcherRun, err := h.rt.StartChildRun(r.Context(), parent.RunID, "Browser test: submit research findings", ownerID, map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    req.DocID,
+		"doc_id":                req.DocID,
+	})
+	if err != nil {
+		log.Printf("vtext test api: start researcher run: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create researcher context"})
+		return
+	}
+
+	registry := h.rt.ToolRegistryForProfile(AgentProfileResearcher)
+	if registry == nil {
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "researcher tools are unavailable"})
+		return
+	}
+
+	rawArgs, err := json.Marshal(map[string]any{
+		"finding_id": req.FindingID,
+		"agent_id":   targetAgentID,
+		"channel_id": req.DocID,
+		"findings":   req.Findings,
+		"evidence":   req.Evidence,
+		"notes":      req.Notes,
+		"questions":  req.Questions,
+	})
+	if err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+
+	raw, err := registry.Execute(WithToolExecutionContext(r.Context(), researcherRun), "submit_research_findings", rawArgs)
+	if err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: err.Error()})
+		return
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		log.Printf("vtext test api: decode tool response: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to encode findings response"})
+		return
+	}
+	resp["loop_id"] = researcherRun.RunID
+	writeAPIJSON(w, http.StatusAccepted, resp)
 }
 
 func (rt *Runtime) submitVTextAgentRevisionRun(ctx context.Context, doc types.Document, ownerID string, req vtextAgentRevisionRequest, parentRunID string) (*types.RunRecord, error) {

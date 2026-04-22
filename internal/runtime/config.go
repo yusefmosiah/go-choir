@@ -69,6 +69,10 @@ type Config struct {
 	// VmctlURL is the host-side vmctl control plane URL, used by super-only
 	// lifecycle tools to request branch desktops and worker VMs.
 	VmctlURL string
+
+	// EnableTestAPIs exposes local-only browser test hooks. These endpoints are
+	// disabled by default and should never be enabled on deployed environments.
+	EnableTestAPIs bool
 }
 
 // LoadConfig resolves runtime configuration from environment variables.
@@ -83,6 +87,7 @@ func LoadConfig() Config {
 		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
 		VTextWakeDebounce:   durationOr("RUNTIME_VTEXT_WAKE_DEBOUNCE", DefaultVTextWakeDebounce),
 		VmctlURL:            envOr("RUNTIME_VMCTL_URL", os.Getenv("PROXY_VMCTL_URL")),
+		EnableTestAPIs:      boolOr("RUNTIME_ENABLE_TEST_APIS", false),
 	}
 }
 
@@ -135,4 +140,16 @@ func intOr(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func boolOr(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

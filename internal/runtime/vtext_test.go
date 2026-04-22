@@ -1128,6 +1128,66 @@ func TestSubmitResearchFindingsWakeUsesSameDebouncedPath(t *testing.T) {
 	}
 }
 
+func TestHandleTestVTextResearchFindingsUsesResearcherToolPath(t *testing.T) {
+	provider := NewStubProvider(1 * time.Millisecond)
+	provider.Result = "Browser test findings revision."
+
+	h, s, rt := vtextAPISetupWithProvider(t, provider, true)
+	rt.cfg.EnableTestAPIs = true
+
+	docID, _ := createDocWithUserRevision(t, h)
+
+	revReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
+		map[string]string{"prompt": "Write the first draft"})
+	revW := httptest.NewRecorder()
+	h.HandleVTextAgentRevision(revW, revReq)
+	if revW.Code != http.StatusAccepted {
+		t.Fatalf("agent revision: status = %d, want %d; body: %s", revW.Code, http.StatusAccepted, revW.Body.String())
+	}
+	var revResp vtextAgentRevisionResponse
+	if err := json.NewDecoder(revW.Body).Decode(&revResp); err != nil {
+		t.Fatalf("decode agent revision response: %v", err)
+	}
+	if state := waitForTaskCompletion(t, h, revResp.RunID, 5*time.Second); state != types.RunCompleted {
+		t.Fatalf("agent revision state = %q, want %q", state, types.RunCompleted)
+	}
+
+	req := vtextRequest(t, http.MethodPost, "/api/test/vtext/research-findings", map[string]any{
+		"doc_id":     docID,
+		"finding_id": "browser-hook-001",
+		"findings":   []string{"A sourced update arrived."},
+		"notes":      []string{"Fold this into the next revision."},
+	})
+	w := httptest.NewRecorder()
+	h.HandleTestVTextResearchFindings(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("test findings status = %d, want %d; body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode findings response: %v", err)
+	}
+	if got, _ := resp["status"].(string); got != "submitted" {
+		t.Fatalf("status = %q, want submitted", got)
+	}
+	if got, _ := resp["loop_id"].(string); strings.TrimSpace(got) == "" {
+		t.Fatal("loop_id should not be empty")
+	}
+
+	revs := waitForRevisionCount(t, s, docID, "user-1", 3, 5*time.Second)
+	found := false
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "Browser test findings revision.") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected findings-driven revision, got %+v", revs)
+	}
+}
+
 func TestVTextOpenFileResolvesCanonicalAlias(t *testing.T) {
 	h, s, _ := vtextAPISetupWithRuntime(t)
 

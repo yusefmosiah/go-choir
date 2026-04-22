@@ -366,6 +366,12 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// deletion operations (VAL-FILES-001 through VAL-FILES-018).
 		h.HandleProtectedAPI(w, r)
 		return
+	case strings.HasPrefix(path, "/api/test/"):
+		// Local-only browser test APIs: auth-gated at the proxy level and
+		// forwarded to the sandbox. The sandbox itself decides whether the
+		// specific test hook is enabled.
+		h.HandleProtectedAPI(w, r)
+		return
 	case strings.HasPrefix(path, "/api/"):
 		// All /api/* routes require auth by default. Check auth before
 		// returning 404 so signed-out callers consistently receive 401

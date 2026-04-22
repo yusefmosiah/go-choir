@@ -42,6 +42,9 @@ func main() {
 		ProviderTimeout:     rtRuntimeCfg.ProviderTimeout,
 		SupervisionInterval: rtRuntimeCfg.SupervisionInterval,
 		ResearcherCount:     rtRuntimeCfg.ResearcherCount,
+		VTextWakeDebounce:   rtRuntimeCfg.VTextWakeDebounce,
+		VmctlURL:            rtRuntimeCfg.VmctlURL,
+		EnableTestAPIs:      rtRuntimeCfg.EnableTestAPIs,
 	}
 	if rtCfg.StorePath == "" {
 		rtCfg.StorePath = runtime.DefaultStorePath
