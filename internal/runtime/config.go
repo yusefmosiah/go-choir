@@ -57,6 +57,10 @@ type Config struct {
 
 	// ResearcherCount is the configured researcher worker count for this VM.
 	ResearcherCount int
+
+	// VmctlURL is the host-side vmctl control plane URL, used by super-only
+	// lifecycle tools to request branch desktops and worker VMs.
+	VmctlURL string
 }
 
 // LoadConfig resolves runtime configuration from environment variables.
@@ -69,6 +73,7 @@ func LoadConfig() Config {
 		ProviderTimeout:     durationOr("RUNTIME_PROVIDER_TIMEOUT", DefaultProviderTimeout),
 		SupervisionInterval: durationOr("RUNTIME_SUPERVISION_INTERVAL", DefaultSupervisionInterval),
 		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
+		VmctlURL:            envOr("RUNTIME_VMCTL_URL", os.Getenv("PROXY_VMCTL_URL")),
 	}
 }
 

@@ -168,6 +168,17 @@ CREATE TABLE IF NOT EXISTS desktop_state (
 	active_window  TEXT NOT NULL DEFAULT '',
 	updated_at     DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS desktop_workspaces (
+	owner_id       TEXT NOT NULL,
+	desktop_id     TEXT NOT NULL,
+	windows_json   TEXT NOT NULL DEFAULT '[]',
+	active_window  TEXT NOT NULL DEFAULT '',
+	updated_at     DATETIME NOT NULL,
+	PRIMARY KEY (owner_id, desktop_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_desktop_workspaces_owner_id ON desktop_workspaces(owner_id);
 `
 
 // Open opens (or creates) the SQLite database at dbPath and applies the
@@ -256,7 +267,27 @@ func (s *Store) bootstrap() error {
 			return err
 		}
 	}
+	if _, err := s.db.Exec(`
+		INSERT INTO desktop_workspaces (owner_id, desktop_id, windows_json, active_window, updated_at)
+		SELECT owner_id, 'primary', windows_json, active_window, updated_at
+		  FROM desktop_state
+		 WHERE NOT EXISTS (
+			SELECT 1
+			  FROM desktop_workspaces dw
+			 WHERE dw.owner_id = desktop_state.owner_id
+			   AND dw.desktop_id = 'primary'
+		 )`); err != nil {
+		return fmt.Errorf("migrate desktop_state to desktop_workspaces: %w", err)
+	}
 	return nil
+}
+
+func normalizeDesktopID(desktopID string) string {
+	desktopID = strings.TrimSpace(desktopID)
+	if desktopID == "" {
+		return types.PrimaryDesktopID
+	}
+	return desktopID
 }
 
 func (s *Store) ensureColumn(table, name, ddl string) error {
@@ -1311,17 +1342,24 @@ func formatTimePtr(t *time.Time) any {
 
 // ----- Desktop state persistence (VAL-DESKTOP-007) -----
 
-// GetDesktopState returns the persisted desktop state for the given owner.
-// If no state exists, it returns a default empty desktop state with no error.
+// GetDesktopState returns the persisted desktop state for the owner's primary
+// desktop. If no state exists, it returns a default empty state with no error.
 func (s *Store) GetDesktopState(ctx context.Context, ownerID string) (types.DesktopState, error) {
+	return s.GetDesktopStateForDesktop(ctx, ownerID, types.PrimaryDesktopID)
+}
+
+// GetDesktopStateForDesktop returns the persisted desktop state for the given
+// owner/desktop pair. If no state exists, it returns a default empty state.
+func (s *Store) GetDesktopStateForDesktop(ctx context.Context, ownerID, desktopID string) (types.DesktopState, error) {
+	desktopID = normalizeDesktopID(desktopID)
 	var windowsJSON, updatedAt string
 	var activeWindow string
 
 	row := s.db.QueryRowContext(ctx,
 		`SELECT windows_json, active_window, updated_at
-		   FROM desktop_state
-		  WHERE owner_id = ?`,
-		ownerID,
+		   FROM desktop_workspaces
+		  WHERE owner_id = ? AND desktop_id = ?`,
+		ownerID, desktopID,
 	)
 
 	err := row.Scan(&windowsJSON, &activeWindow, &updatedAt)
@@ -1330,6 +1368,7 @@ func (s *Store) GetDesktopState(ctx context.Context, ownerID string) (types.Desk
 			// No persisted state yet — return default empty state.
 			return types.DesktopState{
 				OwnerID:        ownerID,
+				DesktopID:      desktopID,
 				Windows:        []types.WindowState{},
 				ActiveWindowID: "",
 				UpdatedAt:      time.Now().UTC(),
@@ -1350,28 +1389,37 @@ func (s *Store) GetDesktopState(ctx context.Context, ownerID string) (types.Desk
 
 	return types.DesktopState{
 		OwnerID:        ownerID,
+		DesktopID:      desktopID,
 		Windows:        windows,
 		ActiveWindowID: activeWindow,
 		UpdatedAt:      parsedTime,
 	}, nil
 }
 
-// SaveDesktopState persists the desktop state for the given owner.
-// It uses UPSERT so that both initial save and subsequent updates work.
+// SaveDesktopState persists the desktop state for the given owner's primary
+// desktop. It uses UPSERT so that both initial save and subsequent updates work.
 func (s *Store) SaveDesktopState(ctx context.Context, state types.DesktopState) error {
+	return s.SaveDesktopStateForDesktop(ctx, state)
+}
+
+// SaveDesktopStateForDesktop persists the desktop state for the given
+// owner/desktop pair using UPSERT.
+func (s *Store) SaveDesktopStateForDesktop(ctx context.Context, state types.DesktopState) error {
 	windowsJSON, err := json.Marshal(state.Windows)
 	if err != nil {
 		return fmt.Errorf("marshal desktop windows: %w", err)
 	}
+	desktopID := normalizeDesktopID(state.DesktopID)
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO desktop_state (owner_id, windows_json, active_window, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(owner_id) DO UPDATE SET
+		`INSERT INTO desktop_workspaces (owner_id, desktop_id, windows_json, active_window, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(owner_id, desktop_id) DO UPDATE SET
 		   windows_json = excluded.windows_json,
 		   active_window = excluded.active_window,
 		   updated_at = excluded.updated_at`,
 		state.OwnerID,
+		desktopID,
 		string(windowsJSON),
 		state.ActiveWindowID,
 		state.UpdatedAt.UTC().Format(time.RFC3339Nano),

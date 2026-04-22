@@ -141,6 +141,27 @@ func resolveRunIdentity(ownerID, sandboxID string, metadata map[string]any, pare
 	}, metadata
 }
 
+func ensureDesktopID(metadata map[string]any, parent *types.RunRecord, fallback string) map[string]any {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if existing, _ := metadata[runMetadataDesktopID].(string); strings.TrimSpace(existing) != "" {
+		metadata[runMetadataDesktopID] = strings.TrimSpace(existing)
+		return metadata
+	}
+	if parent != nil && parent.Metadata != nil {
+		if inherited, _ := parent.Metadata[runMetadataDesktopID].(string); strings.TrimSpace(inherited) != "" {
+			metadata[runMetadataDesktopID] = strings.TrimSpace(inherited)
+			return metadata
+		}
+	}
+	if strings.TrimSpace(fallback) == "" {
+		fallback = types.PrimaryDesktopID
+	}
+	metadata[runMetadataDesktopID] = strings.TrimSpace(fallback)
+	return metadata
+}
+
 func (rt *Runtime) PromptStore() *PromptStore {
 	return rt.promptStore
 }
@@ -199,6 +220,7 @@ func (rt *Runtime) StartRun(ctx context.Context, prompt, ownerID string) (*types
 func (rt *Runtime) StartRunWithMetadata(ctx context.Context, prompt, ownerID string, metadata map[string]any) (*types.RunRecord, error) {
 	now := time.Now().UTC()
 	runID := uuid.New().String()
+	metadata = ensureDesktopID(metadata, nil, metadataStringValue(metadata, runMetadataDesktopID))
 	agentRec, metadata := resolveRunIdentity(ownerID, rt.cfg.SandboxID, metadata, nil)
 	if strings.TrimSpace(agentRec.ChannelID) == "" {
 		agentRec.ChannelID = runID
@@ -288,6 +310,7 @@ func (rt *Runtime) StartChildRun(ctx context.Context, parentID, objective, owner
 		metadata[k] = v
 	}
 	runID := uuid.New().String()
+	metadata = ensureDesktopID(metadata, &parentRec, metadataStringValue(metadata, runMetadataDesktopID))
 	agentRec, metadata := resolveRunIdentity(ownerID, rt.cfg.SandboxID, metadata, &parentRec)
 	if strings.TrimSpace(agentRec.ChannelID) == "" {
 		agentRec.ChannelID = runID

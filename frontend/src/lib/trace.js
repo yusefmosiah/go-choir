@@ -1,4 +1,5 @@
 import { fetchWithRenewal } from './auth.js';
+import { withDesktopSelector } from './desktop-selector.js';
 
 async function decodeError(res, fallback) {
   const err = await res.json().catch(() => ({}));
@@ -79,7 +80,7 @@ export function openEventStream({ afterSeq = 0, onEvent, onError } = {}) {
     params.set('after_seq', String(afterSeq));
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const source = new EventSource(`/api/events${suffix}`);
+  const source = new EventSource(withDesktopSelector(`/api/events${suffix}`));
 
   source.onmessage = (event) => {
     if (!onEvent) return;

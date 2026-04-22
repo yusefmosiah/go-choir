@@ -19,6 +19,7 @@
  */
 
 import { fetchWithRenewal, AuthRequiredError } from './auth.js';
+import { withDesktopSelector } from './desktop-selector.js';
 
 // ---------------------------------------------------------------------------
 // Loop submission
@@ -130,7 +131,7 @@ export function connectEventStream(onEvent, options = {}) {
     url += `?after_seq=${afterSeq}`;
   }
 
-  const eventSource = new EventSource(url);
+  const eventSource = new EventSource(withDesktopSelector(url));
 
   eventSource.onmessage = (event) => {
     try {

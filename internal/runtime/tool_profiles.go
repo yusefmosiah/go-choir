@@ -27,6 +27,7 @@ const (
 	runMetadataAgentRole    = "agent_role"
 	runMetadataAgentID      = "agent_id"
 	runMetadataModel        = "model"
+	runMetadataDesktopID    = "desktop_id"
 )
 
 const choirCoreSystemPrompt = `You are one agent inside Choir, a multiagent writing, research, and execution system.
@@ -51,6 +52,7 @@ const (
 	toolCtxRole      toolContextKey = "agent_role"
 	toolCtxChannelID toolContextKey = "channel_id"
 	toolCtxSandboxID toolContextKey = "sandbox_id"
+	toolCtxDesktopID toolContextKey = "desktop_id"
 	toolCtxRunRecord toolContextKey = "run_record"
 )
 
@@ -62,6 +64,7 @@ func WithToolExecutionContext(ctx context.Context, rec *types.RunRecord) context
 	ctx = context.WithValue(ctx, toolCtxRole, agentRoleForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxChannelID, channelIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxSandboxID, rec.SandboxID)
+	ctx = context.WithValue(ctx, toolCtxDesktopID, desktopIDForRun(rec))
 	ctx = context.WithValue(ctx, toolCtxRunRecord, rec)
 	return ctx
 }
@@ -156,6 +159,18 @@ func channelIDForRun(rec *types.RunRecord) string {
 		return strings.TrimSpace(rec.AgentID)
 	}
 	return strings.TrimSpace(rec.RunID)
+}
+
+func desktopIDForRun(rec *types.RunRecord) string {
+	if rec == nil {
+		return types.PrimaryDesktopID
+	}
+	if rec.Metadata != nil {
+		if desktopID, _ := rec.Metadata[runMetadataDesktopID].(string); strings.TrimSpace(desktopID) != "" {
+			return strings.TrimSpace(desktopID)
+		}
+	}
+	return types.PrimaryDesktopID
 }
 
 type AgentRoleSpec struct {
@@ -387,6 +402,9 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 
 	superRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileSuper), cwd, searchClient, httpClient)
 	if err != nil {
+		return err
+	}
+	if err := RegisterVMControlTools(superRegistry, rt); err != nil {
 		return err
 	}
 	coSuperRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileCoSuper), cwd, searchClient, httpClient)

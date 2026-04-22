@@ -55,6 +55,19 @@ type AuthResult struct {
 	Valid  bool
 }
 
+func requestDesktopID(r *http.Request) string {
+	if r == nil {
+		return vmctl.PrimaryDesktopID
+	}
+	if desktopID := strings.TrimSpace(r.URL.Query().Get("desktop_id")); desktopID != "" {
+		return desktopID
+	}
+	if desktopID := strings.TrimSpace(r.Header.Get("X-Choir-Desktop")); desktopID != "" {
+		return desktopID
+	}
+	return vmctl.PrimaryDesktopID
+}
+
 // Handler provides HTTP and WebSocket handlers for the proxy routes.
 type Handler struct {
 	cfg          *Config
@@ -239,9 +252,10 @@ func (h *Handler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve the sandbox URL for this user.
-	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID)
+	desktopID := requestDesktopID(r)
+	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID, desktopID)
 	if err != nil {
-		log.Printf("proxy: failed to resolve sandbox for user %s: %v", authResult.UserID, err)
+		log.Printf("proxy: failed to resolve sandbox for user %s desktop %s: %v", authResult.UserID, desktopID, err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to resolve user sandbox"})
 		return
 	}
@@ -278,9 +292,10 @@ func (h *Handler) HandleProtectedAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve the sandbox URL for this user.
-	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID)
+	desktopID := requestDesktopID(r)
+	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID, desktopID)
 	if err != nil {
-		log.Printf("proxy: failed to resolve sandbox for user %s: %v", authResult.UserID, err)
+		log.Printf("proxy: failed to resolve sandbox for user %s desktop %s: %v", authResult.UserID, desktopID, err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to resolve user sandbox"})
 		return
 	}
@@ -384,9 +399,10 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 2: Resolve the sandbox URL for this user (VAL-VM-006).
-	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID)
+	desktopID := requestDesktopID(r)
+	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID, desktopID)
 	if err != nil {
-		log.Printf("proxy WS: failed to resolve sandbox for user %s: %v", authResult.UserID, err)
+		log.Printf("proxy WS: failed to resolve sandbox for user %s desktop %s: %v", authResult.UserID, desktopID, err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to resolve user sandbox"})
 		return
 	}
@@ -402,7 +418,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Step 4: Dial the sandbox WebSocket endpoint.
 	// Use the resolved sandbox URL instead of the static host fallback.
-	sandboxWSURL := h.sandboxWSURLForTarget(sandboxURL)
+	sandboxWSURL := h.sandboxWSURLForTarget(sandboxURL, r.URL.RawQuery)
 	sandboxHeader := http.Header{}
 	// Inject the trusted user context; strip any client-supplied value.
 	// The proxy is the trust boundary — only JWT-verified identity flows.
@@ -450,7 +466,7 @@ func (h *Handler) HandleWS(w http.ResponseWriter, r *http.Request) {
 // from the configured HTTP sandbox URL (static fallback).
 // nolint:unused
 func (h *Handler) sandboxWSURL() string {
-	return sandboxWSURLForBase(h.sandboxURL.String())
+	return sandboxWSURLForBase(h.sandboxURL.String(), "")
 }
 
 // HandleTerminalWS handles GET /api/terminal/ws. It validates the access JWT
@@ -467,9 +483,10 @@ func (h *Handler) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 2: Resolve the sandbox URL for this user.
-	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID)
+	desktopID := requestDesktopID(r)
+	sandboxURL, err := h.resolveSandboxURL(r.Context(), authResult.UserID, desktopID)
 	if err != nil {
-		log.Printf("proxy terminal WS: failed to resolve sandbox for user %s: %v", authResult.UserID, err)
+		log.Printf("proxy terminal WS: failed to resolve sandbox for user %s desktop %s: %v", authResult.UserID, desktopID, err)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to resolve user sandbox"})
 		return
 	}
@@ -482,7 +499,7 @@ func (h *Handler) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = clientConn.Close() }()
 
 	// Step 4: Dial the sandbox terminal WebSocket endpoint.
-	terminalWSURL := h.terminalWSURLForTarget(sandboxURL)
+	terminalWSURL := h.terminalWSURLForTarget(sandboxURL, r.URL.RawQuery)
 	sandboxHeader := http.Header{}
 	sandboxHeader.Set("X-Authenticated-User", authResult.UserID)
 
@@ -520,7 +537,7 @@ func (h *Handler) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 
 // terminalWSURLForTarget derives the terminal WebSocket URL for a specific
 // sandbox target URL.
-func (h *Handler) terminalWSURLForTarget(targetURL string) string {
+func (h *Handler) terminalWSURLForTarget(targetURL, rawQuery string) string {
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		return "ws://127.0.0.1:8085/api/terminal/ws"
@@ -532,16 +549,17 @@ func (h *Handler) terminalWSURLForTarget(targetURL string) string {
 		u.Scheme = "ws"
 	}
 	u.Path = "/api/terminal/ws"
+	u.RawQuery = rawQuery
 	return u.String()
 }
 
 // sandboxWSURLForTarget derives the WebSocket URL for a specific sandbox URL.
-func (h *Handler) sandboxWSURLForTarget(targetURL string) string {
-	return sandboxWSURLForBase(targetURL)
+func (h *Handler) sandboxWSURLForTarget(targetURL, rawQuery string) string {
+	return sandboxWSURLForBase(targetURL, rawQuery)
 }
 
 // sandboxWSURLForBase derives the WebSocket URL from an HTTP base URL.
-func sandboxWSURLForBase(baseURL string) string {
+func sandboxWSURLForBase(baseURL, rawQuery string) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return "ws://127.0.0.1:8085/api/ws"
@@ -553,6 +571,7 @@ func sandboxWSURLForBase(baseURL string) string {
 		u.Scheme = "ws"
 	}
 	u.Path = "/api/ws"
+	u.RawQuery = rawQuery
 	return u.String()
 }
 
@@ -561,18 +580,17 @@ func sandboxWSURLForBase(baseURL string) string {
 // to route the user to their assigned VM (VAL-VM-001). When vmctl is not
 // configured, it falls back to the static SandboxURL for backward
 // compatibility.
-func (h *Handler) resolveSandboxURL(ctx interface{}, userID string) (string, error) {
+func (h *Handler) resolveSandboxURL(ctx interface{}, userID, desktopID string) (string, error) {
 	if h.vmctlClient == nil {
 		return h.cfg.SandboxURL, nil
 	}
 
-	resp, err := h.vmctlClient.Resolve(userID)
+	resp, err := h.vmctlClient.ResolveDesktop(userID, desktopID)
 	if err != nil {
-		// If vmctl is unreachable, fall back to the static sandbox URL
-		// rather than failing the request entirely. This provides graceful
-		// degradation if vmctl is temporarily down.
-		log.Printf("proxy: vmctl resolve failed for user %s, using static fallback: %v", userID, err)
-		return h.cfg.SandboxURL, nil
+		return "", err
+	}
+	if !resp.Published {
+		return "", fmt.Errorf("desktop %s is not published", desktopID)
 	}
 
 	return resp.SandboxURL, nil

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/yusefmosiah/go-choir/internal/server"
 )
@@ -17,35 +18,48 @@ type vmctlErrorResponse struct {
 
 // vmctlHealthResponse is the JSON structure for GET /health.
 type vmctlHealthResponse struct {
-	Status       string `json:"status"`
-	Service      string `json:"service"`
-	ActiveVMs    int    `json:"active_vms"`
-	TotalOwnerships int  `json:"total_ownerships"`
+	Status          string `json:"status"`
+	Service         string `json:"service"`
+	ActiveVMs       int    `json:"active_vms"`
+	TotalOwnerships int    `json:"total_ownerships"`
 }
 
 // resolveRequest is the JSON payload for POST /internal/vmctl/resolve.
 type resolveRequest struct {
-	UserID string `json:"user_id"`
+	UserID    string `json:"user_id"`
+	DesktopID string `json:"desktop_id,omitempty"`
 }
 
 // resolveResponse is the JSON response for POST /internal/vmctl/resolve.
 type resolveResponse struct {
-	VMID       string `json:"vm_id"`
-	UserID     string `json:"user_id"`
-	SandboxURL string `json:"sandbox_url"`
-	State      string `json:"state"`
+	VMID            string `json:"vm_id"`
+	UserID          string `json:"user_id"`
+	DesktopID       string `json:"desktop_id"`
+	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
+	Published       bool   `json:"published"`
+	SandboxURL      string `json:"sandbox_url"`
+	State           string `json:"state"`
 }
 
 // ownershipResponse is the JSON response for ownership queries.
 type ownershipResponse struct {
-	VMID         string `json:"vm_id"`
-	UserID       string `json:"user_id"`
-	SandboxURL   string `json:"sandbox_url"`
-	State        string `json:"state"`
-	CreatedAt    string `json:"created_at"`
-	LastActiveAt string `json:"last_active_at"`
-	Epoch        int64  `json:"epoch"`
-	StoppedBy    string `json:"stopped_by,omitempty"`
+	VMID            string `json:"vm_id"`
+	UserID          string `json:"user_id"`
+	DesktopID       string `json:"desktop_id"`
+	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
+	Published       bool   `json:"published"`
+	SandboxURL      string `json:"sandbox_url"`
+	State           string `json:"state"`
+	CreatedAt       string `json:"created_at"`
+	LastActiveAt    string `json:"last_active_at"`
+	Epoch           int64  `json:"epoch"`
+	StoppedBy       string `json:"stopped_by,omitempty"`
+}
+
+type forkDesktopRequest struct {
+	UserID          string `json:"user_id"`
+	SourceDesktopID string `json:"source_desktop_id,omitempty"`
+	TargetDesktopID string `json:"target_desktop_id,omitempty"`
 }
 
 // Handler provides HTTP handlers for the vmctl service.
@@ -113,19 +127,112 @@ func (h *Handler) HandleResolve(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	own, err := h.registry.ResolveOrAssign(req.UserID)
+	own, err := h.registry.ResolveOrAssignDesktop(req.UserID, req.DesktopID)
 	if err != nil {
-		log.Printf("vmctl: resolve failed for user %s: %v", req.UserID, err)
+		log.Printf("vmctl: resolve failed for user %s desktop %s: %v", req.UserID, req.DesktopID, err)
 		writeVMCTLJSON(w, http.StatusInternalServerError, vmctlErrorResponse{Error: "failed to resolve VM"})
 		return
 	}
 
 	writeVMCTLJSON(w, http.StatusOK, resolveResponse{
-		VMID:       own.VMID,
-		UserID:     own.UserID,
-		SandboxURL: own.SandboxURL,
-		State:      string(own.State),
+		VMID:            own.VMID,
+		UserID:          own.UserID,
+		DesktopID:       own.DesktopID,
+		ParentDesktopID: own.ParentDesktopID,
+		Published:       own.Published,
+		SandboxURL:      own.SandboxURL,
+		State:           string(own.State),
+	})
+}
+
+// HandleForkDesktop handles POST /internal/vmctl/fork-desktop.
+// It creates or resumes a distinct interactive VM for the target desktop, with
+// lineage back to the source desktop.
+func (h *Handler) HandleForkDesktop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeVMCTLJSON(w, http.StatusMethodNotAllowed, vmctlErrorResponse{Error: "method not allowed"})
+		return
+	}
+	if !isInternalCaller(r) {
+		writeVMCTLJSON(w, http.StatusForbidden, vmctlErrorResponse{Error: "vmctl control endpoints are not publicly accessible"})
+		return
+	}
+
+	var req forkDesktopRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
+		return
+	}
+	req.SourceDesktopID = normalizeDesktopID(req.SourceDesktopID)
+	req.TargetDesktopID = normalizeDesktopID(req.TargetDesktopID)
+	if req.TargetDesktopID == PrimaryDesktopID {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "target_desktop_id must not be primary"})
+		return
+	}
+
+	own, err := h.registry.ForkDesktop(req.UserID, req.SourceDesktopID, req.TargetDesktopID)
+	if err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: err.Error()})
+		return
+	}
+
+	writeVMCTLJSON(w, http.StatusOK, resolveResponse{
+		VMID:            own.VMID,
+		UserID:          own.UserID,
+		DesktopID:       own.DesktopID,
+		ParentDesktopID: own.ParentDesktopID,
+		Published:       own.Published,
+		SandboxURL:      own.SandboxURL,
+		State:           string(own.State),
+	})
+}
+
+// HandlePublishDesktop handles POST /internal/vmctl/publish-desktop.
+// It marks a background candidate desktop as user-switchable.
+func (h *Handler) HandlePublishDesktop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeVMCTLJSON(w, http.StatusMethodNotAllowed, vmctlErrorResponse{Error: "method not allowed"})
+		return
+	}
+	if !isInternalCaller(r) {
+		writeVMCTLJSON(w, http.StatusForbidden, vmctlErrorResponse{Error: "vmctl control endpoints are not publicly accessible"})
+		return
+	}
+
+	var req resolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
+		return
+	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
+	if req.DesktopID == PrimaryDesktopID {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "primary desktop is already published"})
+		return
+	}
+
+	own, err := h.registry.PublishDesktop(req.UserID, req.DesktopID)
+	if err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: err.Error()})
+		return
+	}
+	writeVMCTLJSON(w, http.StatusOK, resolveResponse{
+		VMID:            own.VMID,
+		UserID:          own.UserID,
+		DesktopID:       own.DesktopID,
+		ParentDesktopID: own.ParentDesktopID,
+		Published:       own.Published,
+		SandboxURL:      own.SandboxURL,
+		State:           string(own.State),
 	})
 }
 
@@ -149,22 +256,26 @@ func (h *Handler) HandleLookup(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id query parameter is required"})
 		return
 	}
+	desktopID := normalizeDesktopID(r.URL.Query().Get("desktop_id"))
 
-	own := h.registry.GetOwnership(userID)
+	own := h.registry.GetOwnershipForDesktop(userID, desktopID)
 	if own == nil {
 		writeVMCTLJSON(w, http.StatusNotFound, vmctlErrorResponse{Error: "no VM found for user"})
 		return
 	}
 
 	writeVMCTLJSON(w, http.StatusOK, ownershipResponse{
-		VMID:         own.VMID,
-		UserID:       own.UserID,
-		SandboxURL:   own.SandboxURL,
-		State:        string(own.State),
-		CreatedAt:    own.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-		LastActiveAt: own.LastActiveAt.Format("2006-01-02T15:04:05.000Z"),
-		Epoch:        own.Epoch,
-		StoppedBy:    own.StoppedBy,
+		VMID:            own.VMID,
+		UserID:          own.UserID,
+		DesktopID:       own.DesktopID,
+		ParentDesktopID: own.ParentDesktopID,
+		Published:       own.Published,
+		SandboxURL:      own.SandboxURL,
+		State:           string(own.State),
+		CreatedAt:       own.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+		LastActiveAt:    own.LastActiveAt.Format("2006-01-02T15:04:05.000Z"),
+		Epoch:           own.Epoch,
+		StoppedBy:       own.StoppedBy,
 	})
 }
 
@@ -193,8 +304,9 @@ func (h *Handler) HandleStop(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	if err := h.registry.StopVM(req.UserID); err != nil {
+	if err := h.registry.StopVMForDesktop(req.UserID, req.DesktopID); err != nil {
 		writeVMCTLJSON(w, http.StatusNotFound, vmctlErrorResponse{Error: err.Error()})
 		return
 	}
@@ -227,8 +339,9 @@ func (h *Handler) HandleRemove(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	_ = h.registry.RemoveOwnership(req.UserID)
+	_ = h.registry.RemoveOwnershipForDesktop(req.UserID, req.DesktopID)
 	writeVMCTLJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
@@ -258,17 +371,19 @@ func (h *Handler) HandleHibernate(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	if err := h.registry.HibernateVM(req.UserID); err != nil {
+	if err := h.registry.HibernateVMForDesktop(req.UserID, req.DesktopID); err != nil {
 		writeVMCTLJSON(w, http.StatusNotFound, vmctlErrorResponse{Error: err.Error()})
 		return
 	}
 
-	own := h.registry.GetOwnership(req.UserID)
+	own := h.registry.GetOwnershipForDesktop(req.UserID, req.DesktopID)
 	writeVMCTLJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "hibernated",
-		"vm_id":  own.VMID,
-		"epoch":  own.Epoch,
+		"status":     "hibernated",
+		"vm_id":      own.VMID,
+		"desktop_id": own.DesktopID,
+		"epoch":      own.Epoch,
 	})
 }
 
@@ -299,8 +414,9 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	own, err := h.registry.ResumeVM(req.UserID)
+	own, err := h.registry.ResumeVMForDesktop(req.UserID, req.DesktopID)
 	if err != nil {
 		writeVMCTLJSON(w, http.StatusNotFound, vmctlErrorResponse{Error: err.Error()})
 		return
@@ -309,6 +425,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 	writeVMCTLJSON(w, http.StatusOK, resolveResponse{
 		VMID:       own.VMID,
 		UserID:     own.UserID,
+		DesktopID:  own.DesktopID,
 		SandboxURL: own.SandboxURL,
 		State:      string(own.State),
 	})
@@ -340,8 +457,9 @@ func (h *Handler) HandleRecover(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	own, err := h.registry.RecoverVM(req.UserID)
+	own, err := h.registry.RecoverVMForDesktop(req.UserID, req.DesktopID)
 	if err != nil {
 		writeVMCTLJSON(w, http.StatusNotFound, vmctlErrorResponse{Error: err.Error()})
 		return
@@ -350,6 +468,7 @@ func (h *Handler) HandleRecover(w http.ResponseWriter, r *http.Request) {
 	writeVMCTLJSON(w, http.StatusOK, resolveResponse{
 		VMID:       own.VMID,
 		UserID:     own.UserID,
+		DesktopID:  own.DesktopID,
 		SandboxURL: own.SandboxURL,
 		State:      string(own.State),
 	})
@@ -381,8 +500,9 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "user_id is required"})
 		return
 	}
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
 
-	_ = h.registry.LogoutVM(req.UserID)
+	_ = h.registry.LogoutVMForDesktop(req.UserID, req.DesktopID)
 	writeVMCTLJSON(w, http.StatusOK, map[string]string{"status": "stopped", "reason": "logout"})
 }
 
@@ -430,6 +550,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 		result = append(result, ownershipResponse{
 			VMID:         own.VMID,
 			UserID:       own.UserID,
+			DesktopID:    own.DesktopID,
 			SandboxURL:   own.SandboxURL,
 			State:        string(own.State),
 			CreatedAt:    own.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -494,6 +615,8 @@ func isInternalCaller(r *http.Request) bool {
 func RegisterRoutes(s *server.Server, h *Handler) {
 	s.SetHealthHandler(h.HandleHealth)
 	s.HandleFunc("/internal/vmctl/resolve", h.HandleResolve)
+	s.HandleFunc("/internal/vmctl/fork-desktop", h.HandleForkDesktop)
+	s.HandleFunc("/internal/vmctl/publish-desktop", h.HandlePublishDesktop)
 	s.HandleFunc("/internal/vmctl/lookup", h.HandleLookup)
 	s.HandleFunc("/internal/vmctl/stop", h.HandleStop)
 	s.HandleFunc("/internal/vmctl/remove", h.HandleRemove)
@@ -515,6 +638,18 @@ func ResolveEndpoint(baseURL string) string {
 // service at the given base URL.
 func LookupEndpoint(baseURL string) string {
 	return baseURL + "/internal/vmctl/lookup"
+}
+
+// ForkDesktopEndpoint returns the full fork-desktop endpoint URL for the vmctl
+// service at the given base URL.
+func ForkDesktopEndpoint(baseURL string) string {
+	return baseURL + "/internal/vmctl/fork-desktop"
+}
+
+// PublishDesktopEndpoint returns the full publish-desktop endpoint URL for the
+// vmctl service at the given base URL.
+func PublishDesktopEndpoint(baseURL string) string {
+	return baseURL + "/internal/vmctl/publish-desktop"
 }
 
 // StopEndpoint returns the full stop endpoint URL for the vmctl

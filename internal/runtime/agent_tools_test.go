@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/yusefmosiah/go-choir/internal/events"
 	"github.com/yusefmosiah/go-choir/internal/store"
+	"github.com/yusefmosiah/go-choir/internal/types"
+	"github.com/yusefmosiah/go-choir/internal/vmctl"
 )
 
 func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
@@ -26,7 +30,7 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	researcher := rt.ToolRegistryForProfile(AgentProfileResearcher)
 	vtext := rt.ToolRegistryForProfile(AgentProfileVText)
 
-	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence"} {
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence", "fork_desktop", "publish_desktop"} {
 		if _, ok := super.Lookup(name); !ok {
 			t.Fatalf("super missing tool %q", name)
 		}
@@ -35,6 +39,12 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 		if _, ok := coSuper.Lookup(name); !ok {
 			t.Fatalf("co-super missing tool %q", name)
 		}
+	}
+	if _, ok := coSuper.Lookup("fork_desktop"); ok {
+		t.Fatalf("co-super should not have fork_desktop")
+	}
+	if _, ok := coSuper.Lookup("publish_desktop"); ok {
+		t.Fatalf("co-super should not have publish_desktop")
 	}
 	for _, name := range []string{"spawn_agent", "cast_agent", "cancel_agent"} {
 		if _, ok := conductor.Lookup(name); !ok {
@@ -280,6 +290,148 @@ func TestDelegationAllowlistsAndEvidenceTools(t *testing.T) {
 	}
 }
 
+func TestSuperForkDesktopClonesStateAndPublishRequestsVM(t *testing.T) {
+	rt, s, cwd := testRuntimeWithTempCWD(t)
+
+	reg := vmctl.NewOwnershipRegistry("http://sandbox.test")
+	sourceOwn, err := reg.ResolveOrAssignDesktop("user-alice", types.PrimaryDesktopID)
+	if err != nil {
+		t.Fatalf("resolve source desktop: %v", err)
+	}
+	handler := vmctl.NewHandler(reg)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/vmctl/fork-desktop", handler.HandleForkDesktop)
+	mux.HandleFunc("/internal/vmctl/publish-desktop", handler.HandlePublishDesktop)
+	vmctlSrv := httptest.NewServer(mux)
+	t.Cleanup(func() { vmctlSrv.Close() })
+
+	rt.cfg.VmctlURL = vmctlSrv.URL
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := s.SaveDesktopStateForDesktop(context.Background(), types.DesktopState{
+		OwnerID:   "user-alice",
+		DesktopID: types.PrimaryDesktopID,
+		Windows: []types.WindowState{
+			{
+				WindowID: "win-vtext",
+				AppID:    "vtext",
+				Title:    "Draft",
+				Geometry: types.WindowGeometry{X: 20, Y: 30, Width: 900, Height: 700},
+				Mode:     types.WindowNormal,
+				ZIndex:   1,
+				AppContext: map[string]any{
+					"doc_id": "doc-1",
+				},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		},
+		ActiveWindowID: "win-vtext",
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("save source desktop state: %v", err)
+	}
+
+	superTask, err := rt.StartRunWithMetadata(context.Background(), "coordinate execution", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileSuper,
+		runMetadataAgentRole:    AgentProfileSuper,
+		runMetadataDesktopID:    types.PrimaryDesktopID,
+	})
+	if err != nil {
+		t.Fatalf("submit super task: %v", err)
+	}
+
+	superRegistry := rt.ToolRegistryForProfile(AgentProfileSuper)
+	raw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), superTask), "fork_desktop", json.RawMessage(`{
+		"desktop_id":"branch-a"
+	}`))
+	if err != nil {
+		t.Fatalf("fork_desktop: %v", err)
+	}
+	var resp struct {
+		Status            string `json:"status"`
+		DesktopID         string `json:"desktop_id"`
+		ParentDesktopID   string `json:"parent_desktop_id"`
+		Published         bool   `json:"published"`
+		Availability      string `json:"availability"`
+		CopiedWindowCount int    `json:"copied_window_count"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode fork_desktop: %v", err)
+	}
+	if resp.Status != "forked_background" {
+		t.Fatalf("status = %q, want forked_background", resp.Status)
+	}
+	if resp.DesktopID != "branch-a" {
+		t.Fatalf("desktop_id = %q, want branch-a", resp.DesktopID)
+	}
+	if resp.ParentDesktopID != types.PrimaryDesktopID {
+		t.Fatalf("parent_desktop_id = %q, want %q", resp.ParentDesktopID, types.PrimaryDesktopID)
+	}
+	if resp.Published {
+		t.Fatal("forked candidate desktop should not be published yet")
+	}
+	if resp.Availability != "background_only" {
+		t.Fatalf("availability = %q, want background_only", resp.Availability)
+	}
+	if resp.CopiedWindowCount != 1 {
+		t.Fatalf("copied_window_count = %d, want 1", resp.CopiedWindowCount)
+	}
+
+	branchOwn := reg.GetOwnershipForDesktop("user-alice", "branch-a")
+	if branchOwn == nil {
+		t.Fatal("expected branch desktop ownership")
+	}
+	if branchOwn.VMID == sourceOwn.VMID {
+		t.Fatalf("expected distinct VM for branch desktop, got %s", branchOwn.VMID)
+	}
+	if branchOwn.ParentDesktopID != types.PrimaryDesktopID {
+		t.Fatalf("branch parent_desktop_id = %q, want %q", branchOwn.ParentDesktopID, types.PrimaryDesktopID)
+	}
+	if branchOwn.Published {
+		t.Fatal("branch desktop should remain unpublished until publish_desktop")
+	}
+
+	branchState, err := s.GetDesktopStateForDesktop(context.Background(), "user-alice", "branch-a")
+	if err != nil {
+		t.Fatalf("get branch desktop state: %v", err)
+	}
+	if len(branchState.Windows) != 1 || branchState.Windows[0].WindowID != "win-vtext" {
+		t.Fatalf("branch windows = %+v", branchState.Windows)
+	}
+	if branchState.ActiveWindowID != "win-vtext" {
+		t.Fatalf("branch active_window_id = %q, want win-vtext", branchState.ActiveWindowID)
+	}
+
+	publishRaw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), superTask), "publish_desktop", json.RawMessage(`{
+		"desktop_id":"branch-a"
+	}`))
+	if err != nil {
+		t.Fatalf("publish_desktop: %v", err)
+	}
+	var publishResp struct {
+		Status     string `json:"status"`
+		DesktopID  string `json:"desktop_id"`
+		Published  bool   `json:"published"`
+		DesktopURL string `json:"desktop_url"`
+	}
+	if err := json.Unmarshal([]byte(publishRaw), &publishResp); err != nil {
+		t.Fatalf("decode publish_desktop: %v", err)
+	}
+	if publishResp.Status != "published" || !publishResp.Published {
+		t.Fatalf("unexpected publish response: %+v", publishResp)
+	}
+	if publishResp.DesktopURL != "/?desktop_id=branch-a" {
+		t.Fatalf("desktop_url = %q", publishResp.DesktopURL)
+	}
+	if !reg.GetOwnershipForDesktop("user-alice", "branch-a").Published {
+		t.Fatal("branch desktop should be published after publish_desktop")
+	}
+}
+
 func TestConductorCanSpawnVTextAndVTextCanSpawnResearcher(t *testing.T) {
 	rt, s, cwd := testRuntimeWithTempCWD(t)
 	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
@@ -498,14 +650,15 @@ func TestResearcherSubmitResearchFindingsPersistsEvidenceAndDedupes(t *testing.T
 	if err != nil {
 		t.Fatalf("list channel messages: %v", err)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("channel messages = %d, want 1", len(messages))
+	var findingsMessage *types.ChannelMessage
+	for i := range messages {
+		if messages[i].ToAgentID == "vtext:doc-1" && strings.Contains(messages[i].Content, resp.EvidenceIDs[0]) {
+			findingsMessage = &messages[i]
+			break
+		}
 	}
-	if messages[0].ToAgentID != "vtext:doc-1" {
-		t.Fatalf("channel message to_agent_id = %q, want %q", messages[0].ToAgentID, "vtext:doc-1")
-	}
-	if !strings.Contains(messages[0].Content, resp.EvidenceIDs[0]) {
-		t.Fatalf("channel message content missing evidence id: %q", messages[0].Content)
+	if findingsMessage == nil {
+		t.Fatalf("expected findings packet in channel messages, got %+v", messages)
 	}
 }
 

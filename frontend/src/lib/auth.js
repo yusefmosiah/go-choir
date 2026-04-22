@@ -1,3 +1,5 @@
+import { withDesktopSelector } from './desktop-selector.js';
+
 /**
  * WebAuthn ceremony helpers for the Svelte app.
  *
@@ -304,7 +306,8 @@ export async function renewSession() {
  * @throws {AuthRequiredError} If the session cannot be renewed.
  */
 export async function fetchWithRenewal(url, options = {}) {
-  const res = await fetch(url, { ...options, credentials: 'include' });
+  const scopedURL = withDesktopSelector(url);
+  const res = await fetch(scopedURL, { ...options, credentials: 'include' });
 
   if (res.status !== 401) {
     return res;
@@ -318,7 +321,7 @@ export async function fetchWithRenewal(url, options = {}) {
   }
 
   // Renewal succeeded — retry the original request with the new cookies.
-  return fetch(url, { ...options, credentials: 'include' });
+  return fetch(scopedURL, { ...options, credentials: 'include' });
 }
 
 // ---------------------------------------------------------------------------

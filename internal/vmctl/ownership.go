@@ -4,7 +4,8 @@
 // onto a single VM assignment (VAL-VM-004).
 //
 // Key invariants:
-//   - Each authenticated user receives exactly one active VM at a time.
+//   - Each authenticated user/desktop pair receives exactly one active
+//     interactive VM at a time.
 //   - Different users receive distinct VMs with isolated state (VAL-VM-005).
 //   - Concurrent first requests for one user converge on one assignment (VAL-VM-004).
 //   - VM control endpoints are internal-only (VAL-VM-012).
@@ -58,6 +59,10 @@ const (
 
 	// VMStateFailed means the VM failed to start or has crashed.
 	VMStateFailed VMState = "failed"
+
+	// PrimaryDesktopID is the default desktop/workspace selector used when the
+	// caller does not explicitly target a branch desktop.
+	PrimaryDesktopID = "primary"
 )
 
 // VMOwnership represents the assignment of a user to a specific VM.
@@ -67,6 +72,18 @@ type VMOwnership struct {
 
 	// UserID is the authenticated user who owns this VM.
 	UserID string `json:"user_id"`
+
+	// DesktopID is the desktop/workspace selector this interactive VM belongs to.
+	DesktopID string `json:"desktop_id"`
+
+	// ParentDesktopID records the source desktop when this desktop was forked
+	// from another interactive desktop.
+	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
+
+	// Published indicates whether this desktop is user-switchable through the
+	// normal browser/proxy routing path. Background candidate desktops stay
+	// unpublished until explicitly published by the control plane.
+	Published bool `json:"published"`
 
 	// SandboxURL is the URL where this VM's sandbox runtime is reachable.
 	SandboxURL string `json:"sandbox_url"`
@@ -169,15 +186,15 @@ type VMInstanceInfo struct {
 type OwnershipRegistry struct {
 	mu sync.RWMutex
 
-	// ownerships maps user ID to their active VM ownership.
+	// ownerships maps user/desktop composite keys to their active VM ownership.
 	ownerships map[string]*VMOwnership
 
 	// vmByID maps VM ID to ownership for reverse lookup.
 	vmByID map[string]*VMOwnership
 
-	// pendingWaiters maps user IDs to channels that concurrent callers
-	// wait on when a VM assignment is already in progress. This collapses
-	// concurrent first requests (VAL-VM-004).
+	// pendingWaiters maps user/desktop composite keys to channels that concurrent
+	// callers wait on when a VM assignment is already in progress. This
+	// collapses concurrent first requests (VAL-VM-004).
 	pendingWaiters map[string][]chan *VMOwnership
 
 	// sandboxURLBase is the base URL pattern for sandbox runtimes.
@@ -258,6 +275,18 @@ func (r *OwnershipRegistry) nextEpoch() int64 {
 	return r.epochCounter
 }
 
+func normalizeDesktopID(desktopID string) string {
+	desktopID = strings.TrimSpace(desktopID)
+	if desktopID == "" {
+		return PrimaryDesktopID
+	}
+	return desktopID
+}
+
+func ownershipKey(userID, desktopID string) string {
+	return strings.TrimSpace(userID) + "|" + normalizeDesktopID(desktopID)
+}
+
 // issueGatewayToken requests a gateway credential token for the given
 // sandbox ID by calling the gateway's credential issuance endpoint.
 // Returns the raw token string or an empty string on failure.
@@ -316,19 +345,23 @@ func (r *OwnershipRegistry) issueGatewayToken(sandboxID string) string {
 	return result.RawToken
 }
 
-// ResolveOrAssign resolves the VM ownership for the given user. If the user
-// already has an active or booting VM, it is returned. If not, a new VM is
-// assigned. If a VM assignment is already in progress for this user, the
-// caller waits and receives the same result (VAL-VM-004).
-//
-// This method is safe for concurrent use. Multiple goroutines calling
-// ResolveOrAssign for the same user simultaneously will all receive the
-// same VMOwnership, and exactly one VM is created.
+// ResolveOrAssign resolves the VM ownership for the primary desktop of the
+// given user.
 func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error) {
+	return r.ResolveOrAssignDesktop(userID, PrimaryDesktopID)
+}
+
+// ResolveOrAssignDesktop resolves the VM ownership for the given user/desktop
+// pair. If the desktop already has an active or booting VM, it is returned. If
+// not, a new VM is assigned. Concurrent first requests for the same
+// user/desktop pair collapse onto one assignment.
+func (r *OwnershipRegistry) ResolveOrAssignDesktop(userID, desktopID string) (*VMOwnership, error) {
+	desktopID = normalizeDesktopID(desktopID)
+	key := ownershipKey(userID, desktopID)
 	r.mu.Lock()
 
-	// Check if user already has an active ownership.
-	if own, ok := r.ownerships[userID]; ok {
+	// Check if the desktop already has an active ownership.
+	if own, ok := r.ownerships[key]; ok {
 		if own.IsReady() {
 			own.LastActiveAt = time.Now()
 			r.mu.Unlock()
@@ -359,7 +392,7 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 			own.LastActiveAt = time.Now()
 			own.StoppedBy = ""
 			r.mu.Unlock()
-			log.Printf("vmctl: resumed VM %s for user %s on resolve (epoch=%d)", own.VMID, userID, own.Epoch)
+			log.Printf("vmctl: resumed VM %s for user %s desktop %s on resolve (epoch=%d)", own.VMID, userID, desktopID, own.Epoch)
 			return own, nil
 		}
 
@@ -368,41 +401,40 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 		delete(r.vmByID, own.VMID)
 	}
 
-	// Check if a VM assignment is already in progress for this user.
-	if waiters, ok := r.pendingWaiters[userID]; ok && len(waiters) > 0 {
-		// Another goroutine is already assigning a VM for this user.
-		// Wait for it to complete.
+	// Check if a VM assignment is already in progress for this user/desktop.
+	if waiters, ok := r.pendingWaiters[key]; ok && len(waiters) > 0 {
 		ch := make(chan *VMOwnership, 1)
-		r.pendingWaiters[userID] = append(waiters, ch)
+		r.pendingWaiters[key] = append(waiters, ch)
 		r.mu.Unlock()
 
-		// Wait for the assignment to complete.
 		own := <-ch
 		if own == nil {
-			return nil, fmt.Errorf("vm assignment failed for user %s", userID)
+			return nil, fmt.Errorf("vm assignment failed for user %s desktop %s", userID, desktopID)
 		}
 		return own, nil
 	}
 
-	// We are the first caller for this user. Create a new VM.
+	// We are the first caller for this user/desktop pair. Create a new VM.
 	vmID := generateVMID()
 	epoch := r.nextEpoch()
 
 	own := &VMOwnership{
 		VMID:         vmID,
 		UserID:       userID,
+		DesktopID:    desktopID,
 		SandboxURL:   r.sandboxURLForVM(vmID),
 		State:        VMStateBooting,
 		CreatedAt:    time.Now(),
 		LastActiveAt: time.Now(),
 		Epoch:        epoch,
+		Published:    true,
 	}
 
 	// Register pending waiters map before unlocking so other callers can find it.
-	r.pendingWaiters[userID] = nil
+	r.pendingWaiters[key] = nil
 
 	// Store the ownership immediately in booting state.
-	r.ownerships[userID] = own
+	r.ownerships[key] = own
 	r.vmByID[vmID] = own
 
 	// Check if we have a real Firecracker VM manager.
@@ -428,8 +460,8 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 			log.Printf("vmctl: Firecracker boot failed for VM %s: %v", vmID, err)
 			r.mu.Lock()
 			own.State = VMStateFailed
-			waiters := r.pendingWaiters[userID]
-			delete(r.pendingWaiters, userID)
+			waiters := r.pendingWaiters[key]
+			delete(r.pendingWaiters, key)
 			r.mu.Unlock()
 			for _, ch := range waiters {
 				ch <- nil
@@ -448,24 +480,78 @@ func (r *OwnershipRegistry) ResolveOrAssign(userID string) (*VMOwnership, error)
 
 	// Notify any waiters.
 	r.mu.Lock()
-	waiters := r.pendingWaiters[userID]
-	delete(r.pendingWaiters, userID)
+	waiters := r.pendingWaiters[key]
+	delete(r.pendingWaiters, key)
 	r.mu.Unlock()
 
 	for _, ch := range waiters {
 		ch <- own
 	}
 
-	log.Printf("vmctl: assigned VM %s to user %s", vmID, userID)
+	log.Printf("vmctl: assigned VM %s to user %s desktop %s", vmID, userID, desktopID)
 
 	return own, nil
 }
 
-// GetOwnership returns the current ownership for a user, or nil if none exists.
+// ForkDesktop creates or resumes a distinct interactive VM for a target desktop
+// derived from an existing source desktop. The target desktop must differ from
+// the source desktop and the source desktop must already exist.
+func (r *OwnershipRegistry) ForkDesktop(userID, sourceDesktopID, targetDesktopID string) (*VMOwnership, error) {
+	sourceDesktopID = normalizeDesktopID(sourceDesktopID)
+	targetDesktopID = normalizeDesktopID(targetDesktopID)
+	if sourceDesktopID == targetDesktopID {
+		return nil, fmt.Errorf("target desktop must differ from source desktop")
+	}
+
+	r.mu.RLock()
+	source := r.ownerships[ownershipKey(userID, sourceDesktopID)]
+	r.mu.RUnlock()
+	if source == nil {
+		return nil, fmt.Errorf("no source VM found for user %s desktop %s", userID, sourceDesktopID)
+	}
+
+	own, err := r.ResolveOrAssignDesktop(userID, targetDesktopID)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	own.ParentDesktopID = sourceDesktopID
+	own.LastActiveAt = time.Now()
+	own.Published = false
+	r.mu.Unlock()
+
+	log.Printf("vmctl: forked desktop %s from %s for user %s onto VM %s", targetDesktopID, sourceDesktopID, userID, own.VMID)
+	return own, nil
+}
+
+// PublishDesktop marks a background candidate desktop as user-switchable.
+func (r *OwnershipRegistry) PublishDesktop(userID, desktopID string) (*VMOwnership, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
+	if !ok {
+		return nil, fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
+	}
+	own.Published = true
+	own.LastActiveAt = time.Now()
+	log.Printf("vmctl: published desktop %s for user %s on VM %s", own.DesktopID, userID, own.VMID)
+	return own, nil
+}
+
+// GetOwnership returns the current ownership for a user's primary desktop, or
+// nil if none exists.
 func (r *OwnershipRegistry) GetOwnership(userID string) *VMOwnership {
+	return r.GetOwnershipForDesktop(userID, PrimaryDesktopID)
+}
+
+// GetOwnershipForDesktop returns the current ownership for a specific
+// user/desktop pair, or nil if none exists.
+func (r *OwnershipRegistry) GetOwnershipForDesktop(userID, desktopID string) *VMOwnership {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.ownerships[userID]
+	return r.ownerships[ownershipKey(userID, desktopID)]
 }
 
 // GetOwnershipByVMID returns the ownership for a specific VM ID, or nil.
@@ -487,15 +573,21 @@ func (r *OwnershipRegistry) ListOwnerships() []*VMOwnership {
 	return result
 }
 
-// StopVM stops the VM for the given user, transitioning it to stopped state.
-// Returns the ownership or an error if no VM exists for the user.
+// StopVM stops the VM for the given user's primary desktop.
 func (r *OwnershipRegistry) StopVM(userID string) error {
+	return r.StopVMForDesktop(userID, PrimaryDesktopID)
+}
+
+// StopVMForDesktop stops the VM for the given user/desktop pair,
+// transitioning it to stopped state.
+func (r *OwnershipRegistry) StopVMForDesktop(userID, desktopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	key := ownershipKey(userID, desktopID)
+	own, ok := r.ownerships[key]
 	if !ok {
-		return fmt.Errorf("no VM found for user %s", userID)
+		return fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
 	}
 
 	// Delegate to the real VM manager if available.
@@ -505,17 +597,24 @@ func (r *OwnershipRegistry) StopVM(userID string) error {
 
 	own.State = VMStateStopped
 	own.LastActiveAt = time.Now()
-	log.Printf("vmctl: stopped VM %s for user %s", own.VMID, userID)
+	log.Printf("vmctl: stopped VM %s for user %s desktop %s", own.VMID, userID, own.DesktopID)
 	return nil
 }
 
-// RemoveOwnership removes the ownership for a user entirely (e.g., after
-// logout). The VM is stopped and the mappings are cleaned up.
+// RemoveOwnership removes the ownership for a user's primary desktop.
 func (r *OwnershipRegistry) RemoveOwnership(userID string) error {
+	return r.RemoveOwnershipForDesktop(userID, PrimaryDesktopID)
+}
+
+// RemoveOwnershipForDesktop removes the ownership for a specific user/desktop
+// pair entirely (e.g. after logout). The VM is stopped and the mappings are
+// cleaned up.
+func (r *OwnershipRegistry) RemoveOwnershipForDesktop(userID, desktopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	key := ownershipKey(userID, desktopID)
+	own, ok := r.ownerships[key]
 	if !ok {
 		return nil // already gone, idempotent
 	}
@@ -526,25 +625,31 @@ func (r *OwnershipRegistry) RemoveOwnership(userID string) error {
 	}
 
 	own.State = VMStateStopped
-	delete(r.ownerships, userID)
+	delete(r.ownerships, key)
 	delete(r.vmByID, own.VMID)
-	log.Printf("vmctl: removed VM %s ownership for user %s", own.VMID, userID)
+	log.Printf("vmctl: removed VM %s ownership for user %s desktop %s", own.VMID, userID, own.DesktopID)
 	return nil
 }
 
-// MarkUnhealthy marks the VM for the given user as degraded/failed.
+// MarkUnhealthy marks the VM for the given user's primary desktop as degraded.
 func (r *OwnershipRegistry) MarkUnhealthy(userID string) error {
+	return r.MarkUnhealthyForDesktop(userID, PrimaryDesktopID)
+}
+
+// MarkUnhealthyForDesktop marks the VM for the given user/desktop pair as
+// degraded.
+func (r *OwnershipRegistry) MarkUnhealthyForDesktop(userID, desktopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
 	if !ok {
-		return fmt.Errorf("no VM found for user %s", userID)
+		return fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
 	}
 
 	own.State = VMStateDegraded
 	own.LastActiveAt = time.Now()
-	log.Printf("vmctl: marked VM %s unhealthy for user %s", own.VMID, userID)
+	log.Printf("vmctl: marked VM %s unhealthy for user %s desktop %s", own.VMID, userID, own.DesktopID)
 	return nil
 }
 
@@ -555,12 +660,16 @@ func (r *OwnershipRegistry) MarkUnhealthy(userID string) error {
 // The epoch does NOT change on hibernate; it will stay the same on resume,
 // allowing callers to distinguish fresh boot from resume (VAL-CROSS-117).
 func (r *OwnershipRegistry) HibernateVM(userID string) error {
+	return r.HibernateVMForDesktop(userID, PrimaryDesktopID)
+}
+
+func (r *OwnershipRegistry) HibernateVMForDesktop(userID, desktopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
 	if !ok {
-		return fmt.Errorf("no VM found for user %s", userID)
+		return fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
 	}
 
 	if own.State != VMStateActive && own.State != VMStateDegraded {
@@ -575,7 +684,7 @@ func (r *OwnershipRegistry) HibernateVM(userID string) error {
 	own.State = VMStateHibernated
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = "idle"
-	log.Printf("vmctl: hibernated VM %s for user %s (epoch=%d)", own.VMID, userID, own.Epoch)
+	log.Printf("vmctl: hibernated VM %s for user %s desktop %s (epoch=%d)", own.VMID, userID, own.DesktopID, own.Epoch)
 	return nil
 }
 
@@ -586,12 +695,16 @@ func (r *OwnershipRegistry) HibernateVM(userID string) error {
 // this is a resume rather than a fresh boot. This prevents duplicate
 // canonical effects (VAL-CROSS-117).
 func (r *OwnershipRegistry) ResumeVM(userID string) (*VMOwnership, error) {
+	return r.ResumeVMForDesktop(userID, PrimaryDesktopID)
+}
+
+func (r *OwnershipRegistry) ResumeVMForDesktop(userID, desktopID string) (*VMOwnership, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
 	if !ok {
-		return nil, fmt.Errorf("no VM found for user %s", userID)
+		return nil, fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
 	}
 
 	if own.State != VMStateStopped && own.State != VMStateHibernated {
@@ -617,7 +730,7 @@ func (r *OwnershipRegistry) ResumeVM(userID string) (*VMOwnership, error) {
 	own.State = VMStateActive
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = ""
-	log.Printf("vmctl: resumed VM %s for user %s (epoch=%d, same-epoch=resume)", own.VMID, userID, own.Epoch)
+	log.Printf("vmctl: resumed VM %s for user %s desktop %s (epoch=%d, same-epoch=resume)", own.VMID, userID, own.DesktopID, own.Epoch)
 	return own, nil
 }
 
@@ -629,12 +742,16 @@ func (r *OwnershipRegistry) ResumeVM(userID string) (*VMOwnership, error) {
 // The persistent user data is preserved across recovery so the user's
 // state survives the crash (VAL-CROSS-116).
 func (r *OwnershipRegistry) RecoverVM(userID string) (*VMOwnership, error) {
+	return r.RecoverVMForDesktop(userID, PrimaryDesktopID)
+}
+
+func (r *OwnershipRegistry) RecoverVMForDesktop(userID, desktopID string) (*VMOwnership, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
 	if !ok {
-		return nil, fmt.Errorf("no VM found for user %s", userID)
+		return nil, fmt.Errorf("no VM found for user %s desktop %s", userID, normalizeDesktopID(desktopID))
 	}
 
 	if own.State != VMStateDegraded && own.State != VMStateFailed {
@@ -658,7 +775,7 @@ func (r *OwnershipRegistry) RecoverVM(userID string) (*VMOwnership, error) {
 	own.State = VMStateActive
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = ""
-	log.Printf("vmctl: recovered VM %s for user %s (new_epoch=%d, fresh-boot)", own.VMID, userID, own.Epoch)
+	log.Printf("vmctl: recovered VM %s for user %s desktop %s (new_epoch=%d, fresh-boot)", own.VMID, userID, own.DesktopID, own.Epoch)
 	return own, nil
 }
 
@@ -666,10 +783,14 @@ func (r *OwnershipRegistry) RecoverVM(userID string) (*VMOwnership, error) {
 // only the current user's VM to stopped state (VAL-VM-008).
 // Other users' VMs are not affected.
 func (r *OwnershipRegistry) LogoutVM(userID string) error {
+	return r.LogoutVMForDesktop(userID, PrimaryDesktopID)
+}
+
+func (r *OwnershipRegistry) LogoutVMForDesktop(userID, desktopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	own, ok := r.ownerships[userID]
+	own, ok := r.ownerships[ownershipKey(userID, desktopID)]
 	if !ok {
 		return nil // no VM for this user, idempotent
 	}
@@ -682,14 +803,26 @@ func (r *OwnershipRegistry) LogoutVM(userID string) error {
 	own.State = VMStateStopped
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = "logout"
-	log.Printf("vmctl: stopped VM %s for user %s (reason=logout)", own.VMID, userID)
+	log.Printf("vmctl: stopped VM %s for user %s desktop %s (reason=logout)", own.VMID, userID, own.DesktopID)
 	return nil
 }
 
-// CheckIdleVMs returns the user IDs whose VMs have exceeded the idle
-// timeout and should be stopped or hibernated (VAL-VM-008).
-// Only VMs in active state are considered.
+// CheckIdleVMs returns legacy user IDs for idle primary desktops only.
+// Multi-desktop callers should use CheckIdleOwnerships.
 func (r *OwnershipRegistry) CheckIdleVMs() []string {
+	owns := r.CheckIdleOwnerships()
+	idle := make([]string, 0, len(owns))
+	for _, own := range owns {
+		if own != nil && own.DesktopID == PrimaryDesktopID {
+			idle = append(idle, own.UserID)
+		}
+	}
+	return idle
+}
+
+// CheckIdleOwnerships returns idle ownership records whose VMs have exceeded
+// the idle timeout and should be stopped or hibernated.
+func (r *OwnershipRegistry) CheckIdleOwnerships() []*VMOwnership {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -697,11 +830,11 @@ func (r *OwnershipRegistry) CheckIdleVMs() []string {
 		return nil
 	}
 
-	var idle []string
+	var idle []*VMOwnership
 	now := time.Now()
-	for userID, own := range r.ownerships {
+	for _, own := range r.ownerships {
 		if own.State == VMStateActive && now.Sub(own.LastActiveAt) > r.idleTimeout {
-			idle = append(idle, userID)
+			idle = append(idle, own)
 		}
 	}
 	return idle
@@ -710,10 +843,13 @@ func (r *OwnershipRegistry) CheckIdleVMs() []string {
 // StopIdleVMs transitions all idle VMs to hibernated state.
 // Returns the number of VMs that were stopped (VAL-VM-008).
 func (r *OwnershipRegistry) StopIdleVMs() int {
-	idleUsers := r.CheckIdleVMs()
+	idleOwnerships := r.CheckIdleOwnerships()
 	stopped := 0
-	for _, userID := range idleUsers {
-		if err := r.HibernateVM(userID); err == nil {
+	for _, own := range idleOwnerships {
+		if own == nil {
+			continue
+		}
+		if err := r.HibernateVMForDesktop(own.UserID, own.DesktopID); err == nil {
 			stopped++
 		}
 	}

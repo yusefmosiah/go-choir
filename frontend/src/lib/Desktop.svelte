@@ -24,6 +24,7 @@
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
   import { submitConductorPrompt, waitForConductorDecision } from './conductor.js';
   import { fetchDesktopState, saveDesktopState } from './desktop.js';
+  import { withDesktopSelector } from './desktop-selector.js';
   import FloatingDesktopIcons from './FloatingDesktopIcons.svelte';
   import BottomBar from './BottomBar.svelte';
   import FloatingWindow from './FloatingWindow.svelte';
@@ -223,7 +224,7 @@
     liveStatus.set('connecting');
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+      const wsUrl = withDesktopSelector(`${protocol}//${window.location.host}/api/ws`);
       ws = new WebSocket(wsUrl);
       ws.onopen = () => {
         liveStatus.set('connected');

@@ -146,6 +146,33 @@ func TestHandleRunSubmissionPreservesMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleRunSubmissionInjectsDesktopIDFromRequest(t *testing.T) {
+	rt, handler := testAPISetup(t)
+
+	body := `{"prompt":"fork this desktop later","metadata":{"agent_profile":"super","agent_role":"super"}}`
+	req := authenticatedRequest(http.MethodPost, "/api/agent/loop?desktop_id=branch-a", body, "user-alice")
+	w := httptest.NewRecorder()
+
+	handler.HandleRunSubmission(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	var resp runSubmitResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	rec, err := rt.GetRun(context.Background(), resp.RunID, "user-alice")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got, _ := rec.Metadata[runMetadataDesktopID].(string); got != "branch-a" {
+		t.Fatalf("desktop_id: got %q, want %q", got, "branch-a")
+	}
+}
+
 func TestHandleRunListOwnerScoped(t *testing.T) {
 	rt, handler := testAPISetup(t)
 

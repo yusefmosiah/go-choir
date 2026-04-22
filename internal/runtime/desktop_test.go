@@ -234,3 +234,67 @@ func TestDesktopStateRouterMethodDispatch(t *testing.T) {
 		t.Errorf("GET status = %d, want %d", w3.Code, http.StatusOK)
 	}
 }
+
+func TestDesktopStateSaveAndGetByDesktopSelector(t *testing.T) {
+	_, h := testAPISetup(t)
+
+	saveReq := desktopStateSaveRequest{
+		Windows: []types.WindowState{
+			{
+				WindowID: "win-branch",
+				AppID:    "vtext",
+				Title:    "Branch desktop",
+				Geometry: types.WindowGeometry{X: 50, Y: 60, Width: 700, Height: 500},
+				Mode:     types.WindowNormal,
+				ZIndex:   1,
+			},
+		},
+		ActiveWindowID: "win-branch",
+	}
+
+	body, _ := json.Marshal(saveReq)
+	save := httptest.NewRequest(http.MethodPut, "/api/desktop/state?desktop_id=branch-a", bytesReader(body))
+	save.Header.Set("X-Authenticated-User", "user-1")
+	save.Header.Set("Content-Type", "application/json")
+	saveW := httptest.NewRecorder()
+	h.HandleDesktopStateSave(saveW, save)
+	if saveW.Code != http.StatusOK {
+		t.Fatalf("save status = %d, want %d", saveW.Code, http.StatusOK)
+	}
+
+	getBranch := httptest.NewRequest(http.MethodGet, "/api/desktop/state?desktop_id=branch-a", nil)
+	getBranch.Header.Set("X-Authenticated-User", "user-1")
+	getBranchW := httptest.NewRecorder()
+	h.HandleDesktopStateGet(getBranchW, getBranch)
+	if getBranchW.Code != http.StatusOK {
+		t.Fatalf("branch get status = %d, want %d", getBranchW.Code, http.StatusOK)
+	}
+	var branchResp desktopStateGetResponse
+	if err := json.NewDecoder(getBranchW.Body).Decode(&branchResp); err != nil {
+		t.Fatalf("decode branch response: %v", err)
+	}
+	if branchResp.DesktopID != "branch-a" {
+		t.Errorf("branch DesktopID = %q, want %q", branchResp.DesktopID, "branch-a")
+	}
+	if len(branchResp.Windows) != 1 || branchResp.Windows[0].WindowID != "win-branch" {
+		t.Fatalf("branch desktop windows mismatch: %+v", branchResp.Windows)
+	}
+
+	getPrimary := httptest.NewRequest(http.MethodGet, "/api/desktop/state", nil)
+	getPrimary.Header.Set("X-Authenticated-User", "user-1")
+	getPrimaryW := httptest.NewRecorder()
+	h.HandleDesktopStateGet(getPrimaryW, getPrimary)
+	if getPrimaryW.Code != http.StatusOK {
+		t.Fatalf("primary get status = %d, want %d", getPrimaryW.Code, http.StatusOK)
+	}
+	var primaryResp desktopStateGetResponse
+	if err := json.NewDecoder(getPrimaryW.Body).Decode(&primaryResp); err != nil {
+		t.Fatalf("decode primary response: %v", err)
+	}
+	if primaryResp.DesktopID != types.PrimaryDesktopID {
+		t.Errorf("primary DesktopID = %q, want %q", primaryResp.DesktopID, types.PrimaryDesktopID)
+	}
+	if len(primaryResp.Windows) != 0 {
+		t.Fatalf("expected empty primary desktop state, got %+v", primaryResp.Windows)
+	}
+}

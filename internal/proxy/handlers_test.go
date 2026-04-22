@@ -2179,6 +2179,8 @@ func testVMctlProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Se
 
 	vmctlMux := http.NewServeMux()
 	vmctlMux.HandleFunc("/internal/vmctl/resolve", vmctlHandler.HandleResolve)
+	vmctlMux.HandleFunc("/internal/vmctl/fork-desktop", vmctlHandler.HandleForkDesktop)
+	vmctlMux.HandleFunc("/internal/vmctl/publish-desktop", vmctlHandler.HandlePublishDesktop)
 	vmctlMux.HandleFunc("/internal/vmctl/lookup", vmctlHandler.HandleLookup)
 	vmctlMux.HandleFunc("/internal/vmctl/list", vmctlHandler.HandleList)
 
@@ -2271,6 +2273,64 @@ func TestVMctlRouting_DifferentUsersGetDifferentVMs(t *testing.T) {
 	}
 	if lookup1.VMID == lookup2.VMID {
 		t.Error("expected different VM IDs for different users (VAL-VM-005)")
+	}
+}
+
+func TestVMctlRouting_SameUserDifferentDesktopsGetDifferentVMs(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+
+	accessToken := issueTestAccessJWT(priv, "alice")
+
+	reqA := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap?desktop_id=primary", nil)
+	reqA.Header.Set("Cookie", "choir_access="+accessToken)
+	wA := httptest.NewRecorder()
+	handler.HandleBootstrap(wA, reqA)
+
+	reqB := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap?desktop_id=branch-a", nil)
+	reqB.Header.Set("Cookie", "choir_access="+accessToken)
+	wB := httptest.NewRecorder()
+	handler.HandleBootstrap(wB, reqB)
+
+	if wA.Code != http.StatusOK || wB.Code != http.StatusOK {
+		t.Fatalf("expected both 200, got %d and %d", wA.Code, wB.Code)
+	}
+
+	client := vmctl.NewClient(vmctlSrv.URL)
+	primary, err := client.LookupDesktop("alice", vmctl.PrimaryDesktopID)
+	if err != nil {
+		t.Fatalf("LookupDesktop primary: %v", err)
+	}
+	branch, err := client.LookupDesktop("alice", "branch-a")
+	if err != nil {
+		t.Fatalf("LookupDesktop branch: %v", err)
+	}
+	if primary == nil || branch == nil {
+		t.Fatalf("expected ownerships for both desktops, got primary=%+v branch=%+v", primary, branch)
+	}
+	if primary.VMID == branch.VMID {
+		t.Fatalf("expected different VM IDs per desktop, got %s", primary.VMID)
+	}
+}
+
+func TestVMctlRouting_UnpublishedDesktopRejected(t *testing.T) {
+	handler, priv, _, vmctlSrv := testVMctlProxyEnv(t)
+
+	client := vmctl.NewClient(vmctlSrv.URL)
+	if _, err := client.ResolveDesktop("alice", vmctl.PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveDesktop primary: %v", err)
+	}
+	if _, err := client.ForkDesktop("alice", vmctl.PrimaryDesktopID, "branch-a"); err != nil {
+		t.Fatalf("ForkDesktop branch-a: %v", err)
+	}
+
+	accessToken := issueTestAccessJWT(priv, "alice")
+	req := httptest.NewRequest(http.MethodGet, "/api/shell/bootstrap?desktop_id=branch-a", nil)
+	req.Header.Set("Cookie", "choir_access="+accessToken)
+	w := httptest.NewRecorder()
+	handler.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for unpublished desktop, got %d", w.Code)
 	}
 }
 
@@ -2460,17 +2520,10 @@ func TestVMctlRouting_GracefulDegradation(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.HandleBootstrap(w, req)
 
-	// Should still succeed by falling back to static sandbox URL.
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 with fallback, got %d", w.Code)
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode result: %v", err)
-	}
-	if result["sandbox_id"] != "sandbox-fallback" {
-		t.Errorf("expected fallback sandbox, got %v", result["sandbox_id"])
+	// Multi-desktop routing must fail closed. Falling back to a different sandbox
+	// would land the user on the wrong desktop.
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 when vmctl is unavailable, got %d", w.Code)
 	}
 }
 

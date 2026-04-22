@@ -23,6 +23,7 @@
 -->
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { withDesktopSelector } from './desktop-selector.js';
   import {
     createTerminalSession,
     updateTerminalSession,
@@ -137,7 +138,7 @@
 
       // Connect WebSocket to PTY backend
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws`;
+      const wsUrl = withDesktopSelector(`${protocol}//${window.location.host}/api/terminal/ws`);
       const ws = new WebSocket(wsUrl);
 
       // Protocol uses text-based JSON messages (not binary).

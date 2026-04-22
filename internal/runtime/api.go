@@ -196,6 +196,10 @@ func (h *APIHandler) HandleRunSubmission(w http.ResponseWriter, r *http.Request)
 		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "prompt is required"})
 		return
 	}
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]any)
+	}
+	req.Metadata[runMetadataDesktopID] = requestDesktopID(r)
 
 	rec, err := h.rt.StartRunWithMetadata(r.Context(), req.Prompt, ownerID, req.Metadata)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/yusefmosiah/go-choir/internal/types"
@@ -16,6 +17,7 @@ import (
 // desktopStateGetResponse is the JSON response for GET /api/desktop/state.
 type desktopStateGetResponse struct {
 	OwnerID        string               `json:"owner_id"`
+	DesktopID      string               `json:"desktop_id"`
 	Windows        []types.WindowState  `json:"windows"`
 	ActiveWindowID string               `json:"active_window_id,omitempty"`
 	UpdatedAt      string               `json:"updated_at"`
@@ -30,7 +32,21 @@ type desktopStateSaveRequest struct {
 // desktopStateSaveResponse is the JSON response for PUT /api/desktop/state.
 type desktopStateSaveResponse struct {
 	OK        bool   `json:"ok"`
+	DesktopID string `json:"desktop_id"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+func requestDesktopID(r *http.Request) string {
+	if r == nil {
+		return types.PrimaryDesktopID
+	}
+	if desktopID := strings.TrimSpace(r.URL.Query().Get("desktop_id")); desktopID != "" {
+		return desktopID
+	}
+	if desktopID := strings.TrimSpace(r.Header.Get("X-Choir-Desktop")); desktopID != "" {
+		return desktopID
+	}
+	return types.PrimaryDesktopID
 }
 
 // HandleDesktopStateGet handles GET /api/desktop/state.
@@ -48,8 +64,9 @@ func (h *APIHandler) HandleDesktopStateGet(w http.ResponseWriter, r *http.Reques
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
 		return
 	}
+	desktopID := requestDesktopID(r)
 
-	state, err := h.rt.Store().GetDesktopState(r.Context(), ownerID)
+	state, err := h.rt.Store().GetDesktopStateForDesktop(r.Context(), ownerID, desktopID)
 	if err != nil {
 		log.Printf("runtime api: get desktop state: %v", err)
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to get desktop state"})
@@ -58,6 +75,7 @@ func (h *APIHandler) HandleDesktopStateGet(w http.ResponseWriter, r *http.Reques
 
 	writeAPIJSON(w, http.StatusOK, desktopStateGetResponse{
 		OwnerID:        state.OwnerID,
+		DesktopID:      state.DesktopID,
 		Windows:        state.Windows,
 		ActiveWindowID: state.ActiveWindowID,
 		UpdatedAt:      state.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
@@ -80,6 +98,7 @@ func (h *APIHandler) HandleDesktopStateSave(w http.ResponseWriter, r *http.Reque
 		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
 		return
 	}
+	desktopID := requestDesktopID(r)
 
 	var req desktopStateSaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -91,6 +110,7 @@ func (h *APIHandler) HandleDesktopStateSave(w http.ResponseWriter, r *http.Reque
 
 	state := types.DesktopState{
 		OwnerID:        ownerID,
+		DesktopID:      desktopID,
 		Windows:        req.Windows,
 		ActiveWindowID: req.ActiveWindowID,
 		UpdatedAt:      now,
@@ -104,6 +124,7 @@ func (h *APIHandler) HandleDesktopStateSave(w http.ResponseWriter, r *http.Reque
 
 	writeAPIJSON(w, http.StatusOK, desktopStateSaveResponse{
 		OK:        true,
+		DesktopID: desktopID,
 		UpdatedAt: now.Format("2006-01-02T15:04:05.000Z"),
 	})
 }

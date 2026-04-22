@@ -16,6 +16,12 @@ package types
 
 import "time"
 
+const (
+	// PrimaryDesktopID is the default desktop/workspace selector used when the
+	// caller does not explicitly target a branch desktop.
+	PrimaryDesktopID = "primary"
+)
+
 // WindowMode represents the display mode of a desktop window.
 type WindowMode string
 
@@ -99,6 +105,10 @@ type WindowState struct {
 type DesktopState struct {
 	// OwnerID is the authenticated user who owns this desktop state.
 	OwnerID string `json:"owner_id"`
+
+	// DesktopID is the user-visible desktop/workspace selector. A user may own
+	// multiple desktops concurrently; each desktop has independent layout state.
+	DesktopID string `json:"desktop_id"`
 
 	// Windows is the list of open windows.
 	Windows []WindowState `json:"windows"`

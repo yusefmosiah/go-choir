@@ -48,6 +48,7 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { fetchWithRenewal, AuthRequiredError, renewSession } from './auth.js';
+  import { withDesktopSelector } from './desktop-selector.js';
   import TaskRunner from './TaskRunner.svelte';
 
   export let currentUser = null;
@@ -156,7 +157,7 @@
 
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+      const wsUrl = withDesktopSelector(`${protocol}//${window.location.host}/api/ws`);
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {

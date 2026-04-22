@@ -74,6 +74,29 @@ func TestOwnershipRegistry_DifferentUsersGetDifferentVMs(t *testing.T) {
 	}
 }
 
+func TestOwnershipRegistry_SameUserDifferentDesktopsGetDifferentVMs(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	primary, err := reg.ResolveOrAssignDesktop("user-1", PrimaryDesktopID)
+	if err != nil {
+		t.Fatalf("ResolveOrAssignDesktop primary: %v", err)
+	}
+	branch, err := reg.ResolveOrAssignDesktop("user-1", "branch-a")
+	if err != nil {
+		t.Fatalf("ResolveOrAssignDesktop branch: %v", err)
+	}
+
+	if primary.VMID == branch.VMID {
+		t.Fatalf("expected different VM IDs for different desktops, got %s", primary.VMID)
+	}
+	if primary.DesktopID != PrimaryDesktopID {
+		t.Errorf("primary DesktopID = %q, want %q", primary.DesktopID, PrimaryDesktopID)
+	}
+	if branch.DesktopID != "branch-a" {
+		t.Errorf("branch DesktopID = %q, want %q", branch.DesktopID, "branch-a")
+	}
+}
+
 func TestOwnershipRegistry_ConcurrentRequestsCollapseToOneVM(t *testing.T) {
 	// VAL-VM-004: Concurrent first requests for one user collapse onto one
 	// VM assignment.
@@ -307,6 +330,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *OwnershipRegistry) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handler.HandleHealth)
 	mux.HandleFunc("/internal/vmctl/resolve", handler.HandleResolve)
+	mux.HandleFunc("/internal/vmctl/fork-desktop", handler.HandleForkDesktop)
+	mux.HandleFunc("/internal/vmctl/publish-desktop", handler.HandlePublishDesktop)
 	mux.HandleFunc("/internal/vmctl/lookup", handler.HandleLookup)
 	mux.HandleFunc("/internal/vmctl/stop", handler.HandleStop)
 	mux.HandleFunc("/internal/vmctl/remove", handler.HandleRemove)
@@ -485,6 +510,74 @@ func TestHandler_LookupNonexistent(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandler_ForkDesktop(t *testing.T) {
+	srv, reg := newTestServer(t)
+
+	if _, err := reg.ResolveOrAssignDesktop("user-1", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveOrAssignDesktop primary: %v", err)
+	}
+
+	body := `{"user_id":"user-1","source_desktop_id":"primary","target_desktop_id":"branch-a"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/fork-desktop", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("fork request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result resolveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.DesktopID != "branch-a" {
+		t.Fatalf("desktop_id = %q, want branch-a", result.DesktopID)
+	}
+	if result.ParentDesktopID != PrimaryDesktopID {
+		t.Fatalf("parent_desktop_id = %q, want %q", result.ParentDesktopID, PrimaryDesktopID)
+	}
+	if result.Published {
+		t.Fatal("forked desktop should not be published yet")
+	}
+}
+
+func TestHandler_PublishDesktop(t *testing.T) {
+	srv, reg := newTestServer(t)
+
+	if _, err := reg.ResolveOrAssignDesktop("user-1", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveOrAssignDesktop primary: %v", err)
+	}
+	if _, err := reg.ForkDesktop("user-1", PrimaryDesktopID, "branch-a"); err != nil {
+		t.Fatalf("ForkDesktop: %v", err)
+	}
+
+	body := `{"user_id":"user-1","desktop_id":"branch-a"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/publish-desktop", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("publish request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result resolveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if !result.Published {
+		t.Fatal("published desktop should be marked published")
 	}
 }
 
@@ -695,6 +788,75 @@ func TestClient_DifferentUsersIsolatedVMs(t *testing.T) {
 	}
 }
 
+func TestClient_ResolveDesktopAndLookupDesktop(t *testing.T) {
+	srv, _ := newTestServer(t)
+	client := NewClient(srv.URL)
+
+	primary, err := client.ResolveDesktop("user-desktop", PrimaryDesktopID)
+	if err != nil {
+		t.Fatalf("ResolveDesktop primary: %v", err)
+	}
+	branch, err := client.ResolveDesktop("user-desktop", "branch-a")
+	if err != nil {
+		t.Fatalf("ResolveDesktop branch: %v", err)
+	}
+	if primary.VMID == branch.VMID {
+		t.Fatalf("expected different VM IDs per desktop, got %s", primary.VMID)
+	}
+
+	lookup, err := client.LookupDesktop("user-desktop", "branch-a")
+	if err != nil {
+		t.Fatalf("LookupDesktop branch: %v", err)
+	}
+	if lookup == nil || lookup.VMID != branch.VMID {
+		t.Fatalf("branch lookup mismatch: %+v", lookup)
+	}
+	if lookup.DesktopID != "branch-a" {
+		t.Errorf("lookup DesktopID = %q, want %q", lookup.DesktopID, "branch-a")
+	}
+}
+
+func TestClient_ForkDesktop(t *testing.T) {
+	srv, _ := newTestServer(t)
+	client := NewClient(srv.URL)
+
+	if _, err := client.ResolveDesktop("user-desktop", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveDesktop primary: %v", err)
+	}
+	branch, err := client.ForkDesktop("user-desktop", PrimaryDesktopID, "branch-a")
+	if err != nil {
+		t.Fatalf("ForkDesktop: %v", err)
+	}
+	if branch.DesktopID != "branch-a" {
+		t.Fatalf("desktop_id = %q, want branch-a", branch.DesktopID)
+	}
+	if branch.ParentDesktopID != PrimaryDesktopID {
+		t.Fatalf("parent_desktop_id = %q, want %q", branch.ParentDesktopID, PrimaryDesktopID)
+	}
+	if branch.Published {
+		t.Fatal("forked desktop should not be published yet")
+	}
+}
+
+func TestClient_PublishDesktop(t *testing.T) {
+	srv, _ := newTestServer(t)
+	client := NewClient(srv.URL)
+
+	if _, err := client.ResolveDesktop("user-desktop", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveDesktop primary: %v", err)
+	}
+	if _, err := client.ForkDesktop("user-desktop", PrimaryDesktopID, "branch-a"); err != nil {
+		t.Fatalf("ForkDesktop: %v", err)
+	}
+	published, err := client.PublishDesktop("user-desktop", "branch-a")
+	if err != nil {
+		t.Fatalf("PublishDesktop: %v", err)
+	}
+	if !published.Published {
+		t.Fatal("published desktop should be marked published")
+	}
+}
+
 func TestClient_ConcurrentResolveSameUser(t *testing.T) {
 	// VAL-VM-004: Concurrent first requests for one user collapse.
 	srv, _ := newTestServer(t)
@@ -805,6 +967,12 @@ func TestEndpointURLs(t *testing.T) {
 	}
 	if got := LookupEndpoint(base); got != "http://localhost:8083/internal/vmctl/lookup" {
 		t.Errorf("LookupEndpoint = %s", got)
+	}
+	if got := ForkDesktopEndpoint(base); got != "http://localhost:8083/internal/vmctl/fork-desktop" {
+		t.Errorf("ForkDesktopEndpoint = %s", got)
+	}
+	if got := PublishDesktopEndpoint(base); got != "http://localhost:8083/internal/vmctl/publish-desktop" {
+		t.Errorf("PublishDesktopEndpoint = %s", got)
 	}
 	if got := StopEndpoint(base); got != "http://localhost:8083/internal/vmctl/stop" {
 		t.Errorf("StopEndpoint = %s", got)
@@ -944,7 +1112,7 @@ func TestOwnershipRegistry_IdleTimeoutChecks(t *testing.T) {
 
 	// Simulate user-idle being idle by backdating its LastActiveAt.
 	reg.mu.Lock()
-	idleOwn := reg.ownerships["user-idle"]
+	idleOwn := reg.ownerships[ownershipKey("user-idle", PrimaryDesktopID)]
 	idleOwn.LastActiveAt = time.Now().Add(-100 * time.Millisecond)
 	reg.mu.Unlock()
 
@@ -1106,7 +1274,7 @@ func TestOwnershipRegistry_NoIdleTimeoutWhenZero(t *testing.T) {
 
 	// Backdate the last active time.
 	reg.mu.Lock()
-	reg.ownerships["user-1"].LastActiveAt = time.Now().Add(-24 * time.Hour)
+	reg.ownerships[ownershipKey("user-1", PrimaryDesktopID)].LastActiveAt = time.Now().Add(-24 * time.Hour)
 	reg.mu.Unlock()
 
 	// Should find no idle VMs.
@@ -1316,7 +1484,7 @@ func TestHandler_IdleCheckEndpoint(t *testing.T) {
 
 	// Backdate the VM.
 	reg.mu.Lock()
-	reg.ownerships["user-1"].LastActiveAt = time.Now().Add(-100 * time.Millisecond)
+	reg.ownerships[ownershipKey("user-1", PrimaryDesktopID)].LastActiveAt = time.Now().Add(-100 * time.Millisecond)
 	reg.mu.Unlock()
 
 	// Trigger idle check.
@@ -1353,6 +1521,8 @@ func TestHandler_LifecycleEndpointsDenyExternalCallers(t *testing.T) {
 		method string
 		body   string
 	}{
+		{"/internal/vmctl/fork-desktop", "POST", `{"user_id":"user-1","source_desktop_id":"primary","target_desktop_id":"branch-a"}`},
+		{"/internal/vmctl/publish-desktop", "POST", `{"user_id":"user-1","desktop_id":"branch-a"}`},
 		{"/internal/vmctl/hibernate", "POST", `{"user_id":"user-1"}`},
 		{"/internal/vmctl/resume", "POST", `{"user_id":"user-1"}`},
 		{"/internal/vmctl/recover", "POST", `{"user_id":"user-1"}`},
