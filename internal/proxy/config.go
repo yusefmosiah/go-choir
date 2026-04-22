@@ -54,10 +54,10 @@ const (
 // under /tmp/go-choir-m2.
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
-		Port:             envOr("PROXY_PORT", DefaultProxyPort),
-		SandboxURL:       envOr("PROXY_SANDBOX_URL", DefaultSandboxURL),
-		AuthPublicKeyPath: envOr("PROXY_AUTH_PUBLIC_KEY_PATH", DefaultAuthPublicKeyPath),
-		VmctlURL:         os.Getenv("PROXY_VMCTL_URL"),
+		Port:              envOr("PROXY_PORT", DefaultProxyPort),
+		SandboxURL:        envOr("PROXY_SANDBOX_URL", DefaultSandboxURL),
+		AuthPublicKeyPath: defaultAuthPublicKeyPath(),
+		VmctlURL:          os.Getenv("PROXY_VMCTL_URL"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -79,6 +79,19 @@ func (c *Config) validate() error {
 		return fmt.Errorf("proxy config: PROXY_AUTH_PUBLIC_KEY_PATH must not be empty")
 	}
 	return nil
+}
+
+// defaultAuthPublicKeyPath resolves the proxy verifier key path. Explicit
+// PROXY_AUTH_PUBLIC_KEY_PATH wins. When only AUTH_JWT_PRIVATE_KEY_PATH is set,
+// derive the sibling public key path so local auth/proxy restarts stay aligned.
+func defaultAuthPublicKeyPath() string {
+	if v := os.Getenv("PROXY_AUTH_PUBLIC_KEY_PATH"); v != "" {
+		return v
+	}
+	if authKeyPath := os.Getenv("AUTH_JWT_PRIVATE_KEY_PATH"); authKeyPath != "" {
+		return authKeyPath + ".pub"
+	}
+	return DefaultAuthPublicKeyPath
 }
 
 // EnsureDirs creates the parent directories for file paths in the config.

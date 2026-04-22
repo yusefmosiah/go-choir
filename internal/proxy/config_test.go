@@ -8,9 +8,18 @@ import (
 
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear all PROXY_* env vars to test defaults.
+	origAuthKey := os.Getenv("AUTH_JWT_PRIVATE_KEY_PATH")
 	_ = os.Unsetenv("PROXY_PORT")
 	_ = os.Unsetenv("PROXY_SANDBOX_URL")
 	_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+	_ = os.Unsetenv("AUTH_JWT_PRIVATE_KEY_PATH")
+	t.Cleanup(func() {
+		if origAuthKey == "" {
+			_ = os.Unsetenv("AUTH_JWT_PRIVATE_KEY_PATH")
+			return
+		}
+		_ = os.Setenv("AUTH_JWT_PRIVATE_KEY_PATH", origAuthKey)
+	})
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -29,13 +38,20 @@ func TestLoadConfigDefaults(t *testing.T) {
 }
 
 func TestLoadConfigFromEnv(t *testing.T) {
+	origAuthKey := os.Getenv("AUTH_JWT_PRIVATE_KEY_PATH")
 	_ = os.Setenv("PROXY_PORT", "9999")
 	_ = os.Setenv("PROXY_SANDBOX_URL", "http://example.com:8085")
 	_ = os.Setenv("PROXY_AUTH_PUBLIC_KEY_PATH", "/tmp/test-pub.key")
+	_ = os.Unsetenv("AUTH_JWT_PRIVATE_KEY_PATH")
 	defer func() {
 		_ = os.Unsetenv("PROXY_PORT")
 		_ = os.Unsetenv("PROXY_SANDBOX_URL")
 		_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+		if origAuthKey == "" {
+			_ = os.Unsetenv("AUTH_JWT_PRIVATE_KEY_PATH")
+			return
+		}
+		_ = os.Setenv("AUTH_JWT_PRIVATE_KEY_PATH", origAuthKey)
 	}()
 
 	cfg, err := LoadConfig()
@@ -51,6 +67,34 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if cfg.AuthPublicKeyPath != "/tmp/test-pub.key" {
 		t.Errorf("AuthPublicKeyPath: got %q, want %q", cfg.AuthPublicKeyPath, "/tmp/test-pub.key")
+	}
+}
+
+func TestLoadConfigDerivesPublicKeyPathFromAuthKeyPath(t *testing.T) {
+	origProxyKey := os.Getenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+	origAuthKey := os.Getenv("AUTH_JWT_PRIVATE_KEY_PATH")
+	_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+	_ = os.Setenv("AUTH_JWT_PRIVATE_KEY_PATH", "/tmp/shared/auth-signing-key")
+	defer func() {
+		if origProxyKey == "" {
+			_ = os.Unsetenv("PROXY_AUTH_PUBLIC_KEY_PATH")
+		} else {
+			_ = os.Setenv("PROXY_AUTH_PUBLIC_KEY_PATH", origProxyKey)
+		}
+		if origAuthKey == "" {
+			_ = os.Unsetenv("AUTH_JWT_PRIVATE_KEY_PATH")
+		} else {
+			_ = os.Setenv("AUTH_JWT_PRIVATE_KEY_PATH", origAuthKey)
+		}
+	}()
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.AuthPublicKeyPath != "/tmp/shared/auth-signing-key.pub" {
+		t.Errorf("AuthPublicKeyPath: got %q, want %q", cfg.AuthPublicKeyPath, "/tmp/shared/auth-signing-key.pub")
 	}
 }
 

@@ -15,12 +15,15 @@ mkdir -p /tmp/go-choir-m2/auth
 mkdir -p /tmp/go-choir-m3/runtime
 mkdir -p /tmp/go-choir-m3/dolt
 
-if [ ! -f /tmp/go-choir-m2/auth-signing-key ]; then
-  ssh-keygen -q -t ed25519 -N "" -f /tmp/go-choir-m2/auth-signing-key >/dev/null
+AUTH_SIGNING_KEY_PATH="${CHOIR_AUTH_SIGNING_KEY_PATH:-/tmp/go-choir-m2/auth-signing-key}"
+mkdir -p "$(dirname "$AUTH_SIGNING_KEY_PATH")"
+
+if [ ! -f "$AUTH_SIGNING_KEY_PATH" ]; then
+  ssh-keygen -q -t ed25519 -N "" -f "$AUTH_SIGNING_KEY_PATH" >/dev/null
 fi
 
-if [ ! -f /tmp/go-choir-m2/auth-signing-key.pub ]; then
-  ssh-keygen -y -f /tmp/go-choir-m2/auth-signing-key > /tmp/go-choir-m2/auth-signing-key.pub
+if [ ! -f "${AUTH_SIGNING_KEY_PATH}.pub" ]; then
+  ssh-keygen -y -f "$AUTH_SIGNING_KEY_PATH" > "${AUTH_SIGNING_KEY_PATH}.pub"
 fi
 
 echo "init.sh complete"

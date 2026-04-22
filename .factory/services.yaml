@@ -12,14 +12,14 @@ commands:
 
 services:
   auth:
-    start: AUTH_PORT=8081 AUTH_RP_ID="localhost" AUTH_RP_ORIGINS="http://localhost:4173" AUTH_ACCESS_TOKEN_TTL="5m" AUTH_REFRESH_TOKEN_TTL="720h" AUTH_COOKIE_SECURE="false" go run ./cmd/auth
+    start: AUTH_PORT=8081 AUTH_RP_ID="localhost" AUTH_RP_ORIGINS="http://localhost:4173" AUTH_ACCESS_TOKEN_TTL="5m" AUTH_REFRESH_TOKEN_TTL="720h" AUTH_COOKIE_SECURE="false" AUTH_JWT_PRIVATE_KEY_PATH="${CHOIR_AUTH_SIGNING_KEY_PATH:-/tmp/go-choir-m2/auth-signing-key}" go run ./cmd/auth
     stop: lsof -ti :8081 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://127.0.0.1:8081/health
     port: 8081
     depends_on: []
 
   proxy:
-    start: PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" PROXY_VMCTL_URL="http://127.0.0.1:8083" go run ./cmd/proxy
+    start: PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" PROXY_AUTH_PUBLIC_KEY_PATH="${CHOIR_AUTH_SIGNING_KEY_PATH:-/tmp/go-choir-m2/auth-signing-key}.pub" PROXY_VMCTL_URL="http://127.0.0.1:8083" go run ./cmd/proxy
     stop: lsof -ti :8082 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://127.0.0.1:8082/health
     port: 8082

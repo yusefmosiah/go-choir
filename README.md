@@ -104,14 +104,21 @@ Those are the main places to edit when you want to change orchestration behavior
 # Note: this still uses legacy .factory bootstrap scripts and should be cleaned up.
 bash .factory/init.sh
 
+# Keep auth and proxy on the same local signing key if you restart either one.
+export CHOIR_AUTH_SIGNING_KEY_PATH="${CHOIR_AUTH_SIGNING_KEY_PATH:-/tmp/go-choir-m2/auth-signing-key}"
+
 # Start services (each in its own terminal)
 AUTH_PORT=8081 AUTH_RP_ID="localhost" AUTH_RP_ORIGINS="http://localhost:4173" \
   AUTH_ACCESS_TOKEN_TTL="5m" AUTH_REFRESH_TOKEN_TTL="720h" AUTH_COOKIE_SECURE="false" \
+  AUTH_JWT_PRIVATE_KEY_PATH="$CHOIR_AUTH_SIGNING_KEY_PATH" \
   go run ./cmd/auth
 
 VMCTL_PORT=8083 VMCTL_SANDBOX_URL_BASE="http://127.0.0.1:8085" VMCTL_IDLE_TIMEOUT="30m" go run ./cmd/vmctl
 
-PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" PROXY_VMCTL_URL="http://127.0.0.1:8083" go run ./cmd/proxy
+PROXY_PORT=8082 PROXY_SANDBOX_URL="http://127.0.0.1:8085" \
+  PROXY_AUTH_PUBLIC_KEY_PATH="${CHOIR_AUTH_SIGNING_KEY_PATH}.pub" \
+  PROXY_VMCTL_URL="http://127.0.0.1:8083" \
+  go run ./cmd/proxy
 
 GATEWAY_PORT=8084 \
   FIREWORKS_API_KEY="your-key" ZAI_API_KEY="your-key" BEDROCK_ACCESS_KEY="your-key" BEDROCK_SECRET_KEY="your-key" BEDROCK_REGION="us-east-1" \
