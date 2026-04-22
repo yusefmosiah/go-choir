@@ -26,13 +26,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	pathpkg "path"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/yusefmosiah/go-choir/internal/events"
+	"github.com/yusefmosiah/go-choir/internal/sandbox"
 	"github.com/yusefmosiah/go-choir/internal/store"
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
@@ -62,6 +66,11 @@ type vtextOpenFileResponse struct {
 	DocID             string `json:"doc_id"`
 	CurrentRevisionID string `json:"current_revision_id,omitempty"`
 	Created           bool   `json:"created"`
+}
+
+type vtextEnsureManifestResponse struct {
+	DocID      string `json:"doc_id"`
+	SourcePath string `json:"source_path"`
 }
 
 // vtextDocumentResponse is the JSON response for GET /api/vtext/documents/{id}.
@@ -180,6 +189,46 @@ func normalizeVTextSourcePath(raw string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func slugifyVTextManifestStem(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return "vtext"
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range raw {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			b.WriteRune(r)
+			lastDash = false
+		case unicode.IsSpace(r) || r == '-' || r == '_' || r == '.':
+			if b.Len() > 0 && !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	stem := strings.Trim(b.String(), "-")
+	if stem == "" {
+		return "vtext"
+	}
+	return stem
+}
+
+func shortDocIDSuffix(docID string) string {
+	base := strings.TrimSpace(docID)
+	if idx := strings.IndexByte(base, '-'); idx > 0 {
+		base = base[:idx]
+	}
+	if len(base) > 8 {
+		base = base[:8]
+	}
+	if base == "" {
+		return "doc"
+	}
+	return base
 }
 
 func writeSSEData(w http.ResponseWriter, payload any) {
@@ -335,6 +384,111 @@ func (h *APIHandler) HandleVTextOpenFile(w http.ResponseWriter, r *http.Request)
 		CurrentRevisionID: rev.RevisionID,
 		Created:           true,
 	})
+}
+
+// HandleVTextEnsureManifest ensures a canonical vtext document has a
+// filesystem manifestation so it appears in Files and future writes can
+// write-through to a stable path.
+func (h *APIHandler) HandleVTextEnsureManifest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+	docID := extractDocID(r.URL.Path)
+	if docID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "document id is required"})
+		return
+	}
+	doc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeAPIJSON(w, http.StatusNotFound, apiError{Error: "document not found"})
+			return
+		}
+		log.Printf("vtext api: get document for manifest %s: %v", docID, err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to load document"})
+		return
+	}
+	sourcePath, err := h.ensureVTextManifest(r.Context(), ownerID, doc)
+	if err != nil {
+		log.Printf("vtext api: ensure manifest for %s: %v", docID, err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to persist file manifest"})
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, vtextEnsureManifestResponse{
+		DocID:      doc.DocID,
+		SourcePath: sourcePath,
+	})
+}
+
+func (h *APIHandler) ensureVTextManifest(ctx context.Context, ownerID string, doc types.Document) (string, error) {
+	sourcePath, err := h.rt.Store().GetDocumentAliasSourcePath(ctx, ownerID, doc.DocID)
+	if err != nil && err != store.ErrNotFound {
+		return "", err
+	}
+	if err == store.ErrNotFound {
+		sourcePath, err = h.allocateVTextManifestPath(ctx, ownerID, doc)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	content := ""
+	if strings.TrimSpace(doc.CurrentRevisionID) != "" {
+		rev, err := h.rt.Store().GetRevision(ctx, doc.CurrentRevisionID, ownerID)
+		if err != nil {
+			return "", err
+		}
+		content = rev.Content
+	}
+
+	filesRoot := sandbox.ResolveFilesRoot("")
+	absPath := filepath.Join(filesRoot, filepath.FromSlash(sourcePath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return "", fmt.Errorf("create manifest directory: %w", err)
+	}
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write manifest file: %w", err)
+	}
+	if err := h.rt.Store().UpsertDocumentAlias(ctx, ownerID, sourcePath, doc.DocID, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	return sourcePath, nil
+}
+
+func (h *APIHandler) allocateVTextManifestPath(ctx context.Context, ownerID string, doc types.Document) (string, error) {
+	stem := slugifyVTextManifestStem(doc.Title)
+	suffix := shortDocIDSuffix(doc.DocID)
+	candidates := []string{
+		fmt.Sprintf("%s.md", stem),
+		fmt.Sprintf("%s-%s.md", stem, suffix),
+	}
+	filesRoot := sandbox.ResolveFilesRoot("")
+	for _, candidate := range candidates {
+		docID, err := h.rt.Store().GetDocumentAlias(ctx, ownerID, candidate)
+		if err == nil {
+			if docID == doc.DocID {
+				return candidate, nil
+			}
+			continue
+		}
+		if err != store.ErrNotFound {
+			return "", err
+		}
+		absPath := filepath.Join(filesRoot, filepath.FromSlash(candidate))
+		if _, statErr := os.Stat(absPath); statErr == nil {
+			continue
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		return candidate, nil
+	}
+	return fmt.Sprintf("%s-%s.md", stem, uuid.New().String()[:8]), nil
 }
 
 // HandleVTextListDocuments handles GET /api/vtext/documents.

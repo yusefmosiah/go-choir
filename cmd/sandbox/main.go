@@ -25,7 +25,7 @@ func main() {
 	sandbox.RegisterRoutes(s, h)
 
 	// Initialize the file browser handler with sandbox files root.
-	filesRoot := os.Getenv("SANDBOX_FILES_ROOT")
+	filesRoot := sandbox.ResolveFilesRoot(os.Getenv("SANDBOX_FILES_ROOT"))
 	fileHandler := sandbox.NewFilesHandler(filesRoot)
 	sandbox.RegisterFileRoutes(s, fileHandler)
 

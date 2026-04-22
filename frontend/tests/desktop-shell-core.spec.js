@@ -256,6 +256,55 @@ test('prompt bar routes normal input through conductor and opens vtext', async (
   await expect(vtextWindow.locator('[data-vtext-editor-area]')).toHaveValue('Draft a project outline');
 });
 
+test('prompt-created vtext gets a file manifestation and revise writes through', async ({ page, authenticator }) => {
+  const email = uniqueEmail();
+  await registerAndLoadDesktop(page, authenticator, email);
+
+  const manifestResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'POST' && /\/api\/vtext\/documents\/[^/]+\/manifest$/.test(url.pathname);
+  });
+
+  const promptInput = page.locator('[data-prompt-input]');
+  await promptInput.fill('Ahaha');
+  await promptInput.press('Enter');
+
+  const manifestResponse = await manifestResponsePromise;
+  expect(manifestResponse.status()).toBe(200);
+  const manifest = await manifestResponse.json();
+  expect(manifest.source_path).toBeTruthy();
+
+  const filePath = '/api/files/' + manifest.source_path.split('/').map(encodeURIComponent).join('/');
+  const fileName = manifest.source_path.split('/').pop();
+
+  const vtextWindow = page.locator('[data-vtext-app]').last();
+  await expect(vtextWindow).toBeVisible({ timeout: 5000 });
+  const editor = vtextWindow.locator('[data-vtext-editor-area]');
+  await expect(editor).toHaveValue('Ahaha');
+
+  const fileWritePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'PUT' && url.pathname === filePath;
+  });
+
+  const revisedContent = 'Ahaha with a real file alias';
+  await editor.fill(revisedContent);
+  await vtextWindow.locator('[data-vtext-prompt]').click();
+
+  const fileWriteResponse = await fileWritePromise;
+  expect(fileWriteResponse.ok()).toBeTruthy();
+
+  const persistedContent = await page.evaluate(async (path) => {
+    const res = await fetch(path, { credentials: 'include' });
+    return res.text();
+  }, filePath);
+  expect(persistedContent).toBe(revisedContent);
+
+  await openAppViaIcon(page, 'files');
+  const fileItem = page.locator('[data-file-item]').filter({ hasText: fileName }).first();
+  await expect(fileItem).toBeVisible({ timeout: 5000 });
+});
+
 test('prompt bar sends greetings through conductor instead of frontend pattern matching', async ({ page, authenticator }) => {
   const email = uniqueEmail();
   await registerAndLoadDesktop(page, authenticator, email);

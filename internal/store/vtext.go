@@ -335,6 +335,27 @@ func (s *Store) GetDocumentAlias(ctx context.Context, ownerID, sourcePath string
 	return docID, nil
 }
 
+// GetDocumentAliasSourcePath returns the most recently updated source path for
+// the given canonical document, scoped to the owner.
+func (s *Store) GetDocumentAliasSourcePath(ctx context.Context, ownerID, docID string) (string, error) {
+	row := s.vtextHandle().QueryRowContext(ctx,
+		`SELECT source_path
+		   FROM vtext_document_aliases
+		  WHERE owner_id = ? AND doc_id = ?
+		  ORDER BY updated_at DESC
+		  LIMIT 1`,
+		ownerID, docID,
+	)
+	var sourcePath string
+	if err := row.Scan(&sourcePath); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("query vtext alias source path: %w", err)
+	}
+	return sourcePath, nil
+}
+
 // UpsertDocumentAlias records or refreshes the canonical document mapping for a file path.
 func (s *Store) UpsertDocumentAlias(ctx context.Context, ownerID, sourcePath, docID string, updatedAt time.Time) error {
 	if updatedAt.IsZero() {

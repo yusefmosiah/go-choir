@@ -1241,6 +1241,89 @@ func TestVTextOpenFileResolvesCanonicalAlias(t *testing.T) {
 	}
 }
 
+func TestVTextEnsureManifestCreatesAliasAndFile(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
+	filesRoot := t.TempDir()
+	t.Setenv("SANDBOX_FILES_ROOT", filesRoot)
+
+	docID, _ := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/manifest", nil)
+	w := httptest.NewRecorder()
+	h.HandleVTextRouter(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ensure manifest: status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp vtextEnsureManifestResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode ensure manifest response: %v", err)
+	}
+	if resp.DocID != docID {
+		t.Fatalf("response doc_id = %q, want %q", resp.DocID, docID)
+	}
+	if resp.SourcePath == "" {
+		t.Fatal("response source_path should not be empty")
+	}
+
+	aliasedDocID, err := s.GetDocumentAlias(context.Background(), "user-1", resp.SourcePath)
+	if err != nil {
+		t.Fatalf("GetDocumentAlias: %v", err)
+	}
+	if aliasedDocID != docID {
+		t.Fatalf("aliased doc_id = %q, want %q", aliasedDocID, docID)
+	}
+
+	bytes, err := os.ReadFile(filepath.Join(filesRoot, filepath.FromSlash(resp.SourcePath)))
+	if err != nil {
+		t.Fatalf("read manifest file: %v", err)
+	}
+	if string(bytes) != "Hello, world!" {
+		t.Fatalf("manifest file content = %q, want %q", string(bytes), "Hello, world!")
+	}
+}
+
+func TestVTextEnsureManifestReusesExistingAlias(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
+	filesRoot := t.TempDir()
+	t.Setenv("SANDBOX_FILES_ROOT", filesRoot)
+
+	docID, _ := createDocWithUserRevision(t, h)
+
+	firstReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/manifest", nil)
+	firstW := httptest.NewRecorder()
+	h.HandleVTextRouter(firstW, firstReq)
+	if firstW.Code != http.StatusOK {
+		t.Fatalf("first ensure manifest: status = %d, want %d; body: %s", firstW.Code, http.StatusOK, firstW.Body.String())
+	}
+	var firstResp vtextEnsureManifestResponse
+	if err := json.NewDecoder(firstW.Body).Decode(&firstResp); err != nil {
+		t.Fatalf("decode first ensure manifest response: %v", err)
+	}
+
+	secondReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/manifest", nil)
+	secondW := httptest.NewRecorder()
+	h.HandleVTextRouter(secondW, secondReq)
+	if secondW.Code != http.StatusOK {
+		t.Fatalf("second ensure manifest: status = %d, want %d; body: %s", secondW.Code, http.StatusOK, secondW.Body.String())
+	}
+	var secondResp vtextEnsureManifestResponse
+	if err := json.NewDecoder(secondW.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second ensure manifest response: %v", err)
+	}
+	if secondResp.SourcePath != firstResp.SourcePath {
+		t.Fatalf("second source_path = %q, want %q", secondResp.SourcePath, firstResp.SourcePath)
+	}
+
+	sourcePath, err := s.GetDocumentAliasSourcePath(context.Background(), "user-1", docID)
+	if err != nil {
+		t.Fatalf("GetDocumentAliasSourcePath: %v", err)
+	}
+	if sourcePath != firstResp.SourcePath {
+		t.Fatalf("stored source_path = %q, want %q", sourcePath, firstResp.SourcePath)
+	}
+}
+
 func TestVTextCreateRevisionRejectsStaleHead(t *testing.T) {
 	h, _, _ := vtextAPISetupWithRuntime(t)
 	docID, baseRevisionID := createDocWithUserRevision(t, h)

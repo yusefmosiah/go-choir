@@ -12,6 +12,7 @@
   import {
     createDocument,
     createRevision,
+    ensureDocumentManifest,
     getDocument,
     getRevision,
     listRevisions,
@@ -174,6 +175,19 @@
     }
   }
 
+  async function ensureFileManifest() {
+    if (!currentDoc?.doc_id || appContext.sourcePath) return;
+    const manifest = await ensureDocumentManifest(currentDoc.doc_id);
+    if (!manifest?.source_path) return;
+    const bits = manifest.source_path.split('/');
+    appContext = {
+      ...appContext,
+      sourcePath: manifest.source_path,
+      fileName: appContext.fileName || bits[bits.length - 1] || '',
+    };
+    initializedKey = getContextKey(appContext);
+  }
+
   async function reloadDocument(preferredRevisionId = '') {
     currentDoc = await getDocument(currentDoc.doc_id);
     latestHeadRevisionId = currentDoc.current_revision_id || latestHeadRevisionId;
@@ -307,6 +321,7 @@
       }
 
       if (currentDoc?.doc_id) {
+        await ensureFileManifest();
         connectDocumentStream(currentDoc.doc_id);
       }
     } catch (err) {

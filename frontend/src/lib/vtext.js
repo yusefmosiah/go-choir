@@ -5,6 +5,7 @@
  *   POST   /api/vtext/documents                   — create a new document
  *   GET    /api/vtext/documents                   — list documents
  *   POST   /api/vtext/files/open                  — resolve/create aliased file doc
+ *   POST   /api/vtext/documents/{id}/manifest     — ensure a filesystem manifestation
  *   GET    /api/vtext/documents/{id}              — get a document
  *   PUT    /api/vtext/documents/{id}              — update a document (title)
  *   DELETE /api/vtext/documents/{id}              — delete a document
@@ -84,6 +85,18 @@ export async function getDocument(docId) {
 
   if (!res.ok) {
     await decodeError(res, `Get document failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+export async function ensureDocumentManifest(docId) {
+  const res = await fetchWithRenewal(vtextPath(`/documents/${encodeURIComponent(docId)}/manifest`), {
+    method: 'POST',
+  });
+
+  if (!res.ok) {
+    await decodeError(res, `Ensure document manifest failed (${res.status})`);
   }
 
   return res.json();

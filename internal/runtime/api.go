@@ -811,6 +811,7 @@ func RegisterVTextRoutes(s *server.Server, h *APIHandler) {
 // Route mapping:
 //
 //	POST   /api/vtext/files/open               → resolve/create aliased file document
+//	POST   /api/vtext/documents/{id}/manifest  → ensure a filesystem manifestation
 //	GET    /api/vtext/documents/{id}           → get document
 //	PUT    /api/vtext/documents/{id}           → update document
 //	DELETE /api/vtext/documents/{id}           → delete document
@@ -855,6 +856,11 @@ func (h *APIHandler) HandleVTextRouter(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(rest, "/revisions") {
 			// /api/vtext/documents/{id}/revisions
 			h.HandleVTextRevisions(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, "/manifest") {
+			// /api/vtext/documents/{id}/manifest
+			h.HandleVTextEnsureManifest(w, r)
 			return
 		}
 		if strings.HasSuffix(rest, "/stream") {
