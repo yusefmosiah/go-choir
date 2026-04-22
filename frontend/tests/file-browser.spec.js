@@ -15,21 +15,6 @@
  * - VAL-FILES-018: Responsive on mobile
  */
 import { test, expect } from './helpers/fixtures.js';
-import { registerPasskey } from './helpers/auth.js';
-
-const BASE_URL = 'http://localhost:4173';
-
-function uniqueEmail() {
-  return `files-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
-}
-
-// Helper: register a passkey and get to the authenticated desktop.
-async function registerAndLoadDesktop(page, authenticator, email) {
-  await page.goto(BASE_URL);
-  await registerPasskey(page, email, BASE_URL);
-  await page.reload();
-  await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
-}
 
 // Helper: open the Files app from the floating desktop icon
 async function openFilesApp(page) {
@@ -76,9 +61,8 @@ async function createTestFile(page, dirPath, fileName, content) {
 // ---------------------------------------------------------------
 // Test: File browser launches from left rail (VAL-FILES-001)
 // ---------------------------------------------------------------
-test('file browser launches from left rail', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('file browser launches from left rail', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Click the Files icon in the left rail
   // Double-click the Files floating icon
@@ -101,9 +85,8 @@ test('file browser launches from left rail', async ({ page, authenticator }) => 
 // ---------------------------------------------------------------
 // Test: file listing displays with folder/file icons (VAL-FILES-003)
 // ---------------------------------------------------------------
-test('file listing displays with folder/file icons', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('file listing displays with folder/file icons', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Seed some test directories via API
   await seedTestFiles(page);
@@ -128,9 +111,8 @@ test('file listing displays with folder/file icons', async ({ page, authenticato
 // ---------------------------------------------------------------
 // Test: breadcrumb navigation shows current path (VAL-FILES-004)
 // ---------------------------------------------------------------
-test('breadcrumb shows current path', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('breadcrumb shows current path', async ({ desktopSession }) => {
+  const { page } = desktopSession;
   await openFilesApp(page);
 
   // Breadcrumb should be visible
@@ -146,9 +128,8 @@ test('breadcrumb shows current path', async ({ page, authenticator }) => {
 // ---------------------------------------------------------------
 // Test: clicking directory navigates into it (VAL-FILES-005)
 // ---------------------------------------------------------------
-test('clicking directory navigates into it', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('clicking directory navigates into it', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Create a test directory
   await page.evaluate(async () => {
@@ -177,9 +158,8 @@ test('clicking directory navigates into it', async ({ page, authenticator }) => 
 // ---------------------------------------------------------------
 // Test: clicking breadcrumb segment navigates back (VAL-FILES-006)
 // ---------------------------------------------------------------
-test('clicking breadcrumb segment navigates back', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('clicking breadcrumb segment navigates back', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Create test directory and sub-directory
   await page.evaluate(async () => {
@@ -216,9 +196,8 @@ test('clicking breadcrumb segment navigates back', async ({ page, authenticator 
 // ---------------------------------------------------------------
 // Test: create folder via UI with inline input (VAL-FILES-009)
 // ---------------------------------------------------------------
-test('create folder via UI with inline input', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('create folder via UI with inline input', async ({ desktopSession }) => {
+  const { page } = desktopSession;
   await openFilesApp(page);
 
   // Click "New Folder" button
@@ -243,9 +222,8 @@ test('create folder via UI with inline input', async ({ page, authenticator }) =
 // ---------------------------------------------------------------
 // Test: delete with inline confirmation (VAL-FILES-011)
 // ---------------------------------------------------------------
-test('delete with inline confirmation', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('delete with inline confirmation', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Create a folder to delete via API
   const createResult = await page.evaluate(async () => {
@@ -277,9 +255,8 @@ test('delete with inline confirmation', async ({ page, authenticator }) => {
 // ---------------------------------------------------------------
 // Test: clicking text file opens in VText (VAL-FILES-012)
 // ---------------------------------------------------------------
-test('clicking text file opens in VText', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('clicking text file opens in VText', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   const fileName = 'notes.txt';
   const fileContent = 'hello from file browser';
@@ -308,16 +285,15 @@ test('clicking text file opens in VText', async ({ page, authenticator }) => {
   const vtextWindow = page.locator('[data-vtext-app]');
   await expect(vtextWindow).toBeVisible({ timeout: 5000 });
 
-  const editorArea = page.locator('[data-vtext-app] [data-vtext-editor-area]');
+  const editorArea = page.locator('[data-vtext-app] [data-vtext-editor-area]').last();
   await expect(editorArea).toHaveValue(fileContent);
 });
 
 // ---------------------------------------------------------------
 // Test: empty directory shows empty state (VAL-FILES-013)
 // ---------------------------------------------------------------
-test('empty directory shows empty state', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('empty directory shows empty state', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Create an empty directory via API
   await page.evaluate(async () => {
@@ -341,9 +317,8 @@ test('empty directory shows empty state', async ({ page, authenticator }) => {
 // ---------------------------------------------------------------
 // Test: back/forward navigation works (VAL-FILES-016)
 // ---------------------------------------------------------------
-test('back/forward navigation works', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('back/forward navigation works', async ({ desktopSession }) => {
+  const { page } = desktopSession;
 
   // Create test directories
   await page.evaluate(async () => {
@@ -379,9 +354,8 @@ test('back/forward navigation works', async ({ page, authenticator }) => {
 // ---------------------------------------------------------------
 // Test: no native alert/prompt/confirm used (general)
 // ---------------------------------------------------------------
-test('no native alert/prompt/confirm used', async ({ page, authenticator }) => {
-  const email = uniqueEmail();
-  await registerAndLoadDesktop(page, authenticator, email);
+test('no native alert/prompt/confirm used', async ({ desktopSession }) => {
+  const { page } = desktopSession;
   await openFilesApp(page);
 
   // Override window.alert, window.prompt, window.confirm to flag usage
@@ -411,33 +385,36 @@ test('no native alert/prompt/confirm used', async ({ page, authenticator }) => {
 // Test: file browser responsive on mobile (VAL-FILES-018)
 // ---------------------------------------------------------------
 test.describe('file browser responsive on mobile', () => {
-  test('file browser works in mobile focus mode', async ({ page, authenticator }) => {
-    const email = uniqueEmail();
-    await page.setViewportSize({ width: 375, height: 812 });
-    await page.goto(BASE_URL);
-    await registerPasskey(page, email, BASE_URL);
-    await page.reload();
-    await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
+  test('file browser works in mobile focus mode', async ({ browser, authenticatedState }) => {
+    const context = await browser.newContext({
+      storageState: authenticatedState.storageStatePath,
+      viewport: { width: 375, height: 812 },
+    });
+    const page = await context.newPage();
+    try {
+      await page.goto(authenticatedState.baseURL);
+      await page.reload();
+      await page.locator('[data-desktop]').waitFor({ state: 'visible', timeout: 10000 });
 
-    // Double-click the Files floating icon
-    const filesIcon = page.locator('[data-desktop-icon-id="files"]');
-    await filesIcon.dblclick();
+      const fileList = page.locator('[data-file-list]');
+      if (!(await fileList.isVisible())) {
+        const filesButton = page.getByRole('button', { name: 'Files' }).first();
+        await filesButton.click();
+      }
 
-    // File browser window should be visible
-    const fileList = page.locator('[data-file-list]');
-    await expect(fileList).toBeVisible({ timeout: 10000 });
+      await expect(fileList).toBeVisible({ timeout: 10000 });
 
-    // Wait for loading to complete and content to appear
-    await page.waitForTimeout(1500);
+      // Check that file items are shown and at least one visible row is a
+      // usable touch target in the mobile layout.
+      const visibleItem = page.locator('[data-file-item]:visible').first();
+      await expect(visibleItem).toBeVisible({ timeout: 10000 });
 
-    // Check that file items are shown (the shared sandbox has test data)
-    const fileItems = page.locator('[data-file-item]');
-
-    // Wait for file items to appear
-    await expect(fileItems.first()).toBeVisible({ timeout: 5000 });
-
-    // Touch targets should be >=44px
-    const box = await fileItems.first().boundingBox();
-    expect(box.height).toBeGreaterThanOrEqual(44);
+      // Touch targets should be >=44px
+      const box = await visibleItem.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    } finally {
+      await context.close().catch(() => {});
+    }
   });
 });
