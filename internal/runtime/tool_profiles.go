@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yusefmosiah/go-choir/internal/search"
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
@@ -349,7 +348,7 @@ func WithToolProfileRegistry(profile string, registry *ToolRegistry) RuntimeOpti
 	}
 }
 
-func (rt *Runtime) buildRegistryForRole(spec AgentRoleSpec, cwd string, searchClient *search.SearchClient, httpClient *http.Client) (*ToolRegistry, error) {
+func (rt *Runtime) buildRegistryForRole(spec AgentRoleSpec, cwd string, searchClient webSearchClient, httpClient *http.Client) (*ToolRegistry, error) {
 	registry := MustNewToolRegistry()
 	if spec.AllowWritableFiles {
 		if err := RegisterFileTools(registry, cwd); err != nil {
@@ -397,7 +396,7 @@ func (rt *Runtime) InstallDefaultAgentTools(cwd string) error {
 		cwd = wd
 	}
 
-	searchClient := search.NewSearchClient()
+	searchClient := newGatewaySearchClientFromEnv()
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	superRegistry, err := rt.buildRegistryForRole(roleSpec(AgentProfileSuper), cwd, searchClient, httpClient)

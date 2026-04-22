@@ -258,6 +258,32 @@ func TestOwnershipRegistry_ListOwnerships(t *testing.T) {
 	}
 }
 
+func TestOwnershipRegistry_RequestWorkerIncludedInList(t *testing.T) {
+	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
+
+	if _, err := reg.ResolveOrAssignDesktop("user-1", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveOrAssignDesktop: %v", err)
+	}
+	if _, err := reg.RequestWorker(WorkerRequest{
+		UserID:        "user-1",
+		DesktopID:     PrimaryDesktopID,
+		ParentAgentID: "super:primary",
+		TrajectoryID:  "traj-1",
+		Purpose:       "Run tests",
+		MachineClass:  "worker-small",
+	}); err != nil {
+		t.Fatalf("RequestWorker: %v", err)
+	}
+
+	list := reg.ListOwnerships()
+	if len(list) != 2 {
+		t.Fatalf("expected interactive + worker ownerships, got %d", len(list))
+	}
+	if reg.ActiveCount() != 2 {
+		t.Fatalf("active count = %d, want 2", reg.ActiveCount())
+	}
+}
+
 func TestOwnershipRegistry_SetSandboxCredential(t *testing.T) {
 	reg := NewOwnershipRegistry("http://127.0.0.1:8085")
 
@@ -332,6 +358,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *OwnershipRegistry) {
 	mux.HandleFunc("/internal/vmctl/resolve", handler.HandleResolve)
 	mux.HandleFunc("/internal/vmctl/fork-desktop", handler.HandleForkDesktop)
 	mux.HandleFunc("/internal/vmctl/publish-desktop", handler.HandlePublishDesktop)
+	mux.HandleFunc("/internal/vmctl/request-worker", handler.HandleRequestWorker)
 	mux.HandleFunc("/internal/vmctl/lookup", handler.HandleLookup)
 	mux.HandleFunc("/internal/vmctl/stop", handler.HandleStop)
 	mux.HandleFunc("/internal/vmctl/remove", handler.HandleRemove)
@@ -578,6 +605,54 @@ func TestHandler_PublishDesktop(t *testing.T) {
 	}
 	if !result.Published {
 		t.Fatal("published desktop should be marked published")
+	}
+}
+
+func TestHandler_RequestWorker(t *testing.T) {
+	srv, reg := newTestServer(t)
+
+	if _, err := reg.ResolveOrAssignDesktop("user-1", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveOrAssignDesktop primary: %v", err)
+	}
+
+	body := `{"user_id":"user-1","desktop_id":"primary","parent_agent_id":"super:primary","trajectory_id":"traj-1","purpose":"Run background coding task","machine_class":"worker-medium"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/vmctl/request-worker", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Caller", "true")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request-worker request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result WorkerVMHandle
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.Kind != VMKindWorker {
+		t.Fatalf("kind = %q, want %q", result.Kind, VMKindWorker)
+	}
+	if result.WorkerID == "" || result.VMID == "" {
+		t.Fatalf("expected non-empty worker identifiers: %+v", result)
+	}
+	if result.DesktopID != PrimaryDesktopID {
+		t.Fatalf("desktop_id = %q, want %q", result.DesktopID, PrimaryDesktopID)
+	}
+	if result.ParentAgentID != "super:primary" {
+		t.Fatalf("parent_agent_id = %q, want super:primary", result.ParentAgentID)
+	}
+	if result.TrajectoryID != "traj-1" {
+		t.Fatalf("trajectory_id = %q, want traj-1", result.TrajectoryID)
+	}
+	if result.Purpose != "Run background coding task" {
+		t.Fatalf("purpose = %q, want background coding task", result.Purpose)
+	}
+	if result.MachineClass != "worker-medium" {
+		t.Fatalf("machine_class = %q, want worker-medium", result.MachineClass)
 	}
 }
 
@@ -857,6 +932,41 @@ func TestClient_PublishDesktop(t *testing.T) {
 	}
 }
 
+func TestClient_RequestWorker(t *testing.T) {
+	srv, _ := newTestServer(t)
+	client := NewClient(srv.URL)
+
+	if _, err := client.ResolveDesktop("user-desktop", PrimaryDesktopID); err != nil {
+		t.Fatalf("ResolveDesktop primary: %v", err)
+	}
+	handle, err := client.RequestWorker(WorkerRequest{
+		UserID:        "user-desktop",
+		DesktopID:     PrimaryDesktopID,
+		ParentAgentID: "super:primary",
+		TrajectoryID:  "traj-1",
+		Purpose:       "Run background coding task",
+		MachineClass:  "worker-small",
+	})
+	if err != nil {
+		t.Fatalf("RequestWorker: %v", err)
+	}
+	if handle.Kind != VMKindWorker {
+		t.Fatalf("kind = %q, want %q", handle.Kind, VMKindWorker)
+	}
+	if handle.WorkerID == "" || handle.VMID == "" {
+		t.Fatalf("expected non-empty worker identifiers: %+v", handle)
+	}
+	if handle.DesktopID != PrimaryDesktopID {
+		t.Fatalf("desktop_id = %q, want %q", handle.DesktopID, PrimaryDesktopID)
+	}
+	if handle.ParentAgentID != "super:primary" {
+		t.Fatalf("parent_agent_id = %q, want super:primary", handle.ParentAgentID)
+	}
+	if handle.Purpose != "Run background coding task" {
+		t.Fatalf("purpose = %q, want background coding task", handle.Purpose)
+	}
+}
+
 func TestClient_ConcurrentResolveSameUser(t *testing.T) {
 	// VAL-VM-004: Concurrent first requests for one user collapse.
 	srv, _ := newTestServer(t)
@@ -973,6 +1083,9 @@ func TestEndpointURLs(t *testing.T) {
 	}
 	if got := PublishDesktopEndpoint(base); got != "http://localhost:8083/internal/vmctl/publish-desktop" {
 		t.Errorf("PublishDesktopEndpoint = %s", got)
+	}
+	if got := RequestWorkerEndpoint(base); got != "http://localhost:8083/internal/vmctl/request-worker" {
+		t.Errorf("RequestWorkerEndpoint = %s", got)
 	}
 	if got := StopEndpoint(base); got != "http://localhost:8083/internal/vmctl/stop" {
 		t.Errorf("StopEndpoint = %s", got)
@@ -1523,6 +1636,7 @@ func TestHandler_LifecycleEndpointsDenyExternalCallers(t *testing.T) {
 	}{
 		{"/internal/vmctl/fork-desktop", "POST", `{"user_id":"user-1","source_desktop_id":"primary","target_desktop_id":"branch-a"}`},
 		{"/internal/vmctl/publish-desktop", "POST", `{"user_id":"user-1","desktop_id":"branch-a"}`},
+		{"/internal/vmctl/request-worker", "POST", `{"user_id":"user-1","desktop_id":"primary","parent_agent_id":"super:primary","purpose":"Run tests"}`},
 		{"/internal/vmctl/hibernate", "POST", `{"user_id":"user-1"}`},
 		{"/internal/vmctl/resume", "POST", `{"user_id":"user-1"}`},
 		{"/internal/vmctl/recover", "POST", `{"user_id":"user-1"}`},

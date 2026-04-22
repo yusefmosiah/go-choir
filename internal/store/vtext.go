@@ -61,10 +61,20 @@ CREATE TABLE IF NOT EXISTS vtext_revisions (
 	created_at          DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vtext_document_aliases (
+	owner_id            VARCHAR(255) NOT NULL,
+	source_path         VARCHAR(2048) NOT NULL,
+	doc_id              VARCHAR(255) NOT NULL,
+	created_at          DATETIME NOT NULL,
+	updated_at          DATETIME NOT NULL,
+	PRIMARY KEY (owner_id, source_path)
+);
+
 CREATE INDEX IF NOT EXISTS idx_vtext_docs_owner ON vtext_documents(owner_id);
 CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc ON vtext_revisions(doc_id);
 CREATE INDEX IF NOT EXISTS idx_vtext_revs_owner ON vtext_revisions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_vtext_revs_doc_created ON vtext_revisions(doc_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vtext_aliases_doc ON vtext_document_aliases(doc_id);
 
 CREATE TABLE IF NOT EXISTS vtext_agent_mutations (
 	doc_id              VARCHAR(255) NOT NULL,
@@ -307,6 +317,47 @@ func (s *Store) UpdateDocument(ctx context.Context, doc types.Document) error {
 	return nil
 }
 
+// GetDocumentAlias resolves a file-browser alias to its canonical document ID.
+func (s *Store) GetDocumentAlias(ctx context.Context, ownerID, sourcePath string) (string, error) {
+	row := s.vtextHandle().QueryRowContext(ctx,
+		`SELECT doc_id
+		   FROM vtext_document_aliases
+		  WHERE owner_id = ? AND source_path = ?`,
+		ownerID, sourcePath,
+	)
+	var docID string
+	if err := row.Scan(&docID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("query vtext document alias: %w", err)
+	}
+	return docID, nil
+}
+
+// UpsertDocumentAlias records or refreshes the canonical document mapping for a file path.
+func (s *Store) UpsertDocumentAlias(ctx context.Context, ownerID, sourcePath, docID string, updatedAt time.Time) error {
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	_, err := s.vtextHandle().ExecContext(ctx,
+		`INSERT INTO vtext_document_aliases (owner_id, source_path, doc_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE
+		   doc_id = VALUES(doc_id),
+		   updated_at = VALUES(updated_at)`,
+		ownerID,
+		sourcePath,
+		docID,
+		updatedAt.UTC().Format(time.RFC3339Nano),
+		updatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert vtext document alias: %w", err)
+	}
+	return nil
+}
+
 // DeleteDocument deletes a document and all its revisions. It is scoped
 // to the given owner.
 func (s *Store) DeleteDocument(ctx context.Context, docID, ownerID string) error {
@@ -346,8 +397,31 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 	if metadata == "" {
 		metadata = "{}"
 	}
+	tx, err := s.vtextHandle().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin vtext revision transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	_, err := s.vtextHandle().ExecContext(ctx,
+	var currentHead string
+	row := tx.QueryRowContext(ctx,
+		`SELECT current_revision_id
+		   FROM vtext_documents
+		  WHERE doc_id = ? AND owner_id = ?`,
+		rev.DocID, rev.OwnerID,
+	)
+	if err := row.Scan(&currentHead); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: document %s for owner %s", ErrNotFound, rev.DocID, rev.OwnerID)
+		}
+		return fmt.Errorf("query vtext document head: %w", err)
+	}
+	expectedHead := strings.TrimSpace(rev.ParentRevisionID)
+	if strings.TrimSpace(currentHead) != expectedHead {
+		return fmt.Errorf("%w: document %s current head %s does not match parent %s", ErrStaleDocumentHead, rev.DocID, currentHead, expectedHead)
+	}
+
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO vtext_revisions (revision_id, doc_id, owner_id, author_kind, author_label, content, citations_json, metadata_json, parent_revision_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rev.RevisionID,
@@ -365,19 +439,31 @@ func (s *Store) CreateRevision(ctx context.Context, rev types.Revision) error {
 		return fmt.Errorf("insert vtext revision: %w", err)
 	}
 
-	// Update the document's current_revision_id and updated_at.
-	_, err = s.vtextHandle().ExecContext(ctx,
+	// Update the document's current_revision_id and updated_at, but only if the
+	// head still matches the parent revision we read at the start of this transaction.
+	result, err := tx.ExecContext(ctx,
 		`UPDATE vtext_documents
 		    SET current_revision_id = ?,
 		        updated_at = ?
-		  WHERE doc_id = ? AND owner_id = ?`,
+		  WHERE doc_id = ? AND owner_id = ? AND current_revision_id = ?`,
 		rev.RevisionID,
 		rev.CreatedAt.UTC().Format(time.RFC3339Nano),
 		rev.DocID,
 		rev.OwnerID,
+		expectedHead,
 	)
 	if err != nil {
 		return fmt.Errorf("update vtext document head: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check updated vtext document head rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: document %s head moved during revision create", ErrStaleDocumentHead, rev.DocID)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit vtext revision: %w", err)
 	}
 	return nil
 }

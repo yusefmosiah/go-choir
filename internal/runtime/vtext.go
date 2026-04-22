@@ -12,6 +12,7 @@
 //	DELETE /api/vtext/documents/{id}     — delete a document and its revisions
 //	POST   /api/vtext/documents/{id}/revisions — create a new revision (user edit or appagent edit)
 //	GET    /api/vtext/documents/{id}/revisions — list revisions for a document
+//	GET    /api/vtext/documents/{id}/stream — stream document lifecycle changes
 //	GET    /api/vtext/revisions/{id}    — get a specific revision (snapshot)
 //	GET    /api/vtext/documents/{id}/history — get revision history with attribution
 //	GET    /api/vtext/diff?from={id}&to={id} — diff two revisions
@@ -21,9 +22,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	pathpkg "path"
 	"strings"
 	"time"
 
@@ -49,6 +52,18 @@ type vtextCreateDocResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type vtextOpenFileRequest struct {
+	SourcePath     string `json:"source_path"`
+	Title          string `json:"title"`
+	InitialContent string `json:"initial_content"`
+}
+
+type vtextOpenFileResponse struct {
+	DocID             string `json:"doc_id"`
+	CurrentRevisionID string `json:"current_revision_id,omitempty"`
+	Created           bool   `json:"created"`
+}
+
 // vtextDocumentResponse is the JSON response for GET /api/vtext/documents/{id}.
 type vtextDocumentResponse struct {
 	DocID             string `json:"doc_id"`
@@ -57,6 +72,19 @@ type vtextDocumentResponse struct {
 	CurrentRevisionID string `json:"current_revision_id,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
+}
+
+// vtextDocumentStreamEvent is the hidden transport envelope sent over the
+// document-scoped SSE stream. The editor consumes document lifecycle changes
+// from this stream but does not render raw agent chatter.
+type vtextDocumentStreamEvent struct {
+	Kind              string `json:"kind"`
+	DocID             string `json:"doc_id"`
+	LoopID            string `json:"loop_id,omitempty"`
+	RevisionID        string `json:"revision_id,omitempty"`
+	CurrentRevisionID string `json:"current_revision_id,omitempty"`
+	Pending           bool   `json:"pending,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // vtextUpdateDocRequest is the JSON payload for PUT /api/vtext/documents/{id}.
@@ -145,6 +173,27 @@ func extractRevisionID(path string) string {
 	return parts[0]
 }
 
+func normalizeVTextSourcePath(raw string) string {
+	cleaned := pathpkg.Clean("/" + strings.TrimSpace(raw))
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
+}
+
+func writeSSEData(w http.ResponseWriter, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("vtext api: marshal sse payload: %v", err)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // ----- Handler methods -----
 
 // HandleVTextCreateDocument handles POST /api/vtext/documents.
@@ -192,6 +241,99 @@ func (h *APIHandler) HandleVTextCreateDocument(w http.ResponseWriter, r *http.Re
 		OwnerID:   doc.OwnerID,
 		Title:     doc.Title,
 		CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+	})
+}
+
+// HandleVTextOpenFile resolves a file-browser path to one canonical vtext
+// document. The first open creates the document + alias; later opens reuse it.
+func (h *APIHandler) HandleVTextOpenFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	var req vtextOpenFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "invalid request body"})
+		return
+	}
+	sourcePath := normalizeVTextSourcePath(req.SourcePath)
+	if sourcePath == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "source_path is required"})
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		parts := strings.Split(sourcePath, "/")
+		title = parts[len(parts)-1]
+	}
+
+	docID, err := h.rt.Store().GetDocumentAlias(r.Context(), ownerID, sourcePath)
+	if err == nil {
+		doc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+		if err != nil {
+			log.Printf("vtext api: resolve aliased document %s: %v", docID, err)
+			writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to open aliased document"})
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, vtextOpenFileResponse{
+			DocID:             doc.DocID,
+			CurrentRevisionID: doc.CurrentRevisionID,
+			Created:           false,
+		})
+		return
+	}
+	if err != store.ErrNotFound {
+		log.Printf("vtext api: lookup file alias %s: %v", sourcePath, err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to resolve file alias"})
+		return
+	}
+
+	now := time.Now().UTC()
+	doc := types.Document{
+		DocID:     uuid.New().String(),
+		OwnerID:   ownerID,
+		Title:     title,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := h.rt.Store().CreateDocument(r.Context(), doc); err != nil {
+		log.Printf("vtext api: create aliased document: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create aliased document"})
+		return
+	}
+	rev := types.Revision{
+		RevisionID:  uuid.New().String(),
+		DocID:       doc.DocID,
+		OwnerID:     ownerID,
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: ownerID,
+		Content:     req.InitialContent,
+		Metadata: json.RawMessage(fmt.Sprintf(`{"source_path":%q,"created_from":"file_open"}`,
+			sourcePath,
+		)),
+		CreatedAt: now,
+	}
+	if err := h.rt.Store().CreateRevision(r.Context(), rev); err != nil {
+		log.Printf("vtext api: create aliased initial revision: %v", err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create aliased initial revision"})
+		return
+	}
+	if err := h.rt.Store().UpsertDocumentAlias(r.Context(), ownerID, sourcePath, doc.DocID, now); err != nil {
+		log.Printf("vtext api: upsert file alias %s -> %s: %v", sourcePath, doc.DocID, err)
+		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to persist file alias"})
+		return
+	}
+	doc.CurrentRevisionID = rev.RevisionID
+	writeAPIJSON(w, http.StatusCreated, vtextOpenFileResponse{
+		DocID:             doc.DocID,
+		CurrentRevisionID: rev.RevisionID,
+		Created:           true,
 	})
 }
 
@@ -404,9 +546,14 @@ func (h *APIHandler) handleVTextCreateRevision(w http.ResponseWriter, r *http.Re
 
 	if err := h.rt.Store().CreateRevision(r.Context(), rev); err != nil {
 		log.Printf("vtext api: create revision: %v", err)
+		if errors.Is(err, store.ErrStaleDocumentHead) {
+			writeAPIJSON(w, http.StatusConflict, apiError{Error: "document head changed; reload the latest version before saving"})
+			return
+		}
 		writeAPIJSON(w, http.StatusInternalServerError, apiError{Error: "failed to create revision"})
 		return
 	}
+	h.rt.emitVTextDocumentRevisionEvent(r.Context(), ownerID, rev)
 
 	writeAPIJSON(w, http.StatusCreated, vtextRevisionResponse{
 		RevisionID:       rev.RevisionID,
@@ -531,6 +678,161 @@ func (h *APIHandler) HandleVTextHistory(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// HandleVTextDocumentStream handles GET /api/vtext/documents/{id}/stream.
+// It provides a document-scoped SSE transport so the editor can follow the
+// canonical document head instead of polling a specific loop ID.
+func (h *APIHandler) HandleVTextDocumentStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIJSON(w, http.StatusMethodNotAllowed, apiError{Error: "method not allowed"})
+		return
+	}
+
+	docID := extractDocID(r.URL.Path)
+	if docID == "" {
+		writeAPIJSON(w, http.StatusBadRequest, apiError{Error: "document ID is required"})
+		return
+	}
+
+	ownerID, err := authenticateUser(r)
+	if err != nil {
+		writeAPIJSON(w, http.StatusUnauthorized, apiError{Error: "authentication required"})
+		return
+	}
+
+	doc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+	if err != nil {
+		writeAPIJSON(w, http.StatusNotFound, apiError{Error: "document not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	pendingMutation, err := h.rt.Store().GetPendingAgentMutationByDoc(r.Context(), docID, ownerID)
+	if err != nil {
+		log.Printf("vtext api: get pending mutation for stream: %v", err)
+	}
+	writeSSEData(w, vtextDocumentStreamEvent{
+		Kind:              "snapshot",
+		DocID:             doc.DocID,
+		CurrentRevisionID: doc.CurrentRevisionID,
+		Pending:           pendingMutation != nil,
+		LoopID: func() string {
+			if pendingMutation == nil {
+				return ""
+			}
+			return pendingMutation.RunID
+		}(),
+	})
+
+	ch := h.rt.EventBus().SubscribeWithBuffer(128)
+	defer h.rt.EventBus().Unsubscribe(ch)
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			if ev.Record.OwnerID != ownerID && ev.Record.OwnerID != "" {
+				continue
+			}
+			streamEvent, ok := vtextStreamEventFromRecord(ev.Record)
+			if !ok || streamEvent.DocID != docID {
+				continue
+			}
+			writeSSEData(w, streamEvent)
+
+			if streamEvent.Kind != "synth_completed" {
+				if streamEvent.Kind != "revision_created" {
+					continue
+				}
+				currentRevisionID := streamEvent.CurrentRevisionID
+				if currentRevisionID == "" {
+					updatedDoc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+					if err != nil {
+						log.Printf("vtext api: get document after revision create: %v", err)
+						continue
+					}
+					currentRevisionID = updatedDoc.CurrentRevisionID
+				}
+				writeSSEData(w, vtextDocumentStreamEvent{
+					Kind:              "head_changed",
+					DocID:             docID,
+					LoopID:            streamEvent.LoopID,
+					RevisionID:        streamEvent.RevisionID,
+					CurrentRevisionID: currentRevisionID,
+				})
+				continue
+			}
+
+			updatedDoc, err := h.rt.Store().GetDocument(r.Context(), docID, ownerID)
+			if err != nil {
+				log.Printf("vtext api: get document after synth completion: %v", err)
+				continue
+			}
+			if streamEvent.RevisionID != "" {
+				writeSSEData(w, vtextDocumentStreamEvent{
+					Kind:              "revision_created",
+					DocID:             docID,
+					LoopID:            streamEvent.LoopID,
+					RevisionID:        streamEvent.RevisionID,
+					CurrentRevisionID: updatedDoc.CurrentRevisionID,
+				})
+			}
+			writeSSEData(w, vtextDocumentStreamEvent{
+				Kind:              "head_changed",
+				DocID:             docID,
+				LoopID:            streamEvent.LoopID,
+				RevisionID:        streamEvent.RevisionID,
+				CurrentRevisionID: updatedDoc.CurrentRevisionID,
+			})
+		}
+	}
+}
+
+func vtextStreamEventFromRecord(rec types.EventRecord) (vtextDocumentStreamEvent, bool) {
+	var payload map[string]string
+	if len(rec.Payload) > 0 {
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			return vtextDocumentStreamEvent{}, false
+		}
+	}
+
+	docID := strings.TrimSpace(payload["doc_id"])
+	if docID == "" {
+		return vtextDocumentStreamEvent{}, false
+	}
+
+	event := vtextDocumentStreamEvent{
+		DocID:             docID,
+		LoopID:            strings.TrimSpace(payload["loop_id"]),
+		RevisionID:        strings.TrimSpace(payload["revision_id"]),
+		CurrentRevisionID: strings.TrimSpace(payload["current_revision_id"]),
+		Error:             strings.TrimSpace(payload["error"]),
+	}
+	switch rec.Kind {
+	case types.EventVTextAgentRevisionStarted, types.EventVTextAgentRevisionProgress:
+		event.Kind = "synth_started"
+	case types.EventVTextAgentRevisionCompleted:
+		event.Kind = "synth_completed"
+	case types.EventVTextAgentRevisionFailed:
+		event.Kind = "synth_failed"
+	case types.EventVTextDocumentRevisionCreated:
+		event.Kind = "revision_created"
+	default:
+		return vtextDocumentStreamEvent{}, false
+	}
+	return event, true
+}
+
 // HandleVTextDiff handles GET /api/vtext/diff?from={id}&to={id}.
 // It compares selected from and to revisions and shows the changed
 // sections (VAL-ETEXT-008: diff view compares selected revisions and
@@ -607,8 +909,9 @@ type vtextAgentRevisionRequest struct {
 }
 
 // vtextAgentRevisionResponse is the JSON response for agent revision
-// submission. It returns the stable task handle so the client can track
-// progress through the event stream (VAL-ETEXT-004).
+// submission. It returns the stable task handle so runtime/trace surfaces can
+// correlate the mutation even though the editor now follows the document stream
+// instead of polling the run directly (VAL-ETEXT-004).
 type vtextAgentRevisionResponse struct {
 	RunID     string         `json:"loop_id"`
 	DocID     string         `json:"doc_id"`
@@ -1060,5 +1363,32 @@ func (rt *Runtime) emitVTextAgentEvent(ctx context.Context, rec *types.RunRecord
 		Payload:   payload,
 	}); err != nil {
 		log.Printf("runtime: persist vtext agent event: %v", err)
+	}
+}
+
+func (rt *Runtime) emitVTextDocumentRevisionEvent(ctx context.Context, ownerID string, rev types.Revision) {
+	payload, err := json.Marshal(map[string]string{
+		"doc_id":              rev.DocID,
+		"revision_id":         rev.RevisionID,
+		"current_revision_id": rev.RevisionID,
+	})
+	if err != nil {
+		log.Printf("runtime: marshal vtext document revision event: %v", err)
+		return
+	}
+	evRec := types.EventRecord{
+		EventID:   uuid.New().String(),
+		OwnerID:   ownerID,
+		Timestamp: time.Now().UTC(),
+		Kind:      types.EventVTextDocumentRevisionCreated,
+		Payload:   payload,
+	}
+	rt.bus.Publish(events.RuntimeEvent{
+		Record: evRec,
+		Actor:  events.ActorRuntime,
+		Cause:  events.CauseTaskLifecycle,
+	})
+	if err := rt.store.AppendEvent(ctx, &evRec); err != nil {
+		log.Printf("runtime: persist vtext document revision event: %v", err)
 	}
 }

@@ -30,6 +30,7 @@
   import FloatingWindow from './FloatingWindow.svelte';
   import TraceApp from './TraceApp.svelte';
   import VTextEditor from './VTextEditor.svelte';
+  import { openFileDocument } from './vtext.js';
   import FileBrowser from './FileBrowser.svelte';
   import BrowserApp from './BrowserApp.svelte';
   import TerminalApp from './TerminalApp.svelte';
@@ -356,7 +357,6 @@
       openApp('vtext', 'VText', '📝', {
         windowTitle: decision.title || fallbackWindowTitle,
         docId: decision.doc_id || '',
-        initialLoopId: decision.initial_loop_id || '',
         seedPrompt: decision.seed_prompt || text,
         initialContent: decision.initial_content || decision.seed_prompt || text,
         createInitialVersion: decision.create_initial_version !== false,
@@ -387,11 +387,16 @@
         return;
       }
       const content = await res.text();
+      const doc = await openFileDocument({
+        sourcePath: pathSegments.join('/'),
+        title: fileName,
+        initialContent: content,
+      });
       openApp('vtext', 'VText', '📝', {
         windowTitle: fileName,
         fileName,
+        docId: doc.doc_id,
         sourcePath: pathSegments.join('/'),
-        initialContent: content,
       });
       showToast(`Opened ${fileName} in VText`);
     } catch (err) {

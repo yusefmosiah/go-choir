@@ -35,7 +35,7 @@ test('vtext uses the document surface as the window and exposes version navigati
   await editor.fill('Version zero content.\n\nExpand this into a better document.');
   await page.locator('[data-vtext-prompt]').click();
 
-  await expect(page.locator('[data-vtext-save-status]')).toContainText('Agent created next version', { timeout: 10000 });
+  await expect(page.locator('[data-vtext-save-status]')).toContainText(/First draft ready|Agent created next version/, { timeout: 10000 });
   await expect(prev).toBeEnabled();
   await expect(next).toBeDisabled();
 });

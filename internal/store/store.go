@@ -36,6 +36,10 @@ import (
 // ErrNotFound is returned when a record is not found.
 var ErrNotFound = errors.New("record not found")
 
+// ErrStaleDocumentHead is returned when a caller tries to create a revision
+// against an older parent while the document head has already moved on.
+var ErrStaleDocumentHead = errors.New("stale document head")
+
 // Store wraps a SQLite database connection and provides persistence for
 // run records, agent records, channel messages, and event records.
 type Store struct {

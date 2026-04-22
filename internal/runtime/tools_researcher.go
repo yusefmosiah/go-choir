@@ -384,4 +384,5 @@ func (rt *Runtime) emitChannelMessageEvent(ctx context.Context, message types.Ch
 		Actor:  events.ActorChannel,
 		Cause:  events.CauseChannelMessage,
 	})
+	rt.maybeWakeVTextOnWorkerMessage(ctx, ownerID, message)
 }

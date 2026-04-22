@@ -8,11 +8,19 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/yusefmosiah/go-choir/internal/search"
 )
 
-func RegisterResearchTools(registry *ToolRegistry, searchClient *search.SearchClient, httpClient *http.Client) error {
+type webSearchClient interface {
+	Search(ctx context.Context, query string, maxResults int) (*webSearchResponse, error)
+}
+
+type webSearchResponse struct {
+	Query    string           `json:"query"`
+	Provider string           `json:"provider"`
+	Results  []map[string]any `json:"results"`
+}
+
+func RegisterResearchTools(registry *ToolRegistry, searchClient webSearchClient, httpClient *http.Client) error {
 	for _, tool := range []Tool{
 		newWebSearchTool(searchClient),
 		newFetchURLTool(httpClient),
@@ -24,7 +32,7 @@ func RegisterResearchTools(registry *ToolRegistry, searchClient *search.SearchCl
 	return nil
 }
 
-func newWebSearchTool(searchClient *search.SearchClient) Tool {
+func newWebSearchTool(searchClient webSearchClient) Tool {
 	type args struct {
 		Query      string `json:"query"`
 		MaxResults int    `json:"max_results,omitempty"`
@@ -47,10 +55,7 @@ func newWebSearchTool(searchClient *search.SearchClient) Tool {
 			if strings.TrimSpace(in.Query) == "" {
 				return "", fmt.Errorf("query must not be empty")
 			}
-			resp, err := searchClient.Search(ctx, search.SearchRequest{
-				Query:      strings.TrimSpace(in.Query),
-				MaxResults: in.MaxResults,
-			})
+			resp, err := searchClient.Search(ctx, strings.TrimSpace(in.Query), in.MaxResults)
 			if err != nil {
 				return "", err
 			}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,6 +138,34 @@ func TestVTextUpdateDocument(t *testing.T) {
 	}
 }
 
+func TestVTextDocumentAliasRoundTrip(t *testing.T) {
+	s := vtextTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	doc := types.Document{
+		DocID:     "doc-alias",
+		OwnerID:   "user-1",
+		Title:     "Aliased Doc",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.CreateDocument(ctx, doc); err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	if err := s.UpsertDocumentAlias(ctx, "user-1", "notes/aliased.md", "doc-alias", now); err != nil {
+		t.Fatalf("UpsertDocumentAlias: %v", err)
+	}
+
+	docID, err := s.GetDocumentAlias(ctx, "user-1", "notes/aliased.md")
+	if err != nil {
+		t.Fatalf("GetDocumentAlias: %v", err)
+	}
+	if docID != "doc-alias" {
+		t.Fatalf("doc alias resolved to %q, want %q", docID, "doc-alias")
+	}
+}
+
 func TestVTextDeleteDocument(t *testing.T) {
 	s := vtextTestStore(t)
 	ctx := context.Background()
@@ -211,6 +240,65 @@ func TestVTextCreateRevision(t *testing.T) {
 	}
 	if got.AuthorLabel != "alice" {
 		t.Errorf("AuthorLabel = %q, want %q", got.AuthorLabel, "alice")
+	}
+}
+
+func TestVTextCreateRevisionRejectsStaleHead(t *testing.T) {
+	s := vtextTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	doc := types.Document{
+		DocID:     "doc-1",
+		OwnerID:   "user-1",
+		Title:     "Test Doc",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.CreateDocument(ctx, doc); err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	base := types.Revision{
+		RevisionID:  "rev-1",
+		DocID:       "doc-1",
+		OwnerID:     "user-1",
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "alice",
+		Content:     "Base",
+		CreatedAt:   now,
+	}
+	if err := s.CreateRevision(ctx, base); err != nil {
+		t.Fatalf("CreateRevision base: %v", err)
+	}
+
+	head := types.Revision{
+		RevisionID:       "rev-2",
+		DocID:            "doc-1",
+		OwnerID:          "user-1",
+		AuthorKind:       types.AuthorUser,
+		AuthorLabel:      "alice",
+		Content:          "Head",
+		ParentRevisionID: "rev-1",
+		CreatedAt:        now.Add(time.Second),
+	}
+	if err := s.CreateRevision(ctx, head); err != nil {
+		t.Fatalf("CreateRevision head: %v", err)
+	}
+
+	stale := types.Revision{
+		RevisionID:       "rev-3",
+		DocID:            "doc-1",
+		OwnerID:          "user-1",
+		AuthorKind:       types.AuthorUser,
+		AuthorLabel:      "alice",
+		Content:          "Stale branch",
+		ParentRevisionID: "rev-1",
+		CreatedAt:        now.Add(2 * time.Second),
+	}
+	err := s.CreateRevision(ctx, stale)
+	if !errors.Is(err, ErrStaleDocumentHead) {
+		t.Fatalf("CreateRevision stale err = %v, want ErrStaleDocumentHead", err)
 	}
 }
 
@@ -691,10 +779,9 @@ func TestVTextSnapshotDoesNotMutateHead(t *testing.T) {
 	ctx := context.Background()
 
 	doc := types.Document{
-		DocID:             "doc-1",
-		OwnerID:           "user-1",
-		Title:             "Test Doc",
-		CurrentRevisionID: "rev-2",
+		DocID:   "doc-1",
+		OwnerID: "user-1",
+		Title:   "Test Doc",
 	}
 	if err := s.CreateDocument(ctx, doc); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
@@ -878,7 +965,7 @@ func TestVTextAgentMutationCreateAndGet(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -908,7 +995,7 @@ func TestVTextAgentMutationByTask(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -935,7 +1022,7 @@ func TestVTextAgentMutationComplete(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -980,7 +1067,7 @@ func TestVTextAgentMutationNoDuplicateOnCompletion(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1013,7 +1100,7 @@ func TestVTextAgentMutationIdempotentCreation(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1034,7 +1121,7 @@ func TestVTextAgentMutationFail(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),
@@ -1059,7 +1146,7 @@ func TestVTextAgentMutationNoCrossUserAccess(t *testing.T) {
 
 	m := AgentMutation{
 		DocID:     "doc-1",
-		RunID:    "task-1",
+		RunID:     "task-1",
 		OwnerID:   "user-1",
 		State:     "pending",
 		CreatedAt: time.Now().UTC(),

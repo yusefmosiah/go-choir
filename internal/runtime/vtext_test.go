@@ -643,6 +643,7 @@ func vtextAPISetupWithProvider(t *testing.T, provider Provider, installTools boo
 		PromptRoot:          promptRoot,
 		ProviderTimeout:     5 * time.Second,
 		SupervisionInterval: 5 * time.Second,
+		VTextWakeDebounce:   50 * time.Millisecond,
 	}
 
 	bus := events.NewEventBus()
@@ -961,6 +962,456 @@ func TestVTextWorkerMessageAutoWakeCreatesFollowUpRevision(t *testing.T) {
 	if !strings.Contains(wakeRun.Prompt, "User-authored revision diffs (oldest to newest)") {
 		t.Fatalf("wake run prompt missing user diff compaction context: %q", wakeRun.Prompt)
 	}
+}
+
+func TestVTextWorkerMessageAutoWakeBatchesRapidMessages(t *testing.T) {
+	provider := NewStubProvider(1 * time.Millisecond)
+	provider.Result = "Integrated multiple grounded findings into one revision."
+
+	h, s, rt := vtextAPISetupWithProvider(t, provider, false)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	userRevReq := vtextCreateRevisionRequest{
+		Content:     "Original draft.\n\nNeed the newest facts.",
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "user",
+	}
+	userRevReqBody := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", userRevReq)
+	userRevW := httptest.NewRecorder()
+	h.HandleVTextRevisions(userRevW, userRevReqBody)
+	if userRevW.Code != http.StatusCreated {
+		t.Fatalf("second user revision: status = %d, want %d; body: %s", userRevW.Code, http.StatusCreated, userRevW.Body.String())
+	}
+
+	researchRun, err := rt.StartRunWithMetadata(context.Background(), "Research the latest facts", "user-1", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    docID,
+	})
+	if err != nil {
+		t.Fatalf("start research run: %v", err)
+	}
+	postWorkerMessage := func(content string) {
+		t.Helper()
+		if _, err := rt.ChannelCast(WithToolExecutionContext(context.Background(), researchRun), docID, "vtext:"+docID, "", "researcher-1", "researcher", content); err != nil {
+			t.Fatalf("post worker message %q: %v", content, err)
+		}
+	}
+	postWorkerMessage("Evidence A: the first grounded fact arrived.")
+	postWorkerMessage("Evidence B: the second grounded fact arrived.")
+
+	revs := waitForRevisionCount(t, s, docID, "user-1", 3, 5*time.Second)
+	appAgentRevisions := 0
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "Integrated multiple grounded findings") {
+			appAgentRevisions++
+		}
+	}
+	if appAgentRevisions != 1 {
+		t.Fatalf("expected exactly one wake-driven appagent revision, got %d revisions: %+v", appAgentRevisions, revs)
+	}
+
+	runs, err := rt.Store().ListRunsByChannel(context.Background(), "user-1", docID, 20)
+	if err != nil {
+		t.Fatalf("list channel runs: %v", err)
+	}
+	var wakeRuns []types.RunRecord
+	for i := range runs {
+		if agentProfileForRun(&runs[i]) == AgentProfileVText && runs[i].ParentRunID == researchRun.RunID {
+			wakeRuns = append(wakeRuns, runs[i])
+		}
+	}
+	if len(wakeRuns) != 1 {
+		t.Fatalf("expected one debounced vtext wake run, got %+v", wakeRuns)
+	}
+	if !strings.Contains(wakeRuns[0].Prompt, "Evidence A: the first grounded fact arrived.") {
+		t.Fatalf("wake run prompt missing first worker message: %q", wakeRuns[0].Prompt)
+	}
+	if !strings.Contains(wakeRuns[0].Prompt, "Evidence B: the second grounded fact arrived.") {
+		t.Fatalf("wake run prompt missing second worker message: %q", wakeRuns[0].Prompt)
+	}
+}
+
+func TestSubmitResearchFindingsWakeUsesSameDebouncedPath(t *testing.T) {
+	provider := NewStubProvider(1 * time.Millisecond)
+	provider.Result = "Integrated persisted findings into the next revision."
+
+	h, s, rt := vtextAPISetupWithProvider(t, provider, true)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	userRevReq := vtextCreateRevisionRequest{
+		Content:     "Original draft.\n\nNeed a sourced update.",
+		AuthorKind:  types.AuthorUser,
+		AuthorLabel: "user",
+	}
+	userRevReqBody := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", userRevReq)
+	userRevW := httptest.NewRecorder()
+	h.HandleVTextRevisions(userRevW, userRevReqBody)
+	if userRevW.Code != http.StatusCreated {
+		t.Fatalf("second user revision: status = %d, want %d; body: %s", userRevW.Code, http.StatusCreated, userRevW.Body.String())
+	}
+
+	vtextRun, err := rt.StartRunWithMetadata(context.Background(), "Own the document", "user-1", map[string]any{
+		runMetadataAgentProfile: AgentProfileVText,
+		runMetadataAgentRole:    AgentProfileVText,
+		runMetadataChannelID:    docID,
+		runMetadataAgentID:      "vtext:" + docID,
+		"doc_id":                docID,
+	})
+	if err != nil {
+		t.Fatalf("start vtext run: %v", err)
+	}
+	researcherRun, err := rt.StartChildRun(context.Background(), vtextRun.RunID, "Research the update", "user-1", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+		runMetadataChannelID:    docID,
+	})
+	if err != nil {
+		t.Fatalf("start researcher run: %v", err)
+	}
+
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	raw, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherRun), "submit_research_findings", json.RawMessage(`{
+		"finding_id":"finding-stream-001",
+		"findings":["A new release landed this week."],
+		"evidence":[
+			{
+				"kind":"web_page",
+				"source_uri":"https://example.com/release",
+				"title":"Release notes",
+				"content":"The release notes describe the new capabilities."
+			}
+		],
+		"notes":["Prefer a brief update in the next draft."]
+	}`))
+	if err != nil {
+		t.Fatalf("submit_research_findings: %v", err)
+	}
+	var findingResp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(raw), &findingResp); err != nil {
+		t.Fatalf("decode submit_research_findings: %v", err)
+	}
+	if findingResp.Status != "submitted" {
+		t.Fatalf("submit_research_findings status = %q, want submitted", findingResp.Status)
+	}
+
+	revs := waitForRevisionCount(t, s, docID, "user-1", 3, 5*time.Second)
+	foundAppAgent := false
+	for _, rev := range revs {
+		if rev.AuthorKind == types.AuthorAppAgent && strings.Contains(rev.Content, "Integrated persisted findings") {
+			foundAppAgent = true
+			break
+		}
+	}
+	if !foundAppAgent {
+		t.Fatalf("expected findings-driven appagent revision, got %+v", revs)
+	}
+
+	runs, err := rt.Store().ListRunsByChannel(context.Background(), "user-1", docID, 20)
+	if err != nil {
+		t.Fatalf("list channel runs: %v", err)
+	}
+	var wakeRun *types.RunRecord
+	for i := range runs {
+		if agentProfileForRun(&runs[i]) == AgentProfileVText && runs[i].ParentRunID == researcherRun.RunID {
+			wakeRun = &runs[i]
+			break
+		}
+	}
+	if wakeRun == nil {
+		t.Fatalf("expected findings-driven vtext wake run on channel %s, got %+v", docID, runs)
+	}
+	if !strings.Contains(wakeRun.Prompt, "Release notes") {
+		t.Fatalf("wake run prompt missing persisted findings evidence context: %q", wakeRun.Prompt)
+	}
+}
+
+func TestVTextOpenFileResolvesCanonicalAlias(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
+
+	openReq := func(initialContent string) *httptest.ResponseRecorder {
+		req := vtextRequest(t, http.MethodPost, "/api/vtext/files/open", map[string]string{
+			"source_path":     "notes/ai-news.md",
+			"title":           "ai-news.md",
+			"initial_content": initialContent,
+		})
+		w := httptest.NewRecorder()
+		h.HandleVTextRouter(w, req)
+		return w
+	}
+
+	first := openReq("Initial file content")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first open file: status = %d, want %d; body: %s", first.Code, http.StatusCreated, first.Body.String())
+	}
+	var firstResp vtextOpenFileResponse
+	if err := json.NewDecoder(first.Body).Decode(&firstResp); err != nil {
+		t.Fatalf("decode first open file response: %v", err)
+	}
+	if !firstResp.Created {
+		t.Fatalf("first open created = false, want true")
+	}
+
+	second := openReq("Changed file bytes that should not fork a new doc")
+	if second.Code != http.StatusOK {
+		t.Fatalf("second open file: status = %d, want %d; body: %s", second.Code, http.StatusOK, second.Body.String())
+	}
+	var secondResp vtextOpenFileResponse
+	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second open file response: %v", err)
+	}
+	if secondResp.Created {
+		t.Fatalf("second open created = true, want false")
+	}
+	if secondResp.DocID != firstResp.DocID {
+		t.Fatalf("second open doc_id = %q, want %q", secondResp.DocID, firstResp.DocID)
+	}
+
+	revs, err := s.ListRevisionsByDoc(context.Background(), firstResp.DocID, "user-1", 10)
+	if err != nil {
+		t.Fatalf("ListRevisionsByDoc: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("len(revisions) = %d, want 1", len(revs))
+	}
+	if revs[0].Content != "Initial file content" {
+		t.Fatalf("initial aliased revision content = %q, want initial file content", revs[0].Content)
+	}
+}
+
+func TestVTextCreateRevisionRejectsStaleHead(t *testing.T) {
+	h, _, _ := vtextAPISetupWithRuntime(t)
+	docID, baseRevisionID := createDocWithUserRevision(t, h)
+
+	headReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", vtextCreateRevisionRequest{
+		Content:          "Latest head",
+		AuthorKind:       types.AuthorUser,
+		AuthorLabel:      "alice",
+		ParentRevisionID: baseRevisionID,
+	})
+	headW := httptest.NewRecorder()
+	h.HandleVTextRevisions(headW, headReq)
+	if headW.Code != http.StatusCreated {
+		t.Fatalf("create head revision: status = %d, want %d; body: %s", headW.Code, http.StatusCreated, headW.Body.String())
+	}
+
+	staleReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", vtextCreateRevisionRequest{
+		Content:          "Stale write",
+		AuthorKind:       types.AuthorUser,
+		AuthorLabel:      "alice",
+		ParentRevisionID: baseRevisionID,
+	})
+	staleW := httptest.NewRecorder()
+	h.HandleVTextRevisions(staleW, staleReq)
+	if staleW.Code != http.StatusConflict {
+		t.Fatalf("stale create revision: status = %d, want %d; body: %s", staleW.Code, http.StatusConflict, staleW.Body.String())
+	}
+}
+
+func TestVTextDocumentStreamSendsSnapshot(t *testing.T) {
+	h, s := vtextAPISetup(t)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodGet, "/api/vtext/documents/"+docID+"/stream", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.HandleVTextDocumentStream(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := w.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content-type = %q, want text/event-stream", got)
+	}
+
+	doc, err := s.GetDocument(context.Background(), docID, "user-1")
+	if err != nil {
+		t.Fatalf("get document: %v", err)
+	}
+
+	var foundSnapshot bool
+	for _, ev := range parseVTextStreamEvents(t, w.Body.String()) {
+		if ev.Kind != "snapshot" {
+			continue
+		}
+		foundSnapshot = true
+		if ev.DocID != docID {
+			t.Fatalf("snapshot doc_id = %q, want %q", ev.DocID, docID)
+		}
+		if ev.CurrentRevisionID != doc.CurrentRevisionID {
+			t.Fatalf("snapshot current_revision_id = %q, want %q", ev.CurrentRevisionID, doc.CurrentRevisionID)
+		}
+		if ev.Pending {
+			t.Fatal("snapshot should not report a pending mutation")
+		}
+	}
+	if !foundSnapshot {
+		t.Fatal("expected snapshot event in document stream")
+	}
+}
+
+func TestVTextDocumentStreamEmitsHeadChangeAfterAgentRevision(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
+	docID, _ := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodGet, "/api/vtext/documents/"+docID+"/stream", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.HandleVTextDocumentStream(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	revReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/agent-revision",
+		map[string]string{"prompt": "Make it more formal"})
+	revW := httptest.NewRecorder()
+	h.HandleVTextAgentRevision(revW, revReq)
+	if revW.Code != http.StatusAccepted {
+		t.Fatalf("agent revision: status = %d, want %d; body: %s", revW.Code, http.StatusAccepted, revW.Body.String())
+	}
+
+	var resp vtextAgentRevisionResponse
+	if err := json.NewDecoder(revW.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	state := waitForTaskCompletion(t, h, resp.RunID, 5*time.Second)
+	if state != types.RunCompleted {
+		t.Fatalf("task state = %q, want %q", state, types.RunCompleted)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	doc, err := s.GetDocument(context.Background(), docID, "user-1")
+	if err != nil {
+		t.Fatalf("get document: %v", err)
+	}
+
+	var foundStarted, foundCompleted, foundRevisionCreated, foundHeadChanged bool
+	for _, ev := range parseVTextStreamEvents(t, w.Body.String()) {
+		switch ev.Kind {
+		case "synth_started":
+			foundStarted = true
+		case "synth_completed":
+			foundCompleted = true
+		case "revision_created":
+			foundRevisionCreated = true
+			if ev.RevisionID == "" {
+				t.Fatal("revision_created event missing revision_id")
+			}
+		case "head_changed":
+			foundHeadChanged = true
+			if ev.CurrentRevisionID != doc.CurrentRevisionID {
+				t.Fatalf("head_changed current_revision_id = %q, want %q", ev.CurrentRevisionID, doc.CurrentRevisionID)
+			}
+		}
+	}
+	if !foundStarted {
+		t.Fatal("expected synth_started event")
+	}
+	if !foundCompleted {
+		t.Fatal("expected synth_completed event")
+	}
+	if !foundRevisionCreated {
+		t.Fatal("expected revision_created event")
+	}
+	if !foundHeadChanged {
+		t.Fatal("expected head_changed event")
+	}
+}
+
+func TestVTextDocumentStreamEmitsHeadChangeAfterUserRevision(t *testing.T) {
+	h, s, _ := vtextAPISetupWithRuntime(t)
+	docID, baseRevisionID := createDocWithUserRevision(t, h)
+
+	req := vtextRequest(t, http.MethodGet, "/api/vtext/documents/"+docID+"/stream", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.HandleVTextDocumentStream(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	createReq := vtextRequest(t, http.MethodPost, "/api/vtext/documents/"+docID+"/revisions", vtextCreateRevisionRequest{
+		Content:          "User-authored next head",
+		AuthorKind:       types.AuthorUser,
+		AuthorLabel:      "alice",
+		ParentRevisionID: baseRevisionID,
+	})
+	createW := httptest.NewRecorder()
+	h.HandleVTextRevisions(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create revision: status = %d, want %d; body: %s", createW.Code, http.StatusCreated, createW.Body.String())
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	doc, err := s.GetDocument(context.Background(), docID, "user-1")
+	if err != nil {
+		t.Fatalf("get document: %v", err)
+	}
+
+	var foundRevisionCreated, foundHeadChanged bool
+	for _, ev := range parseVTextStreamEvents(t, w.Body.String()) {
+		switch ev.Kind {
+		case "revision_created":
+			foundRevisionCreated = true
+			if ev.RevisionID == "" {
+				t.Fatal("revision_created event missing revision_id")
+			}
+		case "head_changed":
+			foundHeadChanged = true
+			if ev.CurrentRevisionID != doc.CurrentRevisionID {
+				t.Fatalf("head_changed current_revision_id = %q, want %q", ev.CurrentRevisionID, doc.CurrentRevisionID)
+			}
+		}
+	}
+	if !foundRevisionCreated {
+		t.Fatal("expected revision_created event")
+	}
+	if !foundHeadChanged {
+		t.Fatal("expected head_changed event")
+	}
+}
+
+func parseVTextStreamEvents(t *testing.T, body string) []vtextDocumentStreamEvent {
+	t.Helper()
+	lines := strings.Split(body, "\n")
+	events := make([]vtextDocumentStreamEvent, 0)
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev vtextDocumentStreamEvent
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+			t.Fatalf("decode vtext stream event: %v", err)
+		}
+		events = append(events, ev)
+	}
+	return events
 }
 
 // TestVTextAgentRevisionAuthRequired verifies that agent revision

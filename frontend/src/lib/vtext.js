@@ -4,6 +4,7 @@
  * Communicates with the versioned document APIs through the same-origin proxy:
  *   POST   /api/vtext/documents                   — create a new document
  *   GET    /api/vtext/documents                   — list documents
+ *   POST   /api/vtext/files/open                  — resolve/create aliased file doc
  *   GET    /api/vtext/documents/{id}              — get a document
  *   PUT    /api/vtext/documents/{id}              — update a document (title)
  *   DELETE /api/vtext/documents/{id}              — delete a document
@@ -13,6 +14,7 @@
  *   GET    /api/vtext/documents/{id}/history      — revision history
  *   GET    /api/vtext/diff?from=X&to=Y            — diff two revisions
  *   GET    /api/vtext/revisions/{id}/blame        — blame revision
+ *   GET    /api/vtext/documents/{id}/stream       — document-scoped stream
  *   POST   /api/vtext/documents/{id}/agent-revision — submit agent revision
  *
  * Conductor and worker loops still use /api/agent/* because those APIs are
@@ -20,6 +22,7 @@
  */
 
 import { fetchWithRenewal } from './auth.js';
+import { withDesktopSelector } from './desktop-selector.js';
 
 function vtextPath(path) {
   return `/api/vtext${path}`;
@@ -39,6 +42,24 @@ export async function createDocument(title) {
 
   if (!res.ok) {
     await decodeError(res, `Create document failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+export async function openFileDocument({ sourcePath, title, initialContent }) {
+  const res = await fetchWithRenewal(vtextPath('/files/open'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source_path: sourcePath,
+      title,
+      initial_content: initialContent,
+    }),
+  });
+
+  if (!res.ok) {
+    await decodeError(res, `Open file document failed (${res.status})`);
   }
 
   return res.json();
@@ -205,14 +226,20 @@ export async function submitAgentRevision(docId, payload = {}) {
   return createAgentRevision(docId, payload);
 }
 
-export async function getAgentRevisionStatus(loopId) {
-  const res = await fetchWithRenewal(`/api/agent/status?loop_id=${encodeURIComponent(loopId)}`, {
-    method: 'GET',
-  });
+export function openDocumentStream(docId, { onEvent, onError } = {}) {
+  const source = new EventSource(withDesktopSelector(vtextPath(`/documents/${encodeURIComponent(docId)}/stream`)));
 
-  if (!res.ok) {
-    await decodeError(res, `Agent revision status fetch failed (${res.status})`);
-  }
+  source.onmessage = (event) => {
+    if (!onEvent) return;
+    try {
+      onEvent(JSON.parse(event.data));
+    } catch (err) {
+      if (onError) onError(err);
+    }
+  };
+  source.onerror = (err) => {
+    if (onError) onError(err);
+  };
 
-  return res.json();
+  return source;
 }

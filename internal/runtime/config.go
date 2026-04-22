@@ -35,6 +35,10 @@ const (
 	// DefaultResearcherCount is the default number of researcher workers
 	// the microVM topology should assume when none is configured.
 	DefaultResearcherCount = 3
+
+	// DefaultVTextWakeDebounce is the initial coalescing window for worker
+	// findings before the runtime schedules the next vtext synthesis.
+	DefaultVTextWakeDebounce = 3 * time.Second
 )
 
 // Config holds runtime configuration resolved from environment variables.
@@ -58,6 +62,10 @@ type Config struct {
 	// ResearcherCount is the configured researcher worker count for this VM.
 	ResearcherCount int
 
+	// VTextWakeDebounce is the coalescing window for addressed worker findings
+	// before the runtime schedules the next vtext synthesis.
+	VTextWakeDebounce time.Duration
+
 	// VmctlURL is the host-side vmctl control plane URL, used by super-only
 	// lifecycle tools to request branch desktops and worker VMs.
 	VmctlURL string
@@ -73,6 +81,7 @@ func LoadConfig() Config {
 		ProviderTimeout:     durationOr("RUNTIME_PROVIDER_TIMEOUT", DefaultProviderTimeout),
 		SupervisionInterval: durationOr("RUNTIME_SUPERVISION_INTERVAL", DefaultSupervisionInterval),
 		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
+		VTextWakeDebounce:   durationOr("RUNTIME_VTEXT_WAKE_DEBOUNCE", DefaultVTextWakeDebounce),
 		VmctlURL:            envOr("RUNTIME_VMCTL_URL", os.Getenv("PROXY_VMCTL_URL")),
 	}
 }
@@ -83,6 +92,9 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if strings.TrimSpace(cfg.PromptRoot) == "" {
 		cfg.PromptRoot = defaultPromptRoot(cfg.StorePath)
+	}
+	if cfg.VTextWakeDebounce <= 0 {
+		cfg.VTextWakeDebounce = DefaultVTextWakeDebounce
 	}
 	return cfg
 }

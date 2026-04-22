@@ -35,6 +35,9 @@ type Runtime struct {
 	toolRegistry *ToolRegistry
 	toolProfiles map[string]*ToolRegistry
 	channelMgr   *ChannelManager
+
+	vtextWakeMu      sync.Mutex
+	vtextWakePending map[string]pendingVTextWake
 }
 
 // New creates a new Runtime with the given config, store, event bus, and
@@ -44,14 +47,15 @@ type Runtime struct {
 func New(cfg Config, s *store.Store, bus *events.EventBus, provider Provider, opts ...RuntimeOption) *Runtime {
 	cfg = normalizeConfig(cfg)
 	rt := &Runtime{
-		cfg:         cfg,
-		store:       s,
-		bus:         bus,
-		provider:    provider,
-		health:      types.HealthReady,
-		running:     make(map[string]context.CancelFunc),
-		channelMgr:  NewChannelManager(),
-		promptStore: NewPromptStore(cfg.PromptRoot),
+		cfg:              cfg,
+		store:            s,
+		bus:              bus,
+		provider:         provider,
+		health:           types.HealthReady,
+		running:          make(map[string]context.CancelFunc),
+		channelMgr:       NewChannelManager(),
+		promptStore:      NewPromptStore(cfg.PromptRoot),
+		vtextWakePending: make(map[string]pendingVTextWake),
 	}
 	for _, opt := range opts {
 		opt(rt)
@@ -1226,7 +1230,7 @@ func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID st
 	channelID := strings.TrimSpace(message.ChannelID)
 	fromRunID := strings.TrimSpace(message.FromRunID)
 	targetAgentID := strings.TrimSpace(message.ToAgentID)
-	if strings.TrimSpace(ownerID) == "" || channelID == "" || fromRunID == "" || targetAgentID == "" {
+	if strings.TrimSpace(ownerID) == "" || channelID == "" || targetAgentID == "" {
 		return
 	}
 
@@ -1238,40 +1242,24 @@ func (rt *Runtime) maybeWakeVTextOnWorkerMessage(ctx context.Context, ownerID st
 		return
 	}
 
-	sourceRun, err := rt.store.GetRun(ctx, fromRunID)
-	if err != nil {
-		log.Printf("runtime: wake vtext for doc %s: get source run %s: %v", doc.DocID, fromRunID, err)
-		return
-	}
-	switch agentProfileForRun(&sourceRun) {
-	case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
-	default:
-		return
+	if fromRunID != "" {
+		sourceRun, err := rt.store.GetRun(ctx, fromRunID)
+		if err != nil {
+			log.Printf("runtime: wake vtext for doc %s: get source run %s: %v", doc.DocID, fromRunID, err)
+			return
+		}
+		switch agentProfileForRun(&sourceRun) {
+		case AgentProfileResearcher, AgentProfileSuper, AgentProfileCoSuper:
+		default:
+			return
+		}
 	}
 
 	agentID := "vtext:" + doc.DocID
 	if targetAgentID != agentID {
 		return
 	}
-	if _, err := rt.store.GetLatestActiveRunByAgent(ctx, ownerID, agentID); err == nil {
-		return
-	} else if err != store.ErrNotFound {
-		log.Printf("runtime: wake vtext for doc %s: check active run: %v", doc.DocID, err)
-		return
-	}
-
-	req := vtextAgentRevisionRequest{
-		Intent: "integrate_worker_message",
-		Prompt: strings.TrimSpace(fmt.Sprintf(
-			"A worker sent you a new addressed delivery for this document. Wake now, integrate any new evidence, findings, notes, or questions into the next version, and write the next canonical revision if the message materially changes the document.\n\nLatest worker message from %s (%s):\n%s",
-			strings.TrimSpace(message.From),
-			agentProfileForRun(&sourceRun),
-			strings.TrimSpace(message.Content),
-		)),
-	}
-	if _, err := rt.submitVTextAgentRevisionRun(ctx, doc, ownerID, req, sourceRun.RunID); err != nil {
-		log.Printf("runtime: wake vtext for doc %s from worker message %s: %v", doc.DocID, fromRunID, err)
-	}
+	rt.scheduleVTextWorkerWake(ownerID, doc.DocID, fromRunID)
 }
 
 // durableMetadataKeys lists the revision metadata keys that must survive

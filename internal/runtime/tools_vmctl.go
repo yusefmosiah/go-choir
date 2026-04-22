@@ -17,6 +17,7 @@ func RegisterVMControlTools(registry *ToolRegistry, rt *Runtime) error {
 	for _, tool := range []Tool{
 		newForkDesktopTool(rt),
 		newPublishDesktopTool(rt),
+		newRequestWorkerVMTool(rt),
 	} {
 		if err := registry.Register(tool); err != nil {
 			return err
@@ -130,6 +131,71 @@ func newPublishDesktopTool(rt *Runtime) Tool {
 				"parent_desktop_id": resolved.ParentDesktopID,
 				"published":         resolved.Published,
 				"desktop_url":       "/?desktop_id=" + resolved.DesktopID,
+			})
+		},
+	}
+}
+
+func newRequestWorkerVMTool(rt *Runtime) Tool {
+	type args struct {
+		Purpose      string `json:"purpose"`
+		MachineClass string `json:"machine_class,omitempty"`
+	}
+	return Tool{
+		Name:        "request_worker_vm",
+		Description: "Request a headless worker VM under the current desktop and return a typed worker handle.",
+		Parameters: jsonSchemaObject(map[string]any{
+			"purpose":       map[string]any{"type": "string"},
+			"machine_class": map[string]any{"type": "string"},
+		}, []string{"purpose"}, false),
+		Func: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var in args
+			if err := json.Unmarshal(raw, &in); err != nil {
+				return "", fmt.Errorf("decode request_worker_vm args: %w", err)
+			}
+			if rt == nil {
+				return "", fmt.Errorf("request_worker_vm missing runtime")
+			}
+			if strings.TrimSpace(rt.cfg.VmctlURL) == "" {
+				return "", fmt.Errorf("request_worker_vm requires runtime vmctl configuration")
+			}
+
+			ownerID := stringFromToolContext(ctx, toolCtxOwnerID)
+			desktopID := strings.TrimSpace(stringFromToolContext(ctx, toolCtxDesktopID))
+			parentAgentID := stringFromToolContext(ctx, toolCtxAgentID)
+			if ownerID == "" {
+				return "", fmt.Errorf("request_worker_vm missing owner context")
+			}
+			if desktopID == "" {
+				desktopID = types.PrimaryDesktopID
+			}
+			if parentAgentID == "" {
+				return "", fmt.Errorf("request_worker_vm missing parent agent context")
+			}
+
+			var trajectoryID string
+			if runRec, _ := ctx.Value(toolCtxRunRecord).(*types.RunRecord); runRec != nil && runRec.Metadata != nil {
+				if id, _ := runRec.Metadata[runMetadataTrajectoryID].(string); strings.TrimSpace(id) != "" {
+					trajectoryID = strings.TrimSpace(id)
+				}
+			}
+
+			client := vmctl.NewClient(rt.cfg.VmctlURL)
+			handle, err := client.RequestWorker(vmctl.WorkerRequest{
+				UserID:        ownerID,
+				DesktopID:     desktopID,
+				ParentAgentID: parentAgentID,
+				TrajectoryID:  trajectoryID,
+				Purpose:       strings.TrimSpace(in.Purpose),
+				MachineClass:  strings.TrimSpace(in.MachineClass),
+			})
+			if err != nil {
+				return "", err
+			}
+
+			return toolResultJSON(map[string]any{
+				"status": "worker_requested",
+				"handle": handle,
 			})
 		},
 	}

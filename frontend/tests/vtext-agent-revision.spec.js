@@ -36,5 +36,5 @@ test('prompt button submits a vtext agent revision request', async ({ page, auth
 
   const response = await revisionRequest;
   expect(response.status()).toBe(202);
-  await expect(page.locator('[data-vtext-save-status]')).toContainText(/Submitting|Prompting|Agent created next version/);
+  await expect(page.locator('[data-vtext-save-status]')).toContainText(/Writing first draft|First draft ready|Agent created next version/);
 });

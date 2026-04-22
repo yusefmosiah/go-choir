@@ -809,11 +809,13 @@ func RegisterVTextRoutes(s *server.Server, h *APIHandler) {
 //
 // Route mapping:
 //
+//	POST   /api/vtext/files/open               → resolve/create aliased file document
 //	GET    /api/vtext/documents/{id}           → get document
 //	PUT    /api/vtext/documents/{id}           → update document
 //	DELETE /api/vtext/documents/{id}           → delete document
 //	POST   /api/vtext/documents/{id}/revisions → create revision
 //	GET    /api/vtext/documents/{id}/revisions → list revisions
+//	GET    /api/vtext/documents/{id}/stream    → document-scoped stream
 //	POST   /api/vtext/documents/{id}/agent-revision → submit agent revision
 //	GET    /api/vtext/documents/{id}/history   → revision history
 //	GET    /api/vtext/revisions/{id}          → get revision (snapshot)
@@ -825,6 +827,10 @@ func (h *APIHandler) HandleVTextRouter(w http.ResponseWriter, r *http.Request) {
 	// Diff endpoint: /api/vtext/diff
 	if path == "/api/vtext/diff" {
 		h.HandleVTextDiff(w, r)
+		return
+	}
+	if path == "/api/vtext/files/open" {
+		h.HandleVTextOpenFile(w, r)
 		return
 	}
 
@@ -848,6 +854,11 @@ func (h *APIHandler) HandleVTextRouter(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(rest, "/revisions") {
 			// /api/vtext/documents/{id}/revisions
 			h.HandleVTextRevisions(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, "/stream") {
+			// /api/vtext/documents/{id}/stream
+			h.HandleVTextDocumentStream(w, r)
 			return
 		}
 		if strings.HasSuffix(rest, "/agent-revision") {

@@ -30,7 +30,7 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	researcher := rt.ToolRegistryForProfile(AgentProfileResearcher)
 	vtext := rt.ToolRegistryForProfile(AgentProfileVText)
 
-	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence", "fork_desktop", "publish_desktop"} {
+	for _, name := range []string{"bash", "read_file", "web_search", "spawn_agent", "cast_agent", "save_evidence", "fork_desktop", "publish_desktop", "request_worker_vm"} {
 		if _, ok := super.Lookup(name); !ok {
 			t.Fatalf("super missing tool %q", name)
 		}
@@ -45,6 +45,9 @@ func TestInstallDefaultAgentToolsProfiles(t *testing.T) {
 	}
 	if _, ok := coSuper.Lookup("publish_desktop"); ok {
 		t.Fatalf("co-super should not have publish_desktop")
+	}
+	if _, ok := coSuper.Lookup("request_worker_vm"); ok {
+		t.Fatalf("co-super should not have request_worker_vm")
 	}
 	for _, name := range []string{"spawn_agent", "cast_agent", "cancel_agent"} {
 		if _, ok := conductor.Lookup(name); !ok {
@@ -302,6 +305,7 @@ func TestSuperForkDesktopClonesStateAndPublishRequestsVM(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/vmctl/fork-desktop", handler.HandleForkDesktop)
 	mux.HandleFunc("/internal/vmctl/publish-desktop", handler.HandlePublishDesktop)
+	mux.HandleFunc("/internal/vmctl/request-worker", handler.HandleRequestWorker)
 	vmctlSrv := httptest.NewServer(mux)
 	t.Cleanup(func() { vmctlSrv.Close() })
 
@@ -429,6 +433,97 @@ func TestSuperForkDesktopClonesStateAndPublishRequestsVM(t *testing.T) {
 	}
 	if !reg.GetOwnershipForDesktop("user-alice", "branch-a").Published {
 		t.Fatal("branch desktop should be published after publish_desktop")
+	}
+}
+
+func TestSuperRequestWorkerVMReturnsTypedHandle(t *testing.T) {
+	rt, _, cwd := testRuntimeWithTempCWD(t)
+
+	reg := vmctl.NewOwnershipRegistry("http://sandbox.test")
+	if _, err := reg.ResolveOrAssignDesktop("user-alice", types.PrimaryDesktopID); err != nil {
+		t.Fatalf("resolve source desktop: %v", err)
+	}
+	handler := vmctl.NewHandler(reg)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/vmctl/request-worker", handler.HandleRequestWorker)
+	vmctlSrv := httptest.NewServer(mux)
+	t.Cleanup(func() { vmctlSrv.Close() })
+
+	rt.cfg.VmctlURL = vmctlSrv.URL
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	superTask, err := rt.StartRunWithMetadata(context.Background(), "coordinate execution", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileSuper,
+		runMetadataAgentRole:    AgentProfileSuper,
+		runMetadataAgentID:      "super:primary",
+		runMetadataDesktopID:    types.PrimaryDesktopID,
+	})
+	if err != nil {
+		t.Fatalf("submit super task: %v", err)
+	}
+
+	superRegistry := rt.ToolRegistryForProfile(AgentProfileSuper)
+	raw, err := superRegistry.Execute(WithToolExecutionContext(context.Background(), superTask), "request_worker_vm", json.RawMessage(`{
+		"purpose":"Run background coding task",
+		"machine_class":"worker-medium"
+	}`))
+	if err != nil {
+		t.Fatalf("request_worker_vm: %v", err)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+		Handle struct {
+			Kind          string `json:"kind"`
+			WorkerID      string `json:"worker_id"`
+			VMID          string `json:"vm_id"`
+			UserID        string `json:"user_id"`
+			DesktopID     string `json:"desktop_id"`
+			ParentAgentID string `json:"parent_agent_id"`
+			TrajectoryID  string `json:"trajectory_id"`
+			Purpose       string `json:"purpose"`
+			MachineClass  string `json:"machine_class"`
+			SandboxURL    string `json:"sandbox_url"`
+			State         string `json:"state"`
+		} `json:"handle"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode request_worker_vm: %v", err)
+	}
+	if resp.Status != "worker_requested" {
+		t.Fatalf("status = %q, want worker_requested", resp.Status)
+	}
+	if resp.Handle.Kind != "worker" {
+		t.Fatalf("kind = %q, want worker", resp.Handle.Kind)
+	}
+	if resp.Handle.WorkerID == "" || resp.Handle.VMID == "" {
+		t.Fatalf("expected non-empty worker handle identifiers: %+v", resp.Handle)
+	}
+	if resp.Handle.UserID != "user-alice" {
+		t.Fatalf("user_id = %q, want user-alice", resp.Handle.UserID)
+	}
+	if resp.Handle.DesktopID != types.PrimaryDesktopID {
+		t.Fatalf("desktop_id = %q, want %q", resp.Handle.DesktopID, types.PrimaryDesktopID)
+	}
+	if resp.Handle.ParentAgentID != "super:primary" {
+		t.Fatalf("parent_agent_id = %q, want super:primary", resp.Handle.ParentAgentID)
+	}
+	if resp.Handle.TrajectoryID != superTask.RunID {
+		t.Fatalf("trajectory_id = %q, want %q", resp.Handle.TrajectoryID, superTask.RunID)
+	}
+	if resp.Handle.Purpose != "Run background coding task" {
+		t.Fatalf("purpose = %q, want %q", resp.Handle.Purpose, "Run background coding task")
+	}
+	if resp.Handle.MachineClass != "worker-medium" {
+		t.Fatalf("machine_class = %q, want worker-medium", resp.Handle.MachineClass)
+	}
+	if resp.Handle.SandboxURL != "http://sandbox.test" {
+		t.Fatalf("sandbox_url = %q, want %q", resp.Handle.SandboxURL, "http://sandbox.test")
+	}
+	if resp.Handle.State != "active" {
+		t.Fatalf("state = %q, want active", resp.Handle.State)
 	}
 }
 
@@ -659,6 +754,166 @@ func TestResearcherSubmitResearchFindingsPersistsEvidenceAndDedupes(t *testing.T
 	}
 	if findingsMessage == nil {
 		t.Fatalf("expected findings packet in channel messages, got %+v", messages)
+	}
+}
+
+func TestResearcherWebSearchRoutesThroughGateway(t *testing.T) {
+	var gotAuth string
+	var gotMethod string
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if r.URL.Path != "/provider/v1/search" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"query":    "latest model releases",
+			"provider": "mock-gateway",
+			"results": []map[string]any{
+				{
+					"title":   "Release notes",
+					"url":     "https://example.com/release",
+					"snippet": "Grounded search result from the gateway path.",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNTIME_GATEWAY_URL", server.URL)
+	t.Setenv("RUNTIME_GATEWAY_TOKEN", "sandbox-token")
+
+	rt, _, cwd := testRuntimeWithTempCWD(t)
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	researcherTask, err := rt.StartRunWithMetadata(context.Background(), "Search the web", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+	})
+	if err != nil {
+		t.Fatalf("submit researcher task: %v", err)
+	}
+
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	raw, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "web_search", json.RawMessage(`{
+		"query":"latest model releases",
+		"max_results":3
+	}`))
+	if err != nil {
+		t.Fatalf("web_search: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("gateway search method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/provider/v1/search" {
+		t.Fatalf("gateway search path = %q, want /provider/v1/search", gotPath)
+	}
+	if gotAuth != "Bearer sandbox-token" {
+		t.Fatalf("gateway search auth = %q, want Bearer sandbox-token", gotAuth)
+	}
+
+	var resp struct {
+		Provider string `json:"provider"`
+		Results  []struct {
+			URL string `json:"url"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode web_search: %v", err)
+	}
+	if resp.Provider != "mock-gateway" {
+		t.Fatalf("provider = %q, want mock-gateway", resp.Provider)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].URL != "https://example.com/release" {
+		t.Fatalf("results = %+v, want gateway search result", resp.Results)
+	}
+}
+
+func TestResearcherWebSearchFallsBackToProxyGatewayURL(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"query":    "latest model releases",
+			"provider": "proxy-gateway",
+			"results":  []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("RUNTIME_GATEWAY_URL", "")
+	t.Setenv("PROXY_VMCTL_URL", server.URL)
+	t.Setenv("RUNTIME_GATEWAY_TOKEN", "sandbox-token")
+
+	rt, _, cwd := testRuntimeWithTempCWD(t)
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	researcherTask, err := rt.StartRunWithMetadata(context.Background(), "Search the web", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+	})
+	if err != nil {
+		t.Fatalf("submit researcher task: %v", err)
+	}
+
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	raw, err := researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "web_search", json.RawMessage(`{
+		"query":"latest model releases"
+	}`))
+	if err != nil {
+		t.Fatalf("web_search: %v", err)
+	}
+
+	if gotPath != "/provider/v1/search" {
+		t.Fatalf("proxy gateway search path = %q, want /provider/v1/search", gotPath)
+	}
+
+	var resp struct {
+		Provider string `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode web_search: %v", err)
+	}
+	if resp.Provider != "proxy-gateway" {
+		t.Fatalf("provider = %q, want proxy-gateway", resp.Provider)
+	}
+}
+
+func TestResearcherWebSearchWithoutGatewayIsUnavailable(t *testing.T) {
+	t.Setenv("RUNTIME_GATEWAY_URL", "")
+	t.Setenv("PROXY_VMCTL_URL", "")
+	t.Setenv("RUNTIME_GATEWAY_TOKEN", "")
+	for _, key := range []string{"TAVILY_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY", "SERPER_API_KEY"} {
+		t.Setenv(key, "")
+	}
+
+	rt, _, cwd := testRuntimeWithTempCWD(t)
+	if err := rt.InstallDefaultAgentTools(cwd); err != nil {
+		t.Fatalf("install default agent tools: %v", err)
+	}
+
+	researcherTask, err := rt.StartRunWithMetadata(context.Background(), "Search the web", "user-alice", map[string]any{
+		runMetadataAgentProfile: AgentProfileResearcher,
+		runMetadataAgentRole:    AgentProfileResearcher,
+	})
+	if err != nil {
+		t.Fatalf("submit researcher task: %v", err)
+	}
+
+	researcherRegistry := rt.ToolRegistryForProfile(AgentProfileResearcher)
+	_, err = researcherRegistry.Execute(WithToolExecutionContext(context.Background(), researcherTask), "web_search", json.RawMessage(`{
+		"query":"latest model releases"
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "search client not configured") {
+		t.Fatalf("web_search err = %v, want search client not configured", err)
 	}
 }
 

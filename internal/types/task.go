@@ -196,6 +196,12 @@ const (
 	// EventVTextAgentRevisionFailed is emitted when an appagent-driven
 	// revision fails. The payload includes the doc_id and error message.
 	EventVTextAgentRevisionFailed EventKind = "vtext.agent_revision.failed"
+
+	// EventVTextDocumentRevisionCreated is emitted when a canonical document
+	// revision is created outside the appagent synthesis loop, such as a direct
+	// user-authored save through the document API. The payload includes doc_id,
+	// revision_id, and current_revision_id so the editor can follow head changes.
+	EventVTextDocumentRevisionCreated EventKind = "vtext.document_revision.created"
 )
 
 // EventRecord represents a single runtime event emitted during run execution

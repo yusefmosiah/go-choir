@@ -65,6 +65,14 @@ const (
 	PrimaryDesktopID = "primary"
 )
 
+// VMKind distinguishes interactive desktop VMs from headless worker VMs.
+type VMKind string
+
+const (
+	VMKindInteractive VMKind = "interactive"
+	VMKindWorker      VMKind = "worker"
+)
+
 // VMOwnership represents the assignment of a user to a specific VM.
 type VMOwnership struct {
 	// VMID is the unique identifier for the VM.
@@ -74,11 +82,31 @@ type VMOwnership struct {
 	UserID string `json:"user_id"`
 
 	// DesktopID is the desktop/workspace selector this interactive VM belongs to.
+	// For worker VMs, this is the parent desktop selector the worker belongs to.
 	DesktopID string `json:"desktop_id"`
+
+	// Kind distinguishes interactive desktops from headless worker VMs.
+	Kind VMKind `json:"kind,omitempty"`
 
 	// ParentDesktopID records the source desktop when this desktop was forked
 	// from another interactive desktop.
 	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
+
+	// WorkerID is the typed handle identifier for worker VMs. Empty for
+	// interactive desktop VMs.
+	WorkerID string `json:"worker_id,omitempty"`
+
+	// ParentAgentID is the durable super/agent identity that requested a worker.
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
+
+	// TrajectoryID ties a worker request back to the user-visible workflow.
+	TrajectoryID string `json:"trajectory_id,omitempty"`
+
+	// Purpose is the caller-provided reason for this worker VM.
+	Purpose string `json:"purpose,omitempty"`
+
+	// MachineClass is the requested resource envelope for this VM.
+	MachineClass string `json:"machine_class,omitempty"`
 
 	// Published indicates whether this desktop is user-switchable through the
 	// normal browser/proxy routing path. Background candidate desktops stay
@@ -111,6 +139,31 @@ type VMOwnership struct {
 	// StoppedBy indicates why the VM was stopped. Empty if running.
 	// Valid values: "idle", "logout", "recovery", "manual".
 	StoppedBy string `json:"stopped_by,omitempty"`
+}
+
+// WorkerRequest is the typed internal vmctl request for a background worker VM.
+type WorkerRequest struct {
+	UserID        string `json:"user_id"`
+	DesktopID     string `json:"desktop_id,omitempty"`
+	ParentAgentID string `json:"parent_agent_id"`
+	TrajectoryID  string `json:"trajectory_id,omitempty"`
+	Purpose       string `json:"purpose"`
+	MachineClass  string `json:"machine_class,omitempty"`
+}
+
+// WorkerVMHandle is the typed result returned when vmctl provisions a worker VM.
+type WorkerVMHandle struct {
+	Kind          VMKind  `json:"kind"`
+	WorkerID      string  `json:"worker_id"`
+	VMID          string  `json:"vm_id"`
+	UserID        string  `json:"user_id"`
+	DesktopID     string  `json:"desktop_id"`
+	ParentAgentID string  `json:"parent_agent_id,omitempty"`
+	TrajectoryID  string  `json:"trajectory_id,omitempty"`
+	Purpose       string  `json:"purpose"`
+	MachineClass  string  `json:"machine_class"`
+	SandboxURL    string  `json:"sandbox_url"`
+	State         VMState `json:"state"`
 }
 
 // IsReady returns true if the VM is in a state that can serve requests.
@@ -189,6 +242,9 @@ type OwnershipRegistry struct {
 	// ownerships maps user/desktop composite keys to their active VM ownership.
 	ownerships map[string]*VMOwnership
 
+	// workerVMs maps typed worker handles to their active headless child VMs.
+	workerVMs map[string]*VMOwnership
+
 	// vmByID maps VM ID to ownership for reverse lookup.
 	vmByID map[string]*VMOwnership
 
@@ -231,6 +287,7 @@ func NewOwnershipRegistry(sandboxURLBase string) *OwnershipRegistry {
 	}
 	return &OwnershipRegistry{
 		ownerships:     make(map[string]*VMOwnership),
+		workerVMs:      make(map[string]*VMOwnership),
 		vmByID:         make(map[string]*VMOwnership),
 		pendingWaiters: make(map[string][]chan *VMOwnership),
 		sandboxURLBase: sandboxURLBase,
@@ -285,6 +342,38 @@ func normalizeDesktopID(desktopID string) string {
 
 func ownershipKey(userID, desktopID string) string {
 	return strings.TrimSpace(userID) + "|" + normalizeDesktopID(desktopID)
+}
+
+func workerHandleFromOwnership(own *VMOwnership) *WorkerVMHandle {
+	if own == nil {
+		return nil
+	}
+	return &WorkerVMHandle{
+		Kind:          VMKindWorker,
+		WorkerID:      own.WorkerID,
+		VMID:          own.VMID,
+		UserID:        own.UserID,
+		DesktopID:     own.DesktopID,
+		ParentAgentID: own.ParentAgentID,
+		TrajectoryID:  own.TrajectoryID,
+		Purpose:       own.Purpose,
+		MachineClass:  own.MachineClass,
+		SandboxURL:    own.SandboxURL,
+		State:         own.State,
+	}
+}
+
+func normalizeWorkerMachineClass(raw string) (string, int, int, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "worker-small", "small":
+		return "worker-small", 1, 256, nil
+	case "worker-medium", "medium":
+		return "worker-medium", 2, 512, nil
+	case "worker-large", "large":
+		return "worker-large", 4, 1024, nil
+	default:
+		return "", 0, 0, fmt.Errorf("unsupported machine_class %q", strings.TrimSpace(raw))
+	}
 }
 
 // issueGatewayToken requests a gateway credential token for the given
@@ -422,6 +511,7 @@ func (r *OwnershipRegistry) ResolveOrAssignDesktop(userID, desktopID string) (*V
 		VMID:         vmID,
 		UserID:       userID,
 		DesktopID:    desktopID,
+		Kind:         VMKindInteractive,
 		SandboxURL:   r.sandboxURLForVM(vmID),
 		State:        VMStateBooting,
 		CreatedAt:    time.Now(),
@@ -525,6 +615,92 @@ func (r *OwnershipRegistry) ForkDesktop(userID, sourceDesktopID, targetDesktopID
 	return own, nil
 }
 
+// RequestWorker provisions a headless child VM under an existing desktop and
+// returns a typed worker handle. Workers are keyed by worker_id, not by desktop
+// routing state, because multiple workers may belong to one desktop.
+func (r *OwnershipRegistry) RequestWorker(req WorkerRequest) (*VMOwnership, error) {
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
+	req.ParentAgentID = strings.TrimSpace(req.ParentAgentID)
+	req.TrajectoryID = strings.TrimSpace(req.TrajectoryID)
+	req.Purpose = strings.TrimSpace(req.Purpose)
+	if req.UserID == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+	if req.ParentAgentID == "" {
+		return nil, fmt.Errorf("parent_agent_id is required")
+	}
+	if req.Purpose == "" {
+		return nil, fmt.Errorf("purpose is required")
+	}
+	machineClass, cpuCount, memSizeMib, err := normalizeWorkerMachineClass(req.MachineClass)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.RLock()
+	parent := r.ownerships[ownershipKey(req.UserID, req.DesktopID)]
+	r.mu.RUnlock()
+	if parent == nil {
+		return nil, fmt.Errorf("no parent desktop VM found for user %s desktop %s", req.UserID, req.DesktopID)
+	}
+
+	now := time.Now()
+	vmID := generateVMID()
+	workerID := generateWorkerID()
+	own := &VMOwnership{
+		VMID:            vmID,
+		UserID:          req.UserID,
+		DesktopID:       req.DesktopID,
+		Kind:            VMKindWorker,
+		WorkerID:        workerID,
+		ParentAgentID:   req.ParentAgentID,
+		TrajectoryID:    req.TrajectoryID,
+		Purpose:         req.Purpose,
+		MachineClass:    machineClass,
+		SandboxURL:      r.sandboxURLForVM(vmID),
+		State:           VMStateBooting,
+		CreatedAt:       now,
+		LastActiveAt:    now,
+		Published:       false,
+		ParentDesktopID: "",
+	}
+
+	r.mu.Lock()
+	own.Epoch = r.nextEpoch()
+	r.workerVMs[workerID] = own
+	r.vmByID[vmID] = own
+	mgr := r.vmManager
+	r.mu.Unlock()
+
+	if mgr != nil {
+		gwToken := r.issueGatewayToken(vmID)
+		info, err := mgr.BootVM(VMManagerConfig{
+			VMID:              vmID,
+			GuestPort:         8085,
+			MachineCPUCount:   cpuCount,
+			MachineMemSizeMib: memSizeMib,
+			GatewayToken:      gwToken,
+		})
+		if err != nil {
+			log.Printf("vmctl: Firecracker boot failed for worker VM %s: %v", vmID, err)
+			r.mu.Lock()
+			own.State = VMStateFailed
+			r.mu.Unlock()
+			return nil, fmt.Errorf("failed to boot worker VM %s: %w", vmID, err)
+		}
+		r.mu.Lock()
+		own.SandboxURL = info.HostURL
+		own.Epoch = info.Epoch
+		r.mu.Unlock()
+		log.Printf("vmctl: booted worker VM %s for user %s desktop %s (worker_id=%s class=%s epoch=%d)", vmID, req.UserID, req.DesktopID, workerID, machineClass, own.Epoch)
+	}
+
+	r.transitionVM(vmID, VMStateActive)
+	log.Printf("vmctl: assigned worker VM %s for user %s desktop %s (worker_id=%s purpose=%q)", vmID, req.UserID, req.DesktopID, workerID, req.Purpose)
+	return own, nil
+}
+
 // PublishDesktop marks a background candidate desktop as user-switchable.
 func (r *OwnershipRegistry) PublishDesktop(userID, desktopID string) (*VMOwnership, error) {
 	r.mu.Lock()
@@ -566,8 +742,11 @@ func (r *OwnershipRegistry) ListOwnerships() []*VMOwnership {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	result := make([]*VMOwnership, 0, len(r.ownerships))
+	result := make([]*VMOwnership, 0, len(r.ownerships)+len(r.workerVMs))
 	for _, own := range r.ownerships {
+		result = append(result, own)
+	}
+	for _, own := range r.workerVMs {
 		result = append(result, own)
 	}
 	return result
@@ -627,6 +806,17 @@ func (r *OwnershipRegistry) RemoveOwnershipForDesktop(userID, desktopID string) 
 	own.State = VMStateStopped
 	delete(r.ownerships, key)
 	delete(r.vmByID, own.VMID)
+	for workerID, worker := range r.workerVMs {
+		if worker.UserID != userID || worker.DesktopID != normalizeDesktopID(desktopID) {
+			continue
+		}
+		if r.vmManager != nil && (worker.State == VMStateActive || worker.State == VMStateDegraded) {
+			_ = r.vmManager.StopVM(worker.VMID)
+		}
+		worker.State = VMStateStopped
+		delete(r.workerVMs, workerID)
+		delete(r.vmByID, worker.VMID)
+	}
 	log.Printf("vmctl: removed VM %s ownership for user %s desktop %s", own.VMID, userID, own.DesktopID)
 	return nil
 }
@@ -685,6 +875,29 @@ func (r *OwnershipRegistry) HibernateVMForDesktop(userID, desktopID string) erro
 	own.LastActiveAt = time.Now()
 	own.StoppedBy = "idle"
 	log.Printf("vmctl: hibernated VM %s for user %s desktop %s (epoch=%d)", own.VMID, userID, own.DesktopID, own.Epoch)
+	return nil
+}
+
+// HibernateWorker transitions the worker VM with the given typed handle to
+// hibernated state.
+func (r *OwnershipRegistry) HibernateWorker(workerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	own, ok := r.workerVMs[strings.TrimSpace(workerID)]
+	if !ok {
+		return fmt.Errorf("no worker VM found for worker_id %s", strings.TrimSpace(workerID))
+	}
+	if own.State != VMStateActive && own.State != VMStateDegraded {
+		return fmt.Errorf("worker VM %s cannot be hibernated (state=%s)", own.VMID, own.State)
+	}
+	if r.vmManager != nil {
+		_ = r.vmManager.HibernateVM(own.VMID)
+	}
+	own.State = VMStateHibernated
+	own.LastActiveAt = time.Now()
+	own.StoppedBy = "idle"
+	log.Printf("vmctl: hibernated worker VM %s for user %s desktop %s worker_id %s", own.VMID, own.UserID, own.DesktopID, own.WorkerID)
 	return nil
 }
 
@@ -813,7 +1026,7 @@ func (r *OwnershipRegistry) CheckIdleVMs() []string {
 	owns := r.CheckIdleOwnerships()
 	idle := make([]string, 0, len(owns))
 	for _, own := range owns {
-		if own != nil && own.DesktopID == PrimaryDesktopID {
+		if own != nil && own.Kind == VMKindInteractive && own.DesktopID == PrimaryDesktopID {
 			idle = append(idle, own.UserID)
 		}
 	}
@@ -837,6 +1050,11 @@ func (r *OwnershipRegistry) CheckIdleOwnerships() []*VMOwnership {
 			idle = append(idle, own)
 		}
 	}
+	for _, own := range r.workerVMs {
+		if own.State == VMStateActive && now.Sub(own.LastActiveAt) > r.idleTimeout {
+			idle = append(idle, own)
+		}
+	}
 	return idle
 }
 
@@ -849,7 +1067,13 @@ func (r *OwnershipRegistry) StopIdleVMs() int {
 		if own == nil {
 			continue
 		}
-		if err := r.HibernateVMForDesktop(own.UserID, own.DesktopID); err == nil {
+		var err error
+		if own.Kind == VMKindWorker {
+			err = r.HibernateWorker(own.WorkerID)
+		} else {
+			err = r.HibernateVMForDesktop(own.UserID, own.DesktopID)
+		}
+		if err == nil {
 			stopped++
 		}
 	}
@@ -877,6 +1101,11 @@ func (r *OwnershipRegistry) ActiveCount() int {
 
 	count := 0
 	for _, own := range r.ownerships {
+		if own.IsReady() {
+			count++
+		}
+	}
+	for _, own := range r.workerVMs {
 		if own.IsReady() {
 			count++
 		}
@@ -911,4 +1140,10 @@ func generateVMID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return "vm-" + hex.EncodeToString(b)
+}
+
+func generateWorkerID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return "worker-" + hex.EncodeToString(b)
 }

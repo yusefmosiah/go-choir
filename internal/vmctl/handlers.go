@@ -35,6 +35,7 @@ type resolveResponse struct {
 	VMID            string `json:"vm_id"`
 	UserID          string `json:"user_id"`
 	DesktopID       string `json:"desktop_id"`
+	Kind            VMKind `json:"kind,omitempty"`
 	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
 	Published       bool   `json:"published"`
 	SandboxURL      string `json:"sandbox_url"`
@@ -46,7 +47,13 @@ type ownershipResponse struct {
 	VMID            string `json:"vm_id"`
 	UserID          string `json:"user_id"`
 	DesktopID       string `json:"desktop_id"`
+	Kind            VMKind `json:"kind,omitempty"`
 	ParentDesktopID string `json:"parent_desktop_id,omitempty"`
+	WorkerID        string `json:"worker_id,omitempty"`
+	ParentAgentID   string `json:"parent_agent_id,omitempty"`
+	TrajectoryID    string `json:"trajectory_id,omitempty"`
+	Purpose         string `json:"purpose,omitempty"`
+	MachineClass    string `json:"machine_class,omitempty"`
 	Published       bool   `json:"published"`
 	SandboxURL      string `json:"sandbox_url"`
 	State           string `json:"state"`
@@ -60,6 +67,15 @@ type forkDesktopRequest struct {
 	UserID          string `json:"user_id"`
 	SourceDesktopID string `json:"source_desktop_id,omitempty"`
 	TargetDesktopID string `json:"target_desktop_id,omitempty"`
+}
+
+type requestWorkerRequest struct {
+	UserID        string `json:"user_id"`
+	DesktopID     string `json:"desktop_id,omitempty"`
+	ParentAgentID string `json:"parent_agent_id"`
+	TrajectoryID  string `json:"trajectory_id,omitempty"`
+	Purpose       string `json:"purpose"`
+	MachineClass  string `json:"machine_class,omitempty"`
 }
 
 // Handler provides HTTP handlers for the vmctl service.
@@ -140,6 +156,7 @@ func (h *Handler) HandleResolve(w http.ResponseWriter, r *http.Request) {
 		VMID:            own.VMID,
 		UserID:          own.UserID,
 		DesktopID:       own.DesktopID,
+		Kind:            own.Kind,
 		ParentDesktopID: own.ParentDesktopID,
 		Published:       own.Published,
 		SandboxURL:      own.SandboxURL,
@@ -186,6 +203,7 @@ func (h *Handler) HandleForkDesktop(w http.ResponseWriter, r *http.Request) {
 		VMID:            own.VMID,
 		UserID:          own.UserID,
 		DesktopID:       own.DesktopID,
+		Kind:            own.Kind,
 		ParentDesktopID: own.ParentDesktopID,
 		Published:       own.Published,
 		SandboxURL:      own.SandboxURL,
@@ -229,11 +247,46 @@ func (h *Handler) HandlePublishDesktop(w http.ResponseWriter, r *http.Request) {
 		VMID:            own.VMID,
 		UserID:          own.UserID,
 		DesktopID:       own.DesktopID,
+		Kind:            own.Kind,
 		ParentDesktopID: own.ParentDesktopID,
 		Published:       own.Published,
 		SandboxURL:      own.SandboxURL,
 		State:           string(own.State),
 	})
+}
+
+// HandleRequestWorker handles POST /internal/vmctl/request-worker.
+// It provisions a headless worker VM under an existing desktop and returns a
+// typed worker handle instead of a browser-routable desktop URL.
+func (h *Handler) HandleRequestWorker(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeVMCTLJSON(w, http.StatusMethodNotAllowed, vmctlErrorResponse{Error: "method not allowed"})
+		return
+	}
+	if !isInternalCaller(r) {
+		writeVMCTLJSON(w, http.StatusForbidden, vmctlErrorResponse{Error: "vmctl control endpoints are not publicly accessible"})
+		return
+	}
+
+	var req requestWorkerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: "invalid request body"})
+		return
+	}
+	own, err := h.registry.RequestWorker(WorkerRequest{
+		UserID:        req.UserID,
+		DesktopID:     req.DesktopID,
+		ParentAgentID: req.ParentAgentID,
+		TrajectoryID:  req.TrajectoryID,
+		Purpose:       req.Purpose,
+		MachineClass:  req.MachineClass,
+	})
+	if err != nil {
+		writeVMCTLJSON(w, http.StatusBadRequest, vmctlErrorResponse{Error: err.Error()})
+		return
+	}
+
+	writeVMCTLJSON(w, http.StatusOK, workerHandleFromOwnership(own))
 }
 
 // HandleLookup handles GET /internal/vmctl/lookup?user_id=...
@@ -268,7 +321,13 @@ func (h *Handler) HandleLookup(w http.ResponseWriter, r *http.Request) {
 		VMID:            own.VMID,
 		UserID:          own.UserID,
 		DesktopID:       own.DesktopID,
+		Kind:            own.Kind,
 		ParentDesktopID: own.ParentDesktopID,
+		WorkerID:        own.WorkerID,
+		ParentAgentID:   own.ParentAgentID,
+		TrajectoryID:    own.TrajectoryID,
+		Purpose:         own.Purpose,
+		MachineClass:    own.MachineClass,
 		Published:       own.Published,
 		SandboxURL:      own.SandboxURL,
 		State:           string(own.State),
@@ -524,8 +583,8 @@ func (h *Handler) HandleIdleCheck(w http.ResponseWriter, r *http.Request) {
 
 	stopped := h.registry.StopIdleVMs()
 	writeVMCTLJSON(w, http.StatusOK, map[string]interface{}{
-		"status":             "ok",
-		"vms_stopped":        stopped,
+		"status":      "ok",
+		"vms_stopped": stopped,
 	})
 }
 
@@ -548,15 +607,23 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	result := make([]ownershipResponse, 0, len(ownerships))
 	for _, own := range ownerships {
 		result = append(result, ownershipResponse{
-			VMID:         own.VMID,
-			UserID:       own.UserID,
-			DesktopID:    own.DesktopID,
-			SandboxURL:   own.SandboxURL,
-			State:        string(own.State),
-			CreatedAt:    own.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-			LastActiveAt: own.LastActiveAt.Format("2006-01-02T15:04:05.000Z"),
-			Epoch:        own.Epoch,
-			StoppedBy:    own.StoppedBy,
+			VMID:            own.VMID,
+			UserID:          own.UserID,
+			DesktopID:       own.DesktopID,
+			Kind:            own.Kind,
+			ParentDesktopID: own.ParentDesktopID,
+			WorkerID:        own.WorkerID,
+			ParentAgentID:   own.ParentAgentID,
+			TrajectoryID:    own.TrajectoryID,
+			Purpose:         own.Purpose,
+			MachineClass:    own.MachineClass,
+			Published:       own.Published,
+			SandboxURL:      own.SandboxURL,
+			State:           string(own.State),
+			CreatedAt:       own.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+			LastActiveAt:    own.LastActiveAt.Format("2006-01-02T15:04:05.000Z"),
+			Epoch:           own.Epoch,
+			StoppedBy:       own.StoppedBy,
 		})
 	}
 
@@ -617,6 +684,7 @@ func RegisterRoutes(s *server.Server, h *Handler) {
 	s.HandleFunc("/internal/vmctl/resolve", h.HandleResolve)
 	s.HandleFunc("/internal/vmctl/fork-desktop", h.HandleForkDesktop)
 	s.HandleFunc("/internal/vmctl/publish-desktop", h.HandlePublishDesktop)
+	s.HandleFunc("/internal/vmctl/request-worker", h.HandleRequestWorker)
 	s.HandleFunc("/internal/vmctl/lookup", h.HandleLookup)
 	s.HandleFunc("/internal/vmctl/stop", h.HandleStop)
 	s.HandleFunc("/internal/vmctl/remove", h.HandleRemove)
@@ -650,6 +718,12 @@ func ForkDesktopEndpoint(baseURL string) string {
 // vmctl service at the given base URL.
 func PublishDesktopEndpoint(baseURL string) string {
 	return baseURL + "/internal/vmctl/publish-desktop"
+}
+
+// RequestWorkerEndpoint returns the full request-worker endpoint URL for the
+// vmctl service at the given base URL.
+func RequestWorkerEndpoint(baseURL string) string {
+	return baseURL + "/internal/vmctl/request-worker"
 }
 
 // StopEndpoint returns the full stop endpoint URL for the vmctl

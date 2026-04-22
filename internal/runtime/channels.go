@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yusefmosiah/go-choir/internal/events"
 	"github.com/yusefmosiah/go-choir/internal/types"
 )
 
@@ -348,41 +346,10 @@ func (rt *Runtime) ChannelCast(ctx context.Context, channelID, toAgentID, toRunI
 		}
 	}
 
-	emit := func(kind types.EventKind, phase string, payload json.RawMessage) {
-		evRec := &types.EventRecord{
-			EventID:   uuid.New().String(),
-			RunID:     message.FromRunID,
-			AgentID:   message.FromAgentID,
-			ChannelID: channelID,
-			OwnerID:   ownerID,
-			Timestamp: time.Now().UTC(),
-			Kind:      kind,
-			Payload:   payload,
-		}
-		if err := rt.store.AppendEvent(ctx, evRec); err != nil {
-			log.Printf("runtime: persist channel event: %v", err)
-		}
-		rt.bus.Publish(events.RuntimeEvent{
-			Record: *evRec,
-			Actor:  events.ActorChannel,
-			Cause:  events.CauseChannelMessage,
-		})
-	}
-
 	if _, err := ch.Post(message); err != nil {
 		return 0, err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"channel_id":    channelID,
-		"from":          message.From,
-		"to_agent_id":   message.ToAgentID,
-		"to_loop_id":    message.ToRunID,
-		"trajectory_id": message.TrajectoryID,
-		"role":          message.Role,
-		"content_len":   len(message.Content),
-	})
-	emit(types.EventChannelMessage, "channel", payload)
-	rt.maybeWakeVTextOnWorkerMessage(context.Background(), ownerID, message)
+	rt.emitChannelMessageEvent(ctx, message, ownerID)
 	return uint64(message.Seq), nil
 }
 

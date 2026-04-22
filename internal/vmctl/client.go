@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -158,6 +159,52 @@ func (c *Client) PublishDesktop(userID, desktopID string) (*resolveResponse, err
 	var result resolveResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("vmctl client: decode publish response: %w", err)
+	}
+	return &result, nil
+}
+
+// RequestWorker provisions a headless worker VM under the given desktop and
+// returns a typed worker handle.
+func (c *Client) RequestWorker(req WorkerRequest) (*WorkerVMHandle, error) {
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.DesktopID = normalizeDesktopID(req.DesktopID)
+	req.ParentAgentID = strings.TrimSpace(req.ParentAgentID)
+	req.TrajectoryID = strings.TrimSpace(req.TrajectoryID)
+	req.Purpose = strings.TrimSpace(req.Purpose)
+	req.MachineClass = strings.TrimSpace(req.MachineClass)
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("vmctl client: marshal request-worker request: %w", err)
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, RequestWorkerEndpoint(c.baseURL), bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("vmctl client: create request-worker request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Caller", "true")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("vmctl client: request-worker call failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("vmctl client: read request-worker response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errResp vmctlErrorResponse
+		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("vmctl client: request-worker failed: %s", errResp.Error)
+		}
+		return nil, fmt.Errorf("vmctl client: request-worker failed with status %s", resp.Status)
+	}
+
+	var result WorkerVMHandle
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("vmctl client: decode request-worker response: %w", err)
 	}
 	return &result, nil
 }

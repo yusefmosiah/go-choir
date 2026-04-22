@@ -7,16 +7,16 @@
     - prompt/apply creates a user revision, then invokes the vtext appagent
 -->
 <script>
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { AuthRequiredError, fetchWithRenewal } from './auth.js';
   import {
     createDocument,
+    createRevision,
     getDocument,
     getRevision,
-    createRevision,
     listRevisions,
+    openDocumentStream,
     submitAgentRevision,
-    getAgentRevisionStatus,
   } from './vtext.js';
 
   export let currentUser = null;
@@ -25,7 +25,8 @@
   const dispatch = createEventDispatcher();
 
   let loading = true;
-  let prompting = false;
+  let submitting = false;
+  let agentPending = false;
   let error = '';
   let saveStatus = '';
   let currentDoc = null;
@@ -34,7 +35,11 @@
   let activeRevisionIndex = -1;
   let editorValue = '';
   let initializedKey = '';
-  let watchedInitialLoopId = '';
+  let latestHeadRevisionId = '';
+  let pendingHeadRevisionId = '';
+  let newVersionAvailable = false;
+  let streamSource = null;
+  let streamDocId = '';
 
   function normalizeTitle(ctx) {
     if (ctx?.windowTitle) return ctx.windowTitle;
@@ -60,7 +65,6 @@
       initialContent: ctx?.initialContent || '',
       seedPrompt: ctx?.seedPrompt || '',
       createInitialVersion: !!ctx?.createInitialVersion,
-      initialLoopId: ctx?.initialLoopId || '',
     };
     return JSON.stringify(key);
   }
@@ -82,6 +86,43 @@
       seed_prompt: appContext.seedPrompt || '',
       conductor_loop_id: appContext.conductorLoopId || '',
     };
+  }
+
+  function hasAppAgentRevision() {
+    return revisions.some((rev) => rev.author_kind === 'appagent') || currentRevision?.author_kind === 'appagent';
+  }
+
+  function synthStatusLabel() {
+    return hasAppAgentRevision() ? 'Revising…' : 'Writing first draft…';
+  }
+
+  function clearNewVersionIndicator() {
+    pendingHeadRevisionId = '';
+    newVersionAvailable = false;
+  }
+
+  function closeDocumentStream() {
+    if (streamSource) {
+      streamSource.close();
+      streamSource = null;
+    }
+    streamDocId = '';
+  }
+
+  function connectDocumentStream(docId) {
+    if (!docId) return;
+    if (streamSource && streamDocId === docId) return;
+    closeDocumentStream();
+    streamDocId = docId;
+    streamSource = openDocumentStream(docId, {
+      onEvent: (event) => {
+        void handleDocumentStreamEvent(event);
+      },
+      onError: () => {
+        // EventSource retries automatically. Each reconnect receives a fresh
+        // snapshot from the server, which re-synchronizes the editor.
+      },
+    });
   }
 
   async function refreshRevisions(docId, preferredRevisionId = '') {
@@ -113,6 +154,10 @@
     currentRevision = revision;
     activeRevisionIndex = index;
     editorValue = revision.content || '';
+    const knownHeadId = latestHeadRevisionId || currentDoc?.current_revision_id || '';
+    if (summary.revision_id === knownHeadId) {
+      clearNewVersionIndicator();
+    }
   }
 
   async function writeThroughToFile(content) {
@@ -131,6 +176,7 @@
 
   async function reloadDocument(preferredRevisionId = '') {
     currentDoc = await getDocument(currentDoc.doc_id);
+    latestHeadRevisionId = currentDoc.current_revision_id || latestHeadRevisionId;
     await refreshRevisions(currentDoc.doc_id, preferredRevisionId);
   }
 
@@ -147,40 +193,74 @@
     return revision;
   }
 
-  async function watchAgentLoop(loopId, options = {}) {
-    if (!loopId) return;
-    const writeThroughOnComplete = options.writeThroughOnComplete === true;
-    const successStatus = options.successStatus || 'Agent created next version';
+  async function applyHeadChange(revisionId) {
+    if (!currentDoc || !revisionId) return;
+    if (currentRevision?.revision_id === revisionId) {
+      clearNewVersionIndicator();
+      return;
+    }
 
-    prompting = true;
-    error = '';
-    saveStatus = successStatus === 'First draft ready' ? 'Waiting for first draft…' : 'Revising…';
+    const shouldAutoAdvance = !isViewingHistorical && !isDirty;
+    if (!shouldAutoAdvance) {
+      pendingHeadRevisionId = revisionId;
+      newVersionAvailable = true;
+      saveStatus = 'New version available';
+      return;
+    }
 
-    try {
-      for (;;) {
-        const status = await getAgentRevisionStatus(loopId);
-        if (status.state === 'completed') {
-          await reloadDocument();
-          if (writeThroughOnComplete && appContext.sourcePath) {
-            await writeThroughToFile(editorValue);
-          }
-          saveStatus = successStatus;
-          return;
+    const hadAgentVersionBefore = hasAppAgentRevision();
+    await reloadDocument(revisionId);
+    clearNewVersionIndicator();
+    saveStatus = hadAgentVersionBefore ? 'Agent created next version' : 'First draft ready';
+    if (appContext.sourcePath) {
+      await writeThroughToFile(editorValue);
+    }
+  }
+
+  async function handleDocumentStreamEvent(event) {
+    if (!event || event.doc_id !== currentDoc?.doc_id) return;
+
+    switch (event.kind) {
+      case 'snapshot':
+        latestHeadRevisionId = event.current_revision_id || latestHeadRevisionId;
+        agentPending = !!event.pending;
+        if (agentPending) {
+          saveStatus = synthStatusLabel();
         }
-        if (status.state === 'failed' || status.state === 'blocked' || status.state === 'cancelled') {
-          throw new Error(status.error || `Agent revision ${status.state}`);
+        if (latestHeadRevisionId && currentRevision?.revision_id !== latestHeadRevisionId) {
+          await applyHeadChange(latestHeadRevisionId);
         }
-        saveStatus = successStatus === 'First draft ready' ? 'Writing first draft…' : 'Revising…';
-        await new Promise((resolve) => setTimeout(resolve, 900));
-      }
-    } finally {
-      prompting = false;
+        return;
+      case 'synth_started':
+        agentPending = true;
+        error = '';
+        saveStatus = synthStatusLabel();
+        return;
+      case 'synth_completed':
+        agentPending = false;
+        return;
+      case 'revision_created':
+        latestHeadRevisionId = event.current_revision_id || event.revision_id || latestHeadRevisionId;
+        return;
+      case 'head_changed':
+        latestHeadRevisionId = event.current_revision_id || event.revision_id || latestHeadRevisionId;
+        agentPending = false;
+        await applyHeadChange(latestHeadRevisionId);
+        return;
+      case 'synth_failed':
+        agentPending = false;
+        error = event.error || 'Agent revision failed';
+        saveStatus = 'Revision failed';
+        return;
+      default:
+        return;
     }
   }
 
   async function loadContext() {
     loading = true;
-    prompting = false;
+    submitting = false;
+    agentPending = false;
     error = '';
     saveStatus = '';
     currentDoc = null;
@@ -188,12 +268,16 @@
     revisions = [];
     activeRevisionIndex = -1;
     editorValue = '';
+    latestHeadRevisionId = '';
+    clearNewVersionIndicator();
+    closeDocumentStream();
 
     try {
       const initialValue = appContext.initialContent ?? appContext.seedPrompt ?? '';
 
       if (appContext.docId) {
         currentDoc = await getDocument(appContext.docId);
+        latestHeadRevisionId = currentDoc.current_revision_id || '';
         await refreshRevisions(currentDoc.doc_id);
         if (revisions.length === 0) {
           editorValue = initialValue || '';
@@ -222,17 +306,8 @@
         }
       }
 
-      const initialLoopId = appContext.initialLoopId || '';
-      if (initialLoopId && initialLoopId !== watchedInitialLoopId) {
-        watchedInitialLoopId = initialLoopId;
-        void watchAgentLoop(initialLoopId, { successStatus: 'First draft ready' }).catch((err) => {
-          if (err instanceof AuthRequiredError) {
-            dispatch('authexpired');
-            return;
-          }
-          error = err.message || 'Failed to watch initial VText task';
-          saveStatus = 'First draft failed';
-        });
+      if (currentDoc?.doc_id) {
+        connectDocumentStream(currentDoc.doc_id);
       }
     } catch (err) {
       if (err instanceof AuthRequiredError) {
@@ -246,9 +321,9 @@
   }
 
   async function handlePrompt() {
-    if (!currentDoc || loading || prompting) return;
+    if (!currentDoc || loading || submitting || agentPending) return;
 
-    prompting = true;
+    submitting = true;
     error = '';
     saveStatus = 'Saving user version…';
 
@@ -256,14 +331,11 @@
       await writeThroughToFile(editorValue);
       await saveUserVersion();
       saveStatus = 'Submitting revise event…';
-
-      const submitted = await submitAgentRevision(currentDoc.doc_id, {
+      await submitAgentRevision(currentDoc.doc_id, {
         intent: 'revise',
       });
-      await watchAgentLoop(submitted.loop_id, {
-        writeThroughOnComplete: !!appContext.sourcePath,
-        successStatus: 'Agent created next version',
-      });
+      agentPending = true;
+      saveStatus = synthStatusLabel();
     } catch (err) {
       if (err instanceof AuthRequiredError) {
         dispatch('authexpired');
@@ -271,13 +343,14 @@
       }
       error = err.message || 'Failed to prompt VText';
       saveStatus = 'Prompt failed';
+      agentPending = false;
     } finally {
-      prompting = false;
+      submitting = false;
     }
   }
 
   async function handlePrevVersion() {
-    if (activeRevisionIndex <= 0 || prompting) return;
+    if (activeRevisionIndex <= 0 || submitting) return;
     error = '';
     saveStatus = '';
     await loadRevisionAt(activeRevisionIndex - 1);
@@ -285,7 +358,7 @@
   }
 
   async function handleNextVersion() {
-    if (activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1 || prompting) return;
+    if (activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1 || submitting) return;
     error = '';
     saveStatus = '';
     await loadRevisionAt(activeRevisionIndex + 1);
@@ -296,6 +369,14 @@
     }
   }
 
+  async function handleShowLatestVersion() {
+    if (!currentDoc || !pendingHeadRevisionId) return;
+    error = '';
+    await reloadDocument(pendingHeadRevisionId);
+    clearNewVersionIndicator();
+    saveStatus = 'Viewing latest version';
+  }
+
   $: contextKey = getContextKey(appContext);
   $: if (contextKey && contextKey !== initializedKey) {
     initializedKey = contextKey;
@@ -303,13 +384,20 @@
   }
 
   $: isViewingHistorical = revisions.length > 0 && activeRevisionIndex !== revisions.length - 1;
+  $: isDirty = !!currentRevision && !isViewingHistorical && editorValue !== (currentRevision.content || '');
   $: versionLabel = activeRevisionIndex >= 0 ? `v${activeRevisionIndex}` : 'v0';
+  $: promptLabel = submitting ? 'Submitting…' : agentPending ? 'Revising…' : 'Revise';
+  $: navDisabled = loading || submitting;
 
   onMount(() => {
     if (!initializedKey) {
       initializedKey = contextKey;
       loadContext();
     }
+  });
+
+  onDestroy(() => {
+    closeDocumentStream();
   });
 </script>
 
@@ -320,7 +408,7 @@
     bind:value={editorValue}
     placeholder="Start typing the document..."
     disabled={loading}
-    readonly={isViewingHistorical || prompting}
+    readonly={isViewingHistorical}
     spellcheck="true"
   ></textarea>
 
@@ -332,7 +420,7 @@
       aria-label={activeRevisionIndex > 0 ? `Older version (v${activeRevisionIndex - 1})` : 'At oldest version'}
       title={activeRevisionIndex > 0 ? `Go to v${activeRevisionIndex - 1}` : 'At oldest version'}
       on:click={handlePrevVersion}
-      disabled={loading || prompting || activeRevisionIndex <= 0}
+      disabled={navDisabled || activeRevisionIndex <= 0}
     >
       &lt;
     </button>
@@ -342,7 +430,7 @@
       aria-label={activeRevisionIndex >= 0 && activeRevisionIndex < revisions.length - 1 ? `Newer version (v${activeRevisionIndex + 1})` : 'At latest version'}
       title={activeRevisionIndex >= 0 && activeRevisionIndex < revisions.length - 1 ? `Go to v${activeRevisionIndex + 1}` : 'At latest version'}
       on:click={handleNextVersion}
-      disabled={loading || prompting || activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1}
+      disabled={navDisabled || activeRevisionIndex < 0 || activeRevisionIndex >= revisions.length - 1}
     >
       &gt;
     </button>
@@ -353,10 +441,21 @@
     data-vtext-prompt
     data-vtext-save
     on:click={handlePrompt}
-    disabled={loading || prompting || isViewingHistorical}
+    disabled={loading || submitting || agentPending || isViewingHistorical}
   >
-    {prompting ? 'Revising…' : 'Revise'}
+    {promptLabel}
   </button>
+
+  {#if newVersionAvailable}
+    <button
+      class="update-pill"
+      data-vtext-new-version
+      on:click={handleShowLatestVersion}
+      disabled={loading}
+    >
+      New version available
+    </button>
+  {/if}
 
   {#if error}
     <div class="error-float" role="alert">{error}</div>
@@ -404,15 +503,12 @@
 
   .nav-float {
     position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
     display: flex;
     align-items: center;
     gap: 0.4rem;
     z-index: 2;
-  }
-
-  .nav-float {
-    top: 0.75rem;
-    right: 0.75rem;
   }
 
   .nav-version {
@@ -432,7 +528,8 @@
   }
 
   .nav-btn,
-  .prompt-btn {
+  .prompt-btn,
+  .update-pill {
     border: 1px solid rgba(96, 165, 250, 0.28);
     background: rgba(15, 23, 42, 0.82);
     color: #e0ecff;
@@ -460,6 +557,18 @@
     font-weight: 700;
   }
 
+  .update-pill {
+    position: absolute;
+    right: 0.85rem;
+    bottom: 4rem;
+    z-index: 2;
+    border-radius: 999px;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: #bfdbfe;
+  }
+
   .error-float {
     position: absolute;
     left: 0.85rem;
@@ -477,14 +586,16 @@
   }
 
   .nav-btn:hover:enabled,
-  .prompt-btn:hover:enabled {
+  .prompt-btn:hover:enabled,
+  .update-pill:hover:enabled {
     transform: translateY(-1px);
     background: rgba(30, 41, 59, 0.92);
     border-color: rgba(96, 165, 250, 0.42);
   }
 
   .nav-btn:disabled,
-  .prompt-btn:disabled {
+  .prompt-btn:disabled,
+  .update-pill:disabled {
     opacity: 0.46;
     cursor: not-allowed;
   }
@@ -512,9 +623,14 @@
       padding: 0.58rem 0.82rem;
     }
 
+    .update-pill {
+      right: 0.7rem;
+      bottom: 3.75rem;
+    }
+
     .error-float {
       left: 0.7rem;
-      bottom: 3.8rem;
+      bottom: 6.6rem;
       max-width: calc(100% - 1.4rem);
     }
   }
