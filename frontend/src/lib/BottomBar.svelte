@@ -27,6 +27,8 @@
 
   export let currentUser = null;
   export let liveStatus = 'disconnected';
+  export let promptDisabled = false;
+  export let promptPlaceholder = 'Ask anything...';
 
   const dispatch = createEventDispatcher();
 
@@ -41,6 +43,9 @@
   }
 
   function handlePromptKeydown(event) {
+    if (promptDisabled) {
+      return;
+    }
     if (event.key === 'Enter' && promptValue.trim()) {
       // Submit prompt (for now just clear — no Chat app yet)
       dispatch('promptsubmit', { text: promptValue.trim() });
@@ -109,8 +114,9 @@
         data-prompt-input
         bind:value={promptValue}
         on:keydown={handlePromptKeydown}
-        placeholder="Ask anything..."
+        placeholder={promptPlaceholder}
         aria-label="Prompt input"
+        disabled={promptDisabled}
       />
     </div>
   </div>

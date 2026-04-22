@@ -61,8 +61,11 @@
   // ---- Bootstrap data (preserved for session renewal, not displayed) ----
   let bootstrapData = null;
   let bootstrapError = '';
+  let bootstrapStable = false;
   let refreshing = false;
   let refreshStatus = '';
+  let desktopReady = false;
+  let promptPlaceholder = 'Connecting to desktop...';
 
   // ---- WebSocket state ----
   let ws = null;
@@ -78,6 +81,11 @@
   let stateLoaded = false;
   let saveTimer = null;
   const SAVE_DEBOUNCE_MS = 500;
+  const BOOTSTRAP_STABILITY_ATTEMPTS = 6;
+  const BOOTSTRAP_STABILITY_DELAY_MS = 800;
+
+  $: desktopReady = bootstrapStable && stateLoaded;
+  $: promptPlaceholder = desktopReady ? 'Ask anything...' : 'Connecting to desktop...';
 
   // ---- Desktop state persistence ----
 
@@ -131,6 +139,10 @@
     return icons[appId] || '📱';
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(persistDesktopState, SAVE_DEBOUNCE_MS);
@@ -177,22 +189,29 @@
 
   // ---- Bootstrap fetch (preserved for session renewal, not displayed) ----
 
-  async function fetchBootstrap() {
+  async function stabilizeBootstrap() {
+    bootstrapStable = false;
     bootstrapError = '';
-    try {
+    let previousSandboxId = '';
+    for (let attempt = 0; attempt < BOOTSTRAP_STABILITY_ATTEMPTS; attempt++) {
       const res = await fetchWithRenewal('/api/shell/bootstrap', { method: 'GET' });
       if (!res.ok) {
         bootstrapError = `Bootstrap failed (${res.status})`;
-        return;
+        return false;
       }
       bootstrapData = await res.json();
-    } catch (err) {
-      if (err instanceof AuthRequiredError) {
-        dispatch('authexpired');
-        return;
+      const sandboxId = (bootstrapData?.sandbox_id || '').trim();
+      if (sandboxId !== '' && sandboxId === previousSandboxId) {
+        bootstrapStable = true;
+        return true;
       }
-      bootstrapError = 'Bootstrap request failed';
+      previousSandboxId = sandboxId;
+      if (attempt < BOOTSTRAP_STABILITY_ATTEMPTS - 1) {
+        await delay(BOOTSTRAP_STABILITY_DELAY_MS);
+      }
     }
+    bootstrapError = 'Desktop routing is still stabilizing';
+    return false;
   }
 
   async function handleRefresh() {
@@ -200,13 +219,11 @@
     refreshStatus = '';
     bootstrapError = '';
     try {
-      const res = await fetchWithRenewal('/api/shell/bootstrap', { method: 'GET' });
-      if (!res.ok) {
-        bootstrapError = `Bootstrap failed (${res.status})`;
+      const stable = await stabilizeBootstrap();
+      if (!stable) {
         refreshStatus = 'Refresh failed';
         return;
       }
-      bootstrapData = await res.json();
       refreshStatus = 'Session renewed';
     } catch (err) {
       if (err instanceof AuthRequiredError) {
@@ -274,6 +291,10 @@
   // ---- Event handlers ----
 
   function handleLaunchApp(event) {
+    if (!desktopReady) {
+      showToast('Desktop is still connecting');
+      return;
+    }
     openApp(event.detail.appId, event.detail.appName, event.detail.icon, {
       ...(event.detail.appContext || {}),
     });
@@ -332,6 +353,10 @@
   async function handlePromptSubmit(event) {
     const text = (event.detail?.text || '').trim();
     if (!text) return;
+    if (!desktopReady) {
+      showToast('Desktop is still connecting');
+      return;
+    }
 
     const fallbackWindowTitle = text.length > 28 ? `${text.slice(0, 28)}…` : text;
 
@@ -425,9 +450,22 @@
   // ---- Lifecycle ----
 
   onMount(() => {
-    fetchBootstrap();
-    connectLiveChannel();
-    loadDesktopState();
+    (async () => {
+      try {
+        const stable = await stabilizeBootstrap();
+        if (!stable) {
+          return;
+        }
+        connectLiveChannel();
+        await loadDesktopState();
+      } catch (err) {
+        if (err instanceof AuthRequiredError) {
+          dispatch('authexpired');
+          return;
+        }
+        bootstrapError = 'Bootstrap request failed';
+      }
+    })();
 
     // Subscribe to store changes for auto-save
     unsubscribeWindows = windows.subscribe(() => {
@@ -454,14 +492,14 @@
   });
 </script>
 
-<div class="desktop" data-desktop data-shell>
+<div class="desktop {desktopReady ? 'desktop-ready' : 'desktop-loading'}" data-desktop data-shell>
   <!-- Desktop surface (floating icons + windows, full viewport width) -->
-  <div class="desktop-area {stateLoaded ? 'state-loaded' : 'state-loading'}" data-desktop-windows>
+  <div class="desktop-area {desktopReady ? 'state-loaded' : 'state-loading'}" data-desktop-windows>
     <!-- Floating desktop icons (z-index below windows) -->
     <FloatingDesktopIcons on:launchapp={handleLaunchApp} on:iconpositionschanged={handleIconPositionsChanged} />
 
     <!-- Floating windows (rendered on top of icons) -->
-    {#if stateLoaded}
+    {#if desktopReady}
       {#each $windows as win (win.windowId)}
         {#if win.mode !== 'closed' && win.mode !== 'hidden'}
           <FloatingWindow
@@ -533,6 +571,8 @@
   <BottomBar
     {currentUser}
     liveStatus={$liveStatus}
+    promptDisabled={!desktopReady}
+    {promptPlaceholder}
     on:logout={handleLogout}
     on:promptsubmit={handlePromptSubmit}
   />
@@ -545,6 +585,14 @@
     min-height: 100vh;
     background: #0f0f0f;
     overflow: hidden;
+  }
+
+  .desktop.desktop-loading {
+    visibility: hidden;
+  }
+
+  .desktop.desktop-ready {
+    visibility: visible;
   }
 
   /* Desktop area (window container) — full viewport width, no left rail */
