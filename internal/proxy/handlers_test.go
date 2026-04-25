@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httputil"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1331,14 +1331,14 @@ func TestBootstrapStripsAdditionalSpoofedIdentityHeaders(t *testing.T) {
 	sandboxMux.HandleFunc("/api/shell/bootstrap", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"sandbox_id":          "sandbox-test",
-			"user":                r.Header.Get("X-Authenticated-User"),
-			"x_user_id":          r.Header.Get("X-User-Id"),
-			"x_forwarded_user":   r.Header.Get("X-Forwarded-User"),
-			"x_remote_user":     r.Header.Get("X-Remote-User"),
-			"x_auth_user":       r.Header.Get("X-Auth-User"),
-			"x_user_name":       r.Header.Get("X-User-Name"),
-			"path":              r.URL.Path,
+			"sandbox_id":       "sandbox-test",
+			"user":             r.Header.Get("X-Authenticated-User"),
+			"x_user_id":        r.Header.Get("X-User-Id"),
+			"x_forwarded_user": r.Header.Get("X-Forwarded-User"),
+			"x_remote_user":    r.Header.Get("X-Remote-User"),
+			"x_auth_user":      r.Header.Get("X-Auth-User"),
+			"x_user_name":      r.Header.Get("X-User-Name"),
+			"path":             r.URL.Path,
 		})
 	})
 	sandboxServer := httptest.NewServer(sandboxMux)
@@ -1485,12 +1485,12 @@ func TestWSSpoofedIdentityHeadersDoNotReachSandbox(t *testing.T) {
 
 		// Echo all identity headers we received.
 		connected := map[string]interface{}{
-			"sandbox_id":         "sandbox-test",
-			"user":               r.Header.Get("X-Authenticated-User"),
-			"x_user_id":         r.Header.Get("X-User-Id"),
-			"x_forwarded_user":  r.Header.Get("X-Forwarded-User"),
-			"x_remote_user":     r.Header.Get("X-Remote-User"),
-			"type":              "connected",
+			"sandbox_id":       "sandbox-test",
+			"user":             r.Header.Get("X-Authenticated-User"),
+			"x_user_id":        r.Header.Get("X-User-Id"),
+			"x_forwarded_user": r.Header.Get("X-Forwarded-User"),
+			"x_remote_user":    r.Header.Get("X-Remote-User"),
+			"type":             "connected",
 		}
 		if err := conn.WriteJSON(connected); err != nil {
 			return
@@ -1789,6 +1789,55 @@ func TestAuthenticatedVTextRouteIsForwarded(t *testing.T) {
 	}
 	if gotPath != "/api/vtext/documents" {
 		t.Fatalf("forwarded path: got %q, want %q", gotPath, "/api/vtext/documents")
+	}
+}
+
+func TestAuthenticatedTraceRouteIsForwarded(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+
+	gotUser := ""
+	gotPath := ""
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/trace/trajectories", func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-Authenticated-User")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"trajectories": []any{},
+		})
+	})
+	sandbox := httptest.NewServer(sandboxMux)
+	t.Cleanup(func() { sandbox.Close() })
+
+	cfg := &Config{
+		Port:              "0",
+		SandboxURL:        sandbox.URL,
+		AuthPublicKeyPath: "/unused/in/test",
+	}
+	h, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	accessToken := issueTestAccessJWT(priv, "user-authenticated")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/trace/trajectories?limit=20", nil)
+	req.AddCookie(&http.Cookie{Name: "choir_access", Value: accessToken})
+	w := httptest.NewRecorder()
+	h.HandleAPI(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	if gotUser != "user-authenticated" {
+		t.Fatalf("forwarded X-Authenticated-User: got %q, want %q", gotUser, "user-authenticated")
+	}
+	if gotPath != "/api/trace/trajectories" {
+		t.Fatalf("forwarded path: got %q, want %q", gotPath, "/api/trace/trajectories")
 	}
 }
 
@@ -2200,10 +2249,10 @@ func testVMctlProxyEnv(t *testing.T) (*Handler, ed25519.PrivateKey, *httptest.Se
 		user := r.Header.Get("X-Authenticated-User")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"sandbox_id":  "sandbox-vmctl-test",
-			"user":        user,
-			"bootstrap":   "vm-routed",
-			"path":        r.URL.Path,
+			"sandbox_id": "sandbox-vmctl-test",
+			"user":       user,
+			"bootstrap":  "vm-routed",
+			"path":       r.URL.Path,
 		})
 	})
 	sandboxMux.HandleFunc("/api/agent/loop", func(w http.ResponseWriter, r *http.Request) {

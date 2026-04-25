@@ -341,6 +341,11 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		// VAL-RUNTIME-006).
 		h.HandleProtectedAPI(w, r)
 		return
+	case strings.HasPrefix(path, "/api/trace/"):
+		// Trace trajectory APIs are runtime-owned and must follow the same
+		// auth and per-user sandbox routing contract as /api/agent routes.
+		h.HandleProtectedAPI(w, r)
+		return
 	case path == "/api/desktop/state":
 		// Desktop state API: auth-gated at the proxy level and forwarded
 		// to the sandbox with the authenticated user context injected.

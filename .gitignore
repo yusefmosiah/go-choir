@@ -40,3 +40,4 @@ sandbox.log
 
 # GStack
 .gstack/*
+.gstack/
