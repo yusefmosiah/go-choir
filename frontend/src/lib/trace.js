@@ -6,81 +6,38 @@ async function decodeError(res, fallback) {
   throw new Error(err.error || fallback);
 }
 
-export async function listAgentRuns(limit = 100, { channelId = '' } = {}) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (channelId) {
-    params.set('channel_id', channelId);
-  }
-  const res = await fetchWithRenewal(`/api/agent/loops?${params.toString()}`, {
-    method: 'GET',
-  });
-
+async function readJSON(path, fallback) {
+  const res = await fetchWithRenewal(path, { method: 'GET' });
   if (!res.ok) {
-    await decodeError(res, `Loop list fetch failed (${res.status})`);
+    await decodeError(res, `${fallback} (${res.status})`);
   }
-
   return res.json();
 }
 
-export async function listAgentEvents({ loopId = '', channelId = '', limit = 200 } = {}) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (loopId) {
-    params.set('loop_id', loopId);
-  }
-  if (channelId) {
-    params.set('channel_id', channelId);
-  }
-
-  const res = await fetchWithRenewal(`/api/agent/events?${params.toString()}`, {
-    method: 'GET',
-  });
-
-  if (!res.ok) {
-    await decodeError(res, `Event list fetch failed (${res.status})`);
-  }
-
-  return res.json();
+export function listTrajectories(limit = 100) {
+  return readJSON(`/api/trace/trajectories?limit=${encodeURIComponent(String(limit))}`, 'Trajectory list fetch failed');
 }
 
-export async function listChannelMessages({ channelId = '', afterSeq = 0, limit = 200 } = {}) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (channelId) {
-    params.set('channel_id', channelId);
-  }
-  if (afterSeq > 0) {
-    params.set('after_seq', String(afterSeq));
-  }
-
-  const res = await fetchWithRenewal(`/api/agent/channel-messages?${params.toString()}`, {
-    method: 'GET',
-  });
-
-  if (!res.ok) {
-    await decodeError(res, `Channel message fetch failed (${res.status})`);
-  }
-
-  return res.json();
+export function getTrajectorySnapshot(trajectoryId) {
+  return readJSON(`/api/trace/trajectories/${encodeURIComponent(trajectoryId)}`, 'Trajectory snapshot fetch failed');
 }
 
-export async function getAgentTopology() {
-  const res = await fetchWithRenewal('/api/agent/topology', {
-    method: 'GET',
-  });
-
-  if (!res.ok) {
-    await decodeError(res, `Topology fetch failed (${res.status})`);
-  }
-
-  return res.json();
+export function getTrajectoryMomentDetail(trajectoryId, momentId) {
+  return readJSON(
+    `/api/trace/trajectories/${encodeURIComponent(trajectoryId)}/moments/${encodeURIComponent(momentId)}`,
+    'Trajectory detail fetch failed',
+  );
 }
 
-export function openEventStream({ afterSeq = 0, onEvent, onError } = {}) {
+export function openTrajectoryEventStream(trajectoryId, { afterSeq = 0, onEvent, onError } = {}) {
   const params = new URLSearchParams();
   if (afterSeq > 0) {
     params.set('after_seq', String(afterSeq));
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const source = new EventSource(withDesktopSelector(`/api/events${suffix}`));
+  const source = new EventSource(
+    withDesktopSelector(`/api/trace/trajectories/${encodeURIComponent(trajectoryId)}/events${suffix}`),
+  );
 
   source.onmessage = (event) => {
     if (!onEvent) return;

@@ -797,6 +797,79 @@ func (s *Store) ListEventsByChannel(ctx context.Context, ownerID, channelID stri
 	return events, nil
 }
 
+// ListEventsByTrajectory returns recent events for a specific user trajectory.
+func (s *Store) ListEventsByTrajectory(ctx context.Context, ownerID, trajectoryID string, limit int) ([]types.EventRecord, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
+		   FROM events
+		  WHERE owner_id = ?
+		    AND trajectory_id = ?
+		  ORDER BY stream_seq ASC
+		  LIMIT ?`,
+		ownerID,
+		trajectoryID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query events by trajectory: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []types.EventRecord
+	for rows.Next() {
+		rec, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events by trajectory: %w", err)
+	}
+	return events, nil
+}
+
+// ListEventsByTrajectoryAfter returns trajectory-scoped events newer than the
+// provided stream sequence, ordered by stream_seq ascending.
+func (s *Store) ListEventsByTrajectoryAfter(ctx context.Context, ownerID, trajectoryID string, afterSeq int64, limit int) ([]types.EventRecord, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_id, loop_id, agent_id, channel_id, owner_id, trajectory_id, seq, stream_seq, ts, kind, phase, payload_json
+		   FROM events
+		  WHERE owner_id = ?
+		    AND trajectory_id = ?
+		    AND stream_seq > ?
+		  ORDER BY stream_seq ASC
+		  LIMIT ?`,
+		ownerID,
+		trajectoryID,
+		afterSeq,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query events by trajectory after seq: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []types.EventRecord
+	for rows.Next() {
+		rec, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events by trajectory after seq: %w", err)
+	}
+	return events, nil
+}
+
 // AppendChannelMessage persists a message to a coordination channel and assigns the next cursor sequence.
 func (s *Store) AppendChannelMessage(ctx context.Context, message *types.ChannelMessage, ownerID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -873,6 +946,42 @@ func (s *Store) ListChannelMessages(ctx context.Context, ownerID, channelID stri
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate channel messages: %w", err)
+	}
+	return messages, nil
+}
+
+// ListChannelMessagesByTrajectory returns durable channel messages for a
+// specific trajectory, ordered by channel sequence ascending.
+func (s *Store) ListChannelMessagesByTrajectory(ctx context.Context, ownerID, trajectoryID string, limit int) ([]types.ChannelMessage, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT channel_id, seq, from_agent_id, from_loop_id, to_agent_id, to_loop_id, trajectory_id, from_name, role, content, created_at
+		   FROM channel_messages
+		  WHERE owner_id = ?
+		    AND trajectory_id = ?
+		  ORDER BY created_at ASC, seq ASC
+		  LIMIT ?`,
+		ownerID,
+		trajectoryID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query channel messages by trajectory: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var messages []types.ChannelMessage
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate channel messages by trajectory: %w", err)
 	}
 	return messages, nil
 }
@@ -975,6 +1084,42 @@ func (s *Store) GetResearchFinding(ctx context.Context, ownerID, findingID strin
 		ownerID, findingID,
 	)
 	return scanResearchFinding(row)
+}
+
+// ListResearchFindingsByTrajectory returns researcher dispatch bundles for one
+// trajectory ordered by creation time ascending.
+func (s *Store) ListResearchFindingsByTrajectory(ctx context.Context, ownerID, trajectoryID string, limit int) ([]types.ResearchFindingRecord, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT owner_id, finding_id, agent_id, target_agent_id, channel_id, message_seq, trajectory_id, findings_json, evidence_ids_json, notes_json, questions_json, content, created_at
+		   FROM research_findings
+		  WHERE owner_id = ?
+		    AND trajectory_id = ?
+		  ORDER BY created_at ASC
+		  LIMIT ?`,
+		ownerID,
+		trajectoryID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query research findings by trajectory: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var findings []types.ResearchFindingRecord
+	for rows.Next() {
+		rec, err := scanResearchFinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate research findings by trajectory: %w", err)
+	}
+	return findings, nil
 }
 
 // DispatchResearchFinding atomically persists the addressed channel message,

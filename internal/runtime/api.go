@@ -781,6 +781,8 @@ func RegisterRoutes(s *server.Server, h *APIHandler) {
 	s.HandleFunc("/api/agent/status", h.HandleRunStatus)
 	s.HandleFunc("/api/agent/", h.HandleRunStatusByID) // matches /api/agent/{id}/status
 	s.HandleFunc("/api/events", h.HandleEvents)
+	s.HandleFunc("/api/trace/trajectories", h.HandleTraceTrajectories)
+	s.HandleFunc("/api/trace/trajectories/", h.HandleTraceTrajectories)
 	s.HandleFunc("/api/desktop/state", h.HandleDesktopState)
 	s.HandleFunc("/api/prompts", h.HandlePromptList)
 	s.HandleFunc("/api/prompts/", h.HandlePromptRole)
