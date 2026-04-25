@@ -313,16 +313,16 @@ func (h *Handler) HandleProtectedAPI(w http.ResponseWriter, r *http.Request) {
 	h.reverseProxy.ServeHTTP(w, r)
 }
 
-// HandleAPI routes /api/* traffic. It applies auth gating for all /api/*
-// routes and dispatches to specific handlers where they exist. Unknown /api/*
-// paths are denied with 401 for unauthenticated callers and 404 for
-// authenticated callers, so the proxy is consistently fail-closed: no /api/*
-// route ever exposes data without auth, and signed-out callers always see a
-// 401 denial rather than a 404 that might suggest the route doesn't exist.
+// HandleAPI routes /api/* traffic. It applies auth gating for every HTTP
+// /api/* route and dispatches to specific handlers only where the proxy must
+// speak a different protocol, such as WebSocket upgrades. Authenticated HTTP
+// /api/* requests are forwarded by default so new sandbox apps do not require
+// proxy allowlist changes. Signed-out callers still see a 401 denial rather
+// than a route-specific 404 that might suggest which routes exist.
 func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// Route specific protected paths.
+	// Route protocol-specific protected paths.
 	switch {
 	case path == "/api/shell/bootstrap":
 		h.HandleBootstrap(w, r)
@@ -333,59 +333,11 @@ func (h *Handler) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/terminal/ws":
 		h.HandleTerminalWS(w, r)
 		return
-	case strings.HasPrefix(path, "/api/agent/") || path == "/api/events":
-		// Runtime API routes: auth-gated at the proxy level and forwarded
-		// to the sandbox with the authenticated user context injected.
-		// The sandbox runtime handlers also verify X-Authenticated-User
-		// for defense-in-depth caller scoping (VAL-RUNTIME-002,
-		// VAL-RUNTIME-006).
-		h.HandleProtectedAPI(w, r)
-		return
-	case strings.HasPrefix(path, "/api/trace/"):
-		// Trace trajectory APIs are runtime-owned and must follow the same
-		// auth and per-user sandbox routing contract as /api/agent routes.
-		h.HandleProtectedAPI(w, r)
-		return
-	case path == "/api/desktop/state":
-		// Desktop state API: auth-gated at the proxy level and forwarded
-		// to the sandbox with the authenticated user context injected.
-		// Desktop state is persisted server-side for cross-context
-		// restore (VAL-DESKTOP-007).
-		h.HandleProtectedAPI(w, r)
-		return
-	case strings.HasPrefix(path, "/api/vtext/"):
-		// Versioned document API: auth-gated at the proxy level and
-		// forwarded to the sandbox with the authenticated user context
-		// injected.
-		h.HandleProtectedAPI(w, r)
-		return
-	case path == "/api/prompts" || strings.HasPrefix(path, "/api/prompts/"):
-		// Prompt management API: auth-gated at the proxy level and
-		// forwarded to the sandbox for per-user prompt inspection,
-		// editing, and reset.
-		h.HandleProtectedAPI(w, r)
-		return
-	case strings.HasPrefix(path, "/api/files"):
-		// File browser API: auth-gated at the proxy level and forwarded
-		// to the sandbox for file/directory listing, creation, and
-		// deletion operations (VAL-FILES-001 through VAL-FILES-018).
-		h.HandleProtectedAPI(w, r)
-		return
-	case strings.HasPrefix(path, "/api/test/"):
-		// Local-only browser test APIs: auth-gated at the proxy level and
-		// forwarded to the sandbox. The sandbox itself decides whether the
-		// specific test hook is enabled.
-		h.HandleProtectedAPI(w, r)
-		return
 	case strings.HasPrefix(path, "/api/"):
-		// All /api/* routes require auth by default. Check auth before
-		// returning 404 so signed-out callers consistently receive 401
-		// instead of accidentally learning which routes exist.
-		if _, err := h.validateAccessJWT(r); err != nil {
-			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
-			return
-		}
-		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+		// All HTTP /api/* routes are auth-gated at the proxy level and
+		// forwarded to the sandbox with trusted user context injected. The
+		// sandbox owns app route dispatch and route-specific 404s.
+		h.HandleProtectedAPI(w, r)
 		return
 	default:
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})

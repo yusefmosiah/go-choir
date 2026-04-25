@@ -1717,29 +1717,66 @@ func TestAllAPIRoutesDenySignedOutCallers(t *testing.T) {
 	}
 }
 
-// TestUnknownAPIRouteReturns404ForAuthenticatedCaller verifies that unknown
-// /api/* routes return 404 (not found) for authenticated callers, confirming
-// that the proxy doesn't blindly forward everything to the sandbox.
-func TestUnknownAPIRouteReturns404ForAuthenticatedCaller(t *testing.T) {
-	h, priv, _ := testProxyEnv(t)
+// TestAuthenticatedFutureAPIRouteIsForwarded verifies that authenticated
+// HTTP /api/* routes are forwarded by default. The proxy should not require a
+// code change every time the sandbox adds a new app API.
+func TestAuthenticatedFutureAPIRouteIsForwarded(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+
+	gotUser := ""
+	gotPath := ""
+	gotMethod := ""
+	gotQuery := ""
+	sandboxMux := http.NewServeMux()
+	sandboxMux.HandleFunc("/api/future-app/widget", func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-Authenticated-User")
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":   true,
+			"path": r.URL.Path,
+		})
+	})
+	sandbox := httptest.NewServer(sandboxMux)
+	t.Cleanup(func() { sandbox.Close() })
+
+	cfg := &Config{
+		Port:              "0",
+		SandboxURL:        sandbox.URL,
+		AuthPublicKeyPath: "/unused/in/test",
+	}
+	h, err := NewHandler(cfg, pub)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
 
 	accessToken := issueTestAccessJWT(priv, "user-authenticated")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/nonexistent/route", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/future-app/widget?mode=preview", strings.NewReader(`{"hello":"world"}`))
 	req.AddCookie(&http.Cookie{Name: "choir_access", Value: accessToken})
 	w := httptest.NewRecorder()
 	h.HandleAPI(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("authenticated unknown route: got status %d, want %d", w.Code, http.StatusNotFound)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var resp errorResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
+	if gotUser != "user-authenticated" {
+		t.Fatalf("forwarded X-Authenticated-User: got %q, want %q", gotUser, "user-authenticated")
 	}
-	if resp.Error == "" {
-		t.Error("404 response should have a non-empty error message")
+	if gotPath != "/api/future-app/widget" {
+		t.Fatalf("forwarded path: got %q, want %q", gotPath, "/api/future-app/widget")
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("forwarded method: got %q, want %q", gotMethod, http.MethodPost)
+	}
+	if gotQuery != "mode=preview" {
+		t.Fatalf("forwarded query: got %q, want %q", gotQuery, "mode=preview")
 	}
 }
 
