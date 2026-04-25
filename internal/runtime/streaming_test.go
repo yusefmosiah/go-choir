@@ -98,7 +98,7 @@ func testStreamingRuntime(t *testing.T, provider Provider) (*Runtime, *store.Sto
 	return rt, s
 }
 
-func waitForStreamingRunState(t *testing.T, rt *Runtime, runID, ownerID string, timeout time.Duration) types.RunRecord {
+func waitForRunTerminalState(t *testing.T, rt *Runtime, runID, ownerID string, timeout time.Duration) types.RunRecord {
 	t.Helper()
 
 	ctx := context.Background()
@@ -465,12 +465,7 @@ func TestStreamingWithEmptyChunks(t *testing.T) {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
-
-	stored, err := rt.GetRun(ctx, rec.RunID, "user-empty")
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
+	stored := waitForRunTerminalState(t, rt, rec.RunID, "user-empty", 5*time.Second)
 	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}
@@ -510,7 +505,7 @@ func TestStreamingLargePayload(t *testing.T) {
 		t.Fatalf("submit task: %v", err)
 	}
 
-	stored := waitForStreamingRunState(t, rt, rec.RunID, "user-large", 5*time.Second)
+	stored := waitForRunTerminalState(t, rt, rec.RunID, "user-large", 5*time.Second)
 	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want completed", stored.State)
 	}

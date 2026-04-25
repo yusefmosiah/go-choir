@@ -128,12 +128,7 @@ func TestConductorTaskNormalizesStructuredRouteResult(t *testing.T) {
 		t.Fatalf("submit conductor task: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
-
-	stored, err := s.GetRun(ctx, rec.RunID)
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
+	stored := waitForRunTerminalState(t, rt, rec.RunID, "user-alice", 5*time.Second)
 	if stored.State != types.RunCompleted {
 		t.Fatalf("state: got %q, want %q", stored.State, types.RunCompleted)
 	}
