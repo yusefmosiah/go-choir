@@ -138,7 +138,7 @@
     for (const [layer, members] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
       const sortedMembers = [...members].sort((left, right) => left.label.localeCompare(right.label));
       sortedMembers.forEach((agent, index) => {
-        const x = maxDepth === 0 ? 50 : 14 + (layer * 72) / maxDepth;
+        const x = maxDepth === 0 ? 50 : 24 + (layer * 52) / maxDepth;
         const y = ((index + 1) * 100) / (sortedMembers.length + 1);
         const node = { ...agent, x, y };
         positions.set(agent.agent_id, node);
@@ -313,8 +313,9 @@
   });
 </script>
 
-<div class="trace-app" data-trace-app>
-  <aside class="trace-sidebar">
+<div class="trace-frame" data-trace-app>
+  <div class="trace-app">
+    <aside class="trace-sidebar">
     <div class="sidebar-header">
       <div>
         <h2>Trace</h2>
@@ -351,9 +352,9 @@
         {/each}
       {/if}
     </div>
-  </aside>
+    </aside>
 
-  <section class="trace-main">
+    <section class="trace-main">
     {#if error}
       <div class="error-banner">{error}</div>
     {/if}
@@ -586,13 +587,22 @@
     {:else if !loadingIndex}
       <div class="empty-state">Select a trajectory to inspect its graph, moments, and message flow.</div>
     {/if}
-  </section>
+    </section>
+  </div>
 </div>
 
 <style>
+  .trace-frame,
   .trace-app {
     height: 100%;
     min-height: 0;
+  }
+
+  .trace-frame {
+    container-type: inline-size;
+  }
+
+  .trace-app {
     display: grid;
     grid-template-columns: 292px minmax(0, 1fr);
     background: #0a0d14;
@@ -1006,8 +1016,7 @@
     }
 
     .inspector-panel {
-      position: sticky;
-      bottom: 0;
+      position: static;
       max-height: 52vh;
       border-top-left-radius: 18px;
       border-top-right-radius: 18px;
@@ -1032,6 +1041,54 @@
 
     .graph-stage {
       min-height: 420px;
+    }
+
+    .moment-chip {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .moment-summary,
+    .moment-meta {
+      grid-column: 2 / -1;
+    }
+  }
+
+  @container (max-width: 980px) {
+    .metric-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .main-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .inspector-panel {
+      position: static;
+      max-height: none;
+      border-top-left-radius: 18px;
+      border-top-right-radius: 18px;
+      box-shadow: 0 -14px 30px rgba(2, 6, 23, 0.28);
+    }
+  }
+
+  @container (max-width: 860px) {
+    .trace-app {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .trace-sidebar {
+      border-right: none;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      max-height: 36%;
+    }
+
+    .metric-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .graph-stage {
+      min-height: 320px;
     }
 
     .moment-chip {

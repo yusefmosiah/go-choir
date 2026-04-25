@@ -630,6 +630,11 @@
     background: #1a1b26;
   }
 
+  .trace-content {
+    padding: 0;
+    background: #0a0d14;
+  }
+
   .toast-stack {
     position: fixed;
     left: 50%;

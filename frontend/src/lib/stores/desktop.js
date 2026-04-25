@@ -44,6 +44,9 @@ const BOTTOM_BAR_HEIGHT = 56;
 const COMPACT_BREAKPOINT = 768;
 const DEFAULT_VIEWPORT_WIDTH = 1280;
 const DEFAULT_VIEWPORT_HEIGHT = 800;
+const APP_WINDOW_PREFERENCES = {
+  trace: { width: 1040, height: 680 },
+};
 
 function generateWindowId() {
   windowCounter++;
@@ -108,16 +111,17 @@ function constrainWindowGeometry({ x, y, width, height }) {
   };
 }
 
-function getNewWindowGeometry(openCount) {
+function getNewWindowGeometry(openCount, appId = '') {
   const metrics = getViewportMetrics();
   const offsetStep = metrics.compact ? 18 : 30;
   const offset = (openCount % 6) * offsetStep;
+  const preference = APP_WINDOW_PREFERENCES[appId] || {};
 
   return constrainWindowGeometry({
     x: metrics.workspaceStartX + offset,
     y: metrics.margin + offset,
-    width: metrics.baseWidth,
-    height: metrics.baseHeight,
+    width: Math.min(preference.width || metrics.baseWidth, metrics.workspaceWidth),
+    height: preference.height || metrics.baseHeight,
   });
 }
 
@@ -217,7 +221,7 @@ export function openApp(appId, appName, icon, appContext = {}) {
 
     const windowId = generateWindowId();
     const openCount = $windows.filter((w) => w.mode !== 'closed').length;
-    const geometry = getNewWindowGeometry(openCount);
+    const geometry = getNewWindowGeometry(openCount, appId);
     const newWindow = {
       windowId,
       appId,
