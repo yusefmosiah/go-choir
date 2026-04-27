@@ -93,7 +93,7 @@ jobs:
             systemctl reset-failed nixos-rebuild-switch-to-configuration.service 2>/dev/null || true
 
             echo "==> Pre-building NixOS closure"
-            /run/current-system/sw/bin/nix build .#nixosConfigurations.go-choir-b.config.system.build.toplevel
+            /run/current-system/sw/bin/nix build .#nixosConfigurations.go-choir-b.config.system.build.toplevel -o /tmp/go-choir-nixos-result
             echo "    Pre-build complete"
 
             echo "==> Activating NixOS config"
