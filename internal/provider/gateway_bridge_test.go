@@ -90,7 +90,7 @@ func TestGatewayBridgeProviderExecuteSuccess(t *testing.T) {
 	gbp := NewGatewayBridgeProvider(mock)
 
 	task := &types.RunRecord{
-		RunID: "task-1",
+		RunID:  "task-1",
 		Prompt: "Say hello",
 	}
 
@@ -164,7 +164,7 @@ func TestGatewayBridgeProviderExecuteFailure(t *testing.T) {
 	gbp := NewGatewayBridgeProvider(mock)
 
 	task := &types.RunRecord{
-		RunID: "task-2",
+		RunID:  "task-2",
 		Prompt: "This should fail",
 	}
 
@@ -337,7 +337,8 @@ func TestGatewayURLPreferredOverDirectResolution(t *testing.T) {
 	// Also verify that direct resolution would succeed (ZAI_API_KEY is set).
 	// The sandbox logic should prefer the gateway URL regardless.
 	p, err := ResolveProvider(ProviderConfig{
-		ZAIModels: []string{"glm-5.1"},
+		ZAIModels:        []string{"glm-5.1"},
+		SelectedProvider: "zai",
 	})
 	if err != nil {
 		t.Fatalf("direct resolution should still work: %v", err)

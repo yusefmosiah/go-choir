@@ -181,6 +181,11 @@ EOF
       SANDBOX_ID = "sandbox-guest";
       # Persistent state directory on the virtio-blk data volume.
       RUNTIME_STORE_PATH = "/mnt/persistent/state";
+      # Explicit runtime-selected model. Provider credentials remain host-side;
+      # guest LLM calls route through the gateway token above.
+      RUNTIME_LLM_PROVIDER = "chatgpt";
+      RUNTIME_LLM_MODEL = "gpt-5.5";
+      RUNTIME_LLM_REASONING_EFFORT = "low";
     };
     serviceConfig = {
       ExecStart = "${goChoirPackages.sandbox}/bin/sandbox";

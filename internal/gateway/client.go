@@ -53,13 +53,14 @@ func (c *GatewayClient) Call(ctx context.Context, req provider.LLMRequest) (*pro
 
 	// Build the gateway request payload.
 	gwReq := ProviderRequest{
-		Provider:  "", // let the gateway decide
-		Model:     req.Model,
-		Messages:  req.Messages,
-		System:    req.System,
-		Tools:     req.Tools,
-		MaxTokens: req.MaxTokens,
-		Stream:    false,
+		Provider:        req.Provider,
+		Model:           req.Model,
+		Messages:        req.Messages,
+		System:          req.System,
+		Tools:           req.Tools,
+		MaxTokens:       req.MaxTokens,
+		Stream:          false,
+		ReasoningEffort: req.ReasoningEffort,
 	}
 
 	data, err := json.Marshal(gwReq)
@@ -128,13 +129,14 @@ func (c *GatewayClient) Stream(ctx context.Context, req provider.LLMRequest, onC
 
 	// Build the gateway request payload with streaming enabled.
 	gwReq := ProviderRequest{
-		Provider:  "", // let the gateway decide
-		Model:     req.Model,
-		Messages:  req.Messages,
-		System:    req.System,
-		Tools:     req.Tools,
-		MaxTokens: req.MaxTokens,
-		Stream:    true,
+		Provider:        req.Provider,
+		Model:           req.Model,
+		Messages:        req.Messages,
+		System:          req.System,
+		Tools:           req.Tools,
+		MaxTokens:       req.MaxTokens,
+		Stream:          true,
+		ReasoningEffort: req.ReasoningEffort,
 	}
 
 	data, err := json.Marshal(gwReq)

@@ -275,6 +275,7 @@ in
       #   AWS_BEARER_TOKEN_BEDROCK=...
       #   ZAI_API_KEY=...
       #   FIREWORKS_API_KEY=...
+      #   CHATGPT_AUTH_PATH=/var/lib/go-choir/codex-auth.json
       #   # Search Provider Keys
       #   TAVILY_API_KEY=...
       #   BRAVE_API_KEY=...
@@ -289,6 +290,8 @@ in
         # traffic on tap addresses.
         "SERVER_HOST=0.0.0.0"
         "GATEWAY_PORT=8084"
+        "GATEWAY_CHATGPT_MODELS=gpt-5.5,gpt-5.4,gpt-5.4-mini"
+        "GATEWAY_CHATGPT_REASONING_EFFORT=low"
         # Tokens are currently issued at sandbox/VM bootstrap and not
         # proactively rotated. Use a longer TTL in staging to avoid
         # authentication lapses during normal multi-hour sessions.
@@ -355,6 +358,11 @@ in
         # Route LLM calls through the host-side gateway instead of
         # resolving providers directly (VAL-GATEWAY-001).
         "RUNTIME_GATEWAY_URL=http://127.0.0.1:8084"
+        # Explicit runtime-selected model. The gateway does not infer a
+        # fallback provider/model.
+        "RUNTIME_LLM_PROVIDER=chatgpt"
+        "RUNTIME_LLM_MODEL=gpt-5.5"
+        "RUNTIME_LLM_REASONING_EFFORT=low"
       ];
     };
   };

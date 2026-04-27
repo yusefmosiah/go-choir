@@ -8,6 +8,14 @@ Choir must not depend on any coding-agent convenience layer.
 
 Development tooling used during this phase must not become a runtime dependency, product concept, user-visible feature, or required repository structure.
 
+## Deployment Source Of Truth
+
+GitHub is the source of truth for tracked files deployed to Node B.
+
+Do not edit or sync git-tracked files directly into `/opt/go-choir` on Node B. Runtime secrets, service environment files, guest images, and generated Nix artifacts may be placed in their designated runtime paths, but source/config changes must land through git and the GitHub Actions deploy flow.
+
+If emergency investigation requires inspecting or patching Node B, revert the checkout to `origin/main` before finishing and make the durable fix locally for review, commit, and deploy.
+
 ## Agent Roles
 
 `conductor` receives top-level user and connector input. It routes work to the appagent or flow that should own it. It does not mutate workspace state.

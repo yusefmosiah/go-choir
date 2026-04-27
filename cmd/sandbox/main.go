@@ -44,6 +44,9 @@ func main() {
 		ResearcherCount:     rtRuntimeCfg.ResearcherCount,
 		VTextWakeDebounce:   rtRuntimeCfg.VTextWakeDebounce,
 		VmctlURL:            rtRuntimeCfg.VmctlURL,
+		LLMProvider:         rtRuntimeCfg.LLMProvider,
+		LLMModel:            rtRuntimeCfg.LLMModel,
+		LLMReasoningEffort:  rtRuntimeCfg.LLMReasoningEffort,
 		EnableTestAPIs:      rtRuntimeCfg.EnableTestAPIs,
 	}
 	if rtCfg.StorePath == "" {
@@ -85,8 +88,11 @@ func main() {
 	if gatewayURL != "" {
 		gatewayToken := os.Getenv("RUNTIME_GATEWAY_TOKEN")
 		client := gateway.NewGatewayClient(gatewayURL, gatewayToken)
-		rtProvider = provider.NewGatewayBridgeProvider(client)
-		log.Printf("sandbox: using gateway provider (url=%s)", gatewayURL)
+		bridge := provider.NewGatewayBridgeProvider(client)
+		bridge.SetRuntimeLLMConfig(rtCfg.LLMProvider, rtCfg.LLMModel, rtCfg.LLMReasoningEffort)
+		rtProvider = bridge
+		log.Printf("sandbox: using gateway provider (url=%s provider=%s model=%s reasoning=%s)",
+			gatewayURL, rtCfg.LLMProvider, rtCfg.LLMModel, rtCfg.LLMReasoningEffort)
 	} else {
 		realProvider, err := provider.ResolveProvider(loadProviderConfig())
 		if err != nil {
@@ -168,6 +174,9 @@ func loadProviderConfig() provider.ProviderConfig {
 		FireworksModels: []string{
 			"accounts/fireworks/routers/kimi-k2p5-turbo",
 		},
+		ChatGPTModels:          []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"},
+		ChatGPTReasoningEffort: "low",
+		SelectedProvider:       os.Getenv("RUNTIME_LLM_PROVIDER"),
 	}
 
 	if v := os.Getenv("SANDBOX_BEDROCK_MODELS"); v != "" {
@@ -178,6 +187,12 @@ func loadProviderConfig() provider.ProviderConfig {
 	}
 	if v := os.Getenv("SANDBOX_FIREWORKS_MODELS"); v != "" {
 		cfg.FireworksModels = strings.Split(v, ",")
+	}
+	if v := os.Getenv("SANDBOX_CHATGPT_MODELS"); v != "" {
+		cfg.ChatGPTModels = strings.Split(v, ",")
+	}
+	if v := os.Getenv("SANDBOX_CHATGPT_REASONING_EFFORT"); v != "" {
+		cfg.ChatGPTReasoningEffort = v
 	}
 
 	return cfg

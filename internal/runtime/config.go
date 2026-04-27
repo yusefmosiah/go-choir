@@ -70,6 +70,17 @@ type Config struct {
 	// lifecycle tools to request branch desktops and worker VMs.
 	VmctlURL string
 
+	// LLMProvider is the explicitly selected provider for runtime LLM calls.
+	// Empty means no provider is selected by this runtime config.
+	LLMProvider string
+
+	// LLMModel is the explicitly selected model for runtime LLM calls.
+	LLMModel string
+
+	// LLMReasoningEffort is the provider-specific reasoning effort for runtime
+	// LLM calls.
+	LLMReasoningEffort string
+
 	// EnableTestAPIs exposes local-only browser test hooks. These endpoints are
 	// disabled by default and should never be enabled on deployed environments.
 	EnableTestAPIs bool
@@ -87,6 +98,9 @@ func LoadConfig() Config {
 		ResearcherCount:     intOr("RUNTIME_RESEARCHER_COUNT", DefaultResearcherCount),
 		VTextWakeDebounce:   durationOr("RUNTIME_VTEXT_WAKE_DEBOUNCE", DefaultVTextWakeDebounce),
 		VmctlURL:            envOr("RUNTIME_VMCTL_URL", os.Getenv("PROXY_VMCTL_URL")),
+		LLMProvider:         os.Getenv("RUNTIME_LLM_PROVIDER"),
+		LLMModel:            os.Getenv("RUNTIME_LLM_MODEL"),
+		LLMReasoningEffort:  os.Getenv("RUNTIME_LLM_REASONING_EFFORT"),
 		EnableTestAPIs:      boolOr("RUNTIME_ENABLE_TEST_APIS", false),
 	}
 }

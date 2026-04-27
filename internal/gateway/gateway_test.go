@@ -1121,10 +1121,24 @@ func setupMultiProviderHandler(t *testing.T) (*Handler, *IdentityRegistry) {
 		},
 	}
 
+	chatgptProvider := &mockProvider{
+		name: "chatgpt",
+		real: true,
+		response: &provider.LLMResponse{
+			ID:           "chatgpt-resp-001",
+			Text:         "Hello from ChatGPT!",
+			Model:        "gpt-5.5",
+			StopReason:   "end_turn",
+			ProviderName: "chatgpt",
+			Usage:        provider.Usage{InputTokens: 7, OutputTokens: 9},
+		},
+	}
+
 	mp := provider.NewMultiProvider()
 	mp.Register("fireworks", fireworksProvider)
 	mp.Register("zai", zaiProvider)
 	mp.Register("bedrock", bedrockProvider)
+	mp.Register("chatgpt", chatgptProvider)
 
 	return NewMultiHandler(reg, mp), reg
 }
@@ -1341,8 +1355,7 @@ func TestMultiProvider_RejectsUnknownProvider(t *testing.T) {
 	}
 }
 
-func TestMultiProvider_DefaultProviderWhenNoProviderSpecified(t *testing.T) {
-	// When no provider is specified, the first registered provider is used.
+func TestMultiProviderRequiresProviderOrModel(t *testing.T) {
 	h, reg := setupMultiProviderHandler(t)
 
 	result, _ := reg.IssueCredential("sandbox-default")
@@ -1360,17 +1373,16 @@ func TestMultiProvider_DefaultProviderWhenNoProviderSpecified(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleInference(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 
-	// Should get a valid response from the default provider.
-	var resp ProviderResponse
+	var resp ErrorResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Text == "" {
-		t.Error("expected non-empty text from default provider")
+	if !strings.Contains(resp.Error, "provider or model is required") {
+		t.Fatalf("error = %q, want provider/model required", resp.Error)
 	}
 }
 
@@ -1504,8 +1516,8 @@ func TestMultiProvider_HealthReportsProviderCount(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Provider names come from map iteration (unordered), so check for all three.
-	for _, name := range []string{"fireworks", "zai", "bedrock"} {
+	// Provider names come from map iteration (unordered), so check for all providers.
+	for _, name := range []string{"fireworks", "zai", "bedrock", "chatgpt"} {
 		if !strings.Contains(resp.Provider, name) {
 			t.Errorf("Provider = %q, missing %q", resp.Provider, name)
 		}
@@ -2019,11 +2031,11 @@ func TestProviderRouting(t *testing.T) {
 			wantErrorContain: "unsupported provider",
 		},
 
-		// Default routing when no provider/model specified.
+		// Ambiguous routing is rejected when no provider/model is specified.
 		{
-			name:             "no_provider_no_model_defaults_to_first",
-			wantStatus:       http.StatusOK,
-			wantProviderName: "", // first registered provider (non-deterministic map order)
+			name:             "no_provider_no_model_requires_route",
+			wantStatus:       http.StatusBadRequest,
+			wantErrorContain: "provider or model is required",
 		},
 
 		// Explicit provider takes precedence over model.
@@ -2110,6 +2122,13 @@ func TestProviderRouting_SupportedModelsTable(t *testing.T) {
 			response: &provider.LLMResponse{
 				Text: "br", Model: "br-model", StopReason: "end_turn",
 				ProviderName: "bedrock", Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
+			},
+		},
+		"chatgpt": {
+			name: "chatgpt", real: true,
+			response: &provider.LLMResponse{
+				Text: "gpt", Model: "gpt-5.5", StopReason: "end_turn",
+				ProviderName: "chatgpt", Usage: provider.Usage{InputTokens: 1, OutputTokens: 1},
 			},
 		},
 	}

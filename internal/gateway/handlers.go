@@ -31,8 +31,8 @@ type gatewayHealthResponse struct {
 // the gateway, which injects host-side credentials before forwarding
 // to the upstream provider (VAL-GATEWAY-004).
 type ProviderRequest struct {
-	// Provider is the requested provider ("bedrock", "zai", or "fireworks").
-	// If empty, the gateway uses model-based routing or the default provider.
+	// Provider is the requested provider ("chatgpt", "bedrock", "zai", or
+	// "fireworks"). If empty, the gateway requires model-based routing.
 	Provider string `json:"provider,omitempty"`
 
 	// Model is an optional model override.
@@ -53,6 +53,10 @@ type ProviderRequest struct {
 	// Stream controls streaming. The gateway forces this to false for
 	// now because it proxies non-streaming calls.
 	Stream bool `json:"stream,omitempty"`
+
+	// ReasoningEffort optionally sets provider-specific reasoning effort for
+	// this request.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ProviderResponse is the JSON response for successful inference calls.
@@ -260,12 +264,14 @@ func (h *Handler) HandleInference(w http.ResponseWriter, r *http.Request) {
 
 	// Step 5: Build the LLM request and call the provider.
 	llmReq := provider.LLMRequest{
-		Model:     req.Model,
-		System:    req.System,
-		Messages:  req.Messages,
-		Tools:     req.Tools,
-		MaxTokens: req.MaxTokens,
-		Stream:    req.Stream,
+		Provider:        req.Provider,
+		Model:           req.Model,
+		System:          req.System,
+		Messages:        req.Messages,
+		Tools:           req.Tools,
+		MaxTokens:       req.MaxTokens,
+		Stream:          req.Stream,
+		ReasoningEffort: req.ReasoningEffort,
 	}
 
 	log.Printf("gateway: inference request from sandbox %s (provider=%s model=%s messages=%d stream=%v)",
@@ -381,8 +387,7 @@ func (h *Handler) resolveProvider(req ProviderRequest) (provider.Provider, error
 }
 
 // resolveFromMultiProvider selects a provider from the multi-provider
-// registry. It tries explicit provider name first, then model-based
-// routing, then falls back to the first registered provider.
+// registry. It tries explicit provider name first, then model-based routing.
 func (h *Handler) resolveFromMultiProvider(req ProviderRequest) (provider.Provider, error) {
 	// Step 1: Explicit provider name routing.
 	if req.Provider != "" {
@@ -410,6 +415,11 @@ func (h *Handler) resolveFromMultiProvider(req ProviderRequest) (provider.Provid
 				return p, nil
 			}
 		}
+		if strings.HasPrefix(req.Model, "gpt-") || strings.HasPrefix(req.Model, "o") || strings.Contains(req.Model, "codex") {
+			if p := h.providers.Get("chatgpt"); p != nil {
+				return p, nil
+			}
+		}
 		if strings.HasPrefix(req.Model, "glm-") {
 			if p := h.providers.Get("zai"); p != nil {
 				return p, nil
@@ -422,13 +432,7 @@ func (h *Handler) resolveFromMultiProvider(req ProviderRequest) (provider.Provid
 		}
 	}
 
-	// Step 3: Default to the first registered provider.
-	names := h.providers.Names()
-	if len(names) > 0 {
-		return h.providers.Get(names[0]), nil
-	}
-
-	return nil, nil
+	return nil, fmt.Errorf("provider or model is required")
 }
 
 // HandleIssueCredential handles POST /provider/v1/credentials/issue.

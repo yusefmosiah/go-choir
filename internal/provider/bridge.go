@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/yusefmosiah/go-choir/internal/runtime"
 	"github.com/yusefmosiah/go-choir/internal/types"
@@ -49,8 +50,8 @@ func (b *BridgeProvider) ProviderName() string { return b.inner.Name() }
 // direct real-provider bridge.
 func (b *BridgeProvider) RuntimeProviderPolicy() runtime.ProviderPolicy {
 	policy := runtime.ProviderPolicy{
-		ActiveProvider:             b.inner.Name(),
-		ModelSelection:             "The active provider uses its configured default model unless a child run explicitly requests a model override.",
+		ActiveProvider:              b.inner.Name(),
+		ModelSelection:              "The active provider uses the configured runtime model unless a child run explicitly requests a model override.",
 		SupportsPerRunModelOverride: true,
 	}
 	switch inner := b.inner.(type) {
@@ -58,19 +59,25 @@ func (b *BridgeProvider) RuntimeProviderPolicy() runtime.ProviderPolicy {
 		policy.DefaultModel = inner.modelID
 		policy.Notes = []string{
 			"Direct sandbox mode using AWS Bedrock credentials in the sandbox process.",
-			"Bedrock is selected first when credentials are present and a model list is configured.",
+			"Bedrock is selected only when runtime config explicitly selects it.",
 		}
 	case *ZAIProvider:
 		policy.DefaultModel = inner.modelID
 		policy.Notes = []string{
 			"Direct sandbox mode using Z.AI credentials in the sandbox process.",
-			"Z.AI is used when Bedrock is unavailable and Z.AI credentials are configured.",
+			"Z.AI is selected only when runtime config explicitly selects it.",
 		}
 	case *FireworksProvider:
 		policy.DefaultModel = inner.modelID
 		policy.Notes = []string{
 			"Direct sandbox mode using Fireworks credentials in the sandbox process.",
-			"Fireworks is used when Bedrock and Z.AI are unavailable and Fireworks credentials are configured.",
+			"Fireworks is selected only when runtime config explicitly selects it.",
+		}
+	case *ChatGPTProvider:
+		policy.DefaultModel = inner.modelID
+		policy.Notes = []string{
+			"Direct sandbox mode using ChatGPT Codex OAuth from the sandbox process.",
+			"ChatGPT is selected only when runtime config explicitly selects it.",
 		}
 	default:
 		policy.Notes = []string{
@@ -348,7 +355,10 @@ func convertRawMessages(raw []json.RawMessage) []Message {
 // gateway.GatewayClient, which authenticates to the gateway using a
 // sandbox credential token.
 type GatewayBridgeProvider struct {
-	client GatewayCaller
+	client          GatewayCaller
+	llmProvider     string
+	llmModel        string
+	reasoningEffort string
 }
 
 // GatewayCaller is the interface satisfied by gateway.GatewayClient.
@@ -375,6 +385,15 @@ func NewGatewayBridgeProvider(client GatewayCaller) *GatewayBridgeProvider {
 	return &GatewayBridgeProvider{client: client}
 }
 
+// SetRuntimeLLMConfig sets the explicit runtime LLM selection for gateway
+// routed calls. The gateway does not choose a fallback provider; callers must
+// provide provider/model here or on each request.
+func (g *GatewayBridgeProvider) SetRuntimeLLMConfig(providerName, model, reasoningEffort string) {
+	g.llmProvider = strings.TrimSpace(providerName)
+	g.llmModel = strings.TrimSpace(model)
+	g.reasoningEffort = strings.TrimSpace(reasoningEffort)
+}
+
 // ProviderName returns the underlying gateway client name for observability.
 func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
 
@@ -382,12 +401,13 @@ func (g *GatewayBridgeProvider) ProviderName() string { return g.client.Name() }
 // gateway-routed sandbox.
 func (g *GatewayBridgeProvider) RuntimeProviderPolicy() runtime.ProviderPolicy {
 	return runtime.ProviderPolicy{
-		ActiveProvider:             g.client.Name(),
-		ModelSelection:             "The sandbox routes through the host gateway. The gateway chooses the backing provider/model unless a run explicitly requests a model override.",
+		ActiveProvider:              g.client.Name(),
+		DefaultModel:                g.llmModel,
+		ModelSelection:              "The sandbox routes through the host gateway with explicit runtime provider/model configuration.",
 		SupportsPerRunModelOverride: true,
 		Notes: []string{
 			"Gateway-routed mode keeps provider credentials on the host side.",
-			"Role prompts live in the sandbox, but provider/model selection is host-routed policy.",
+			"Provider/model selection is supplied by runtime configuration, not inferred by the gateway.",
 		},
 	}
 }
@@ -399,8 +419,10 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.RunReco
 	emit(types.EventRunProgress, "execution", json.RawMessage(`{"status":"started","provider":"gateway","routed":true}`))
 
 	req := LLMRequest{
-		Model:  "",
-		System: "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully.",
+		Provider:        g.llmProvider,
+		Model:           g.llmModel,
+		System:          "You are a helpful assistant running inside the ChoirOS sandbox runtime. Respond concisely and helpfully.",
+		ReasoningEffort: g.reasoningEffort,
 		Messages: []Message{
 			{Role: "user", Content: []Block{{Type: "text", Text: task.Prompt}}},
 		},
@@ -456,12 +478,14 @@ func (g *GatewayBridgeProvider) Execute(ctx context.Context, task *types.RunReco
 // returns a response that may contain tool calls.
 func (g *GatewayBridgeProvider) CallWithTools(ctx context.Context, req runtime.ToolLoopRequest) (*runtime.ToolLoopResponse, error) {
 	llmReq := LLMRequest{
-		Model:     "",
-		System:    req.System,
-		Messages:  convertRawMessages(req.Messages),
-		Tools:     convertToolLoopDefs(req.ToolDefinitions),
-		MaxTokens: req.MaxTokens,
-		Stream:    false,
+		Provider:        g.llmProvider,
+		Model:           g.llmModel,
+		System:          req.System,
+		Messages:        convertRawMessages(req.Messages),
+		Tools:           convertToolLoopDefs(req.ToolDefinitions),
+		MaxTokens:       req.MaxTokens,
+		Stream:          false,
+		ReasoningEffort: g.reasoningEffort,
 	}
 
 	log.Printf("gateway-bridge: calling gateway with %d tools (messages=%d)", len(req.ToolDefinitions), len(req.Messages))

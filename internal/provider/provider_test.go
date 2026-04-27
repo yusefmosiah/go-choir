@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -298,14 +300,34 @@ func TestZAIProviderDefaultBaseURL(t *testing.T) {
 
 // --- Resolve Provider Tests ---
 
-func TestResolveProviderPrefersBedrock(t *testing.T) {
+func TestResolveProviderUsesSelectedProvider(t *testing.T) {
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-token")
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
 	p, err := ResolveProvider(ProviderConfig{
-		BedrockModels: []string{"us.anthropic.claude-sonnet-4-6"},
-		ZAIModels:     []string{"glm-5.1"},
+		BedrockModels:    []string{"us.anthropic.claude-sonnet-4-6"},
+		ZAIModels:        []string{"glm-5.1"},
+		SelectedProvider: "zai",
+	})
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if p.Name() != "zai" {
+		t.Errorf("expected zai, got: %s", p.Name())
+	}
+}
+
+func TestResolveProviderCanSelectBedrock(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bedrock-token")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	p, err := ResolveProvider(ProviderConfig{
+		BedrockModels:    []string{"us.anthropic.claude-sonnet-4-6"},
+		SelectedProvider: "bedrock",
 	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
@@ -318,11 +340,12 @@ func TestResolveProviderPrefersBedrock(t *testing.T) {
 	}
 }
 
-func TestResolveProviderFallsBackToZAI(t *testing.T) {
+func TestResolveProviderSelectsZAI(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "test-zai-key")
 
 	p, err := ResolveProvider(ProviderConfig{
-		ZAIModels: []string{"glm-5.1"},
+		ZAIModels:        []string{"glm-5.1"},
+		SelectedProvider: "zai",
 	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
@@ -353,11 +376,12 @@ func TestResolveProviderReturnsNilWhenNoCredentials(t *testing.T) {
 	}
 }
 
-func TestResolveProviderFallsBackToFireworks(t *testing.T) {
+func TestResolveProviderSelectsFireworks(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "fw_test-key")
 
 	p, err := ResolveProvider(ProviderConfig{
-		FireworksModels: []string{"accounts/fireworks/models/test-model"},
+		FireworksModels:  []string{"accounts/fireworks/models/test-model"},
+		SelectedProvider: "fireworks",
 	})
 	if err != nil {
 		t.Fatalf("resolve provider: %v", err)
@@ -402,6 +426,134 @@ func TestFireworksProviderFromEnvCustomBaseURL(t *testing.T) {
 	if p.baseURL != "https://custom.example.com/api" {
 		t.Errorf("expected custom base URL, got: %s", p.baseURL)
 	}
+}
+
+func TestChatGPTProviderCallSuccess(t *testing.T) {
+	authPath := writeTestCodexAuth(t, "test-access", "test-refresh", time.Now().UTC())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Errorf("unexpected URL path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-access" {
+			t.Errorf("unexpected authorization header: %s", got)
+		}
+		var body openAIRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.Model != "gpt-5.5" {
+			t.Errorf("model = %q, want gpt-5.5", body.Model)
+		}
+		if body.Reasoning == nil || body.Reasoning.Effort != "low" {
+			t.Errorf("reasoning = %+v, want low", body.Reasoning)
+		}
+		if !body.Stream {
+			t.Errorf("stream = false, want true")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-5.5\"}}\n\n")
+		fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello from ChatGPT!\"}\n\n")
+		fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-5.5\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"total_tokens\":10}}}\n\n")
+	}))
+	defer server.Close()
+
+	p, err := NewChatGPTProvider(ChatGPTConfig{
+		ModelID:         "gpt-5.5",
+		BaseURL:         server.URL + "/responses",
+		AuthPath:        authPath,
+		ReasoningEffort: "low",
+	})
+	if err != nil {
+		t.Fatalf("create chatgpt provider: %v", err)
+	}
+	p.httpClient = server.Client()
+
+	resp, err := p.Call(context.Background(), LLMRequest{
+		System:    "You are helpful.",
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "Hi"}}}},
+		MaxTokens: 64,
+	})
+	if err != nil {
+		t.Fatalf("chatgpt call: %v", err)
+	}
+	if resp.Text != "Hello from ChatGPT!" {
+		t.Errorf("text = %q", resp.Text)
+	}
+	if resp.ProviderName != "chatgpt" {
+		t.Errorf("provider = %q, want chatgpt", resp.ProviderName)
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("stop_reason = %q, want end_turn", resp.StopReason)
+	}
+}
+
+func TestChatGPTAuthRefreshesStaleToken(t *testing.T) {
+	authPath := writeTestCodexAuth(t, "old-access", "refresh-123", time.Now().UTC().Add(-2*time.Hour))
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		body := string(bodyBytes)
+		if !strings.Contains(body, "grant_type=refresh_token") || !strings.Contains(body, "refresh_token=refresh-123") {
+			t.Fatalf("unexpected refresh body: %s", body)
+		}
+		_ = json.NewEncoder(w).Encode(oauthRefreshResponse{
+			AccessToken:  "new-access",
+			RefreshToken: "new-refresh",
+		})
+	}))
+	defer refreshServer.Close()
+
+	now := time.Now().UTC()
+	auth := NewChatGPTAuth(ChatGPTAuthOptions{
+		Path:          authPath,
+		RefreshURL:    refreshServer.URL,
+		RefreshBefore: 30 * time.Minute,
+		HTTPClient:    refreshServer.Client(),
+		Now:           func() time.Time { return now },
+	})
+
+	header, err := auth.Header(context.Background())
+	if err != nil {
+		t.Fatalf("auth header: %v", err)
+	}
+	if header != "Bearer new-access" {
+		t.Fatalf("header = %q, want refreshed token", header)
+	}
+
+	var updated codexAuthFile
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read auth: %v", err)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("decode auth: %v", err)
+	}
+	if updated.Tokens.AccessToken != "new-access" || updated.Tokens.RefreshToken != "new-refresh" {
+		t.Fatalf("unexpected updated tokens: %+v", updated.Tokens)
+	}
+}
+
+func writeTestCodexAuth(t *testing.T, accessToken, refreshToken string, lastRefresh time.Time) string {
+	t.Helper()
+	path := t.TempDir() + "/auth.json"
+	data, err := json.Marshal(codexAuthFile{
+		AuthMode: "chatgpt",
+		Tokens: codexAuthTokens{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			AccountID:    "acct-test",
+		},
+		LastRefresh: lastRefresh.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("marshal auth: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	return path
 }
 
 // --- Bridge Provider Tests ---
@@ -460,7 +612,7 @@ func TestBridgeProviderExecuteSuccess(t *testing.T) {
 	bridge := NewBridgeProvider(mock)
 
 	task := &types.RunRecord{
-		RunID:  "task-1",
+		RunID:   "task-1",
 		OwnerID: "user-1",
 		Prompt:  "What is the meaning of life?",
 	}
@@ -545,7 +697,7 @@ func TestBridgeProviderExecuteFailure(t *testing.T) {
 	bridge := NewBridgeProvider(mock)
 
 	task := &types.RunRecord{
-		RunID:  "task-2",
+		RunID:   "task-2",
 		OwnerID: "user-1",
 		Prompt:  "This should fail",
 	}
@@ -1847,7 +1999,7 @@ func TestBridgeProviderStreamingEmitsMultipleDeltas(t *testing.T) {
 
 	bridge := NewBridgeProvider(inner)
 	task := &types.RunRecord{
-		RunID: "task-stream-1",
+		RunID:  "task-stream-1",
 		Prompt: "Say hello",
 	}
 

@@ -17,62 +17,75 @@ set -euo pipefail
 
 HOST="${1:-node-b}"
 SETTINGS="${HOME}/.factory/settings.json"
+CODEX_AUTH="${CODEX_AUTH_PATH:-${HOME}/.codex/auth.json}"
 REMOTE_ENV_FILE="/var/lib/go-choir/gateway-provider.env"
-
-if [ ! -f "$SETTINGS" ]; then
-  echo "error: $SETTINGS not found" >&2
-  exit 1
-fi
+REMOTE_CODEX_AUTH="/var/lib/go-choir/codex-auth.json"
 
 # Build the env file content from customModels entries.
 # We detect the provider type by apiKey prefix and baseUrl.
 ENVS=()
 
-# Extract all customModels entries with their provider info
-NUM_MODELS=$(jq '.customModels | length' "$SETTINGS")
+if [ -f "$SETTINGS" ]; then
+  # Extract all customModels entries with their provider info
+  NUM_MODELS=$(jq '.customModels | length' "$SETTINGS")
 
-for i in $(seq 0 $((NUM_MODELS - 1))); do
-  API_KEY=$(jq -r ".customModels[$i].apiKey" "$SETTINGS")
-  BASE_URL=$(jq -r ".customModels[$i].baseUrl // empty" "$SETTINGS")
-  PROVIDER=$(jq -r ".customModels[$i].provider // empty" "$SETTINGS")
-  MODEL=$(jq -r ".customModels[$i].model // empty" "$SETTINGS")
+  for i in $(seq 0 $((NUM_MODELS - 1))); do
+    API_KEY=$(jq -r ".customModels[$i].apiKey" "$SETTINGS")
+    BASE_URL=$(jq -r ".customModels[$i].baseUrl // empty" "$SETTINGS")
+    PROVIDER=$(jq -r ".customModels[$i].provider // empty" "$SETTINGS")
+    MODEL=$(jq -r ".customModels[$i].model // empty" "$SETTINGS")
 
-  if [ -z "$API_KEY" ]; then
-    continue
-  fi
-
-  # Detect Z.AI keys (baseUrl contains z.ai)
-  if echo "$BASE_URL" | grep -q "z\.ai"; then
-    if ! printf '%s\n' "${ENVS[@]}" | grep -q "^ZAI_API_KEY="; then
-      ENVS+=("ZAI_API_KEY=${API_KEY}")
-      [ -n "$MODEL" ] && ENVS+=("RUNTIME_ZAI_MODEL=${MODEL}")
+    if [ -z "$API_KEY" ]; then
+      continue
     fi
-    continue
-  fi
 
-  # Detect Fireworks keys (apiKey starts with fw_ or baseUrl contains fireworks)
-  if echo "$API_KEY" | grep -q "^fw_" || echo "$BASE_URL" | grep -q "fireworks"; then
-    if ! printf '%s\n' "${ENVS[@]}" | grep -q "^FIREWORKS_API_KEY="; then
-      ENVS+=("FIREWORKS_API_KEY=${API_KEY}")
-      [ -n "$MODEL" ] && ENVS+=("RUNTIME_FIREWORKS_MODEL=${MODEL}")
-      [ -n "$BASE_URL" ] && ENVS+=("FIREWORKS_BASE_URL=${BASE_URL}")
+    # Detect Z.AI keys (baseUrl contains z.ai)
+    if echo "$BASE_URL" | grep -q "z\.ai"; then
+      if ! printf '%s\n' "${ENVS[@]}" | grep -q "^ZAI_API_KEY="; then
+        ENVS+=("ZAI_API_KEY=${API_KEY}")
+        [ -n "$MODEL" ] && ENVS+=("RUNTIME_ZAI_MODEL=${MODEL}")
+      fi
+      continue
     fi
-    continue
-  fi
 
-  # Detect Bedrock keys (baseUrl contains bedrock or provider mentions bedrock)
-  if echo "$BASE_URL" | grep -q "bedrock" || echo "$PROVIDER" | grep -qi "bedrock"; then
-    if ! printf '%s\n' "${ENVS[@]}" | grep -q "^AWS_BEARER_TOKEN_BEDROCK="; then
-      ENVS+=("AWS_BEARER_TOKEN_BEDROCK=${API_KEY}")
-      [ -n "$MODEL" ] && ENVS+=("RUNTIME_BEDROCK_MODEL=${MODEL}")
+    # Detect Fireworks keys (apiKey starts with fw_ or baseUrl contains fireworks)
+    if echo "$API_KEY" | grep -q "^fw_" || echo "$BASE_URL" | grep -q "fireworks"; then
+      if ! printf '%s\n' "${ENVS[@]}" | grep -q "^FIREWORKS_API_KEY="; then
+        ENVS+=("FIREWORKS_API_KEY=${API_KEY}")
+        [ -n "$MODEL" ] && ENVS+=("RUNTIME_FIREWORKS_MODEL=${MODEL}")
+        [ -n "$BASE_URL" ] && ENVS+=("FIREWORKS_BASE_URL=${BASE_URL}")
+      fi
+      continue
     fi
-    continue
-  fi
-done
+
+    # Detect Bedrock keys (baseUrl contains bedrock or provider mentions bedrock)
+    if echo "$BASE_URL" | grep -q "bedrock" || echo "$PROVIDER" | grep -qi "bedrock"; then
+      if ! printf '%s\n' "${ENVS[@]}" | grep -q "^AWS_BEARER_TOKEN_BEDROCK="; then
+        ENVS+=("AWS_BEARER_TOKEN_BEDROCK=${API_KEY}")
+        [ -n "$MODEL" ] && ENVS+=("RUNTIME_BEDROCK_MODEL=${MODEL}")
+      fi
+      continue
+    fi
+  done
+else
+  echo "warning: $SETTINGS not found; skipping API-key provider credentials" >&2
+fi
 
 if [ ${#ENVS[@]} -eq 0 ]; then
-  echo "warning: no provider credentials found in $SETTINGS" >&2
-  exit 0
+  echo "warning: no API-key provider credentials found in $SETTINGS" >&2
+fi
+
+if [ -f "$CODEX_AUTH" ]; then
+  ENVS+=("CHATGPT_AUTH_PATH=${REMOTE_CODEX_AUTH}")
+  ENVS+=("GATEWAY_CHATGPT_MODELS=gpt-5.5,gpt-5.4,gpt-5.4-mini")
+  ENVS+=("GATEWAY_CHATGPT_REASONING_EFFORT=low")
+else
+  echo "warning: $CODEX_AUTH not found; ChatGPT provider auth will not be deployed" >&2
+fi
+
+if [ ${#ENVS[@]} -eq 0 ]; then
+  echo "error: no provider credentials found" >&2
+  exit 1
 fi
 
 # Build the env file content
@@ -82,6 +95,15 @@ ENV_CONTENT="${ENV_CONTENT}
 # Regenerate with: ./nix/deploy-provider-creds.sh"
 
 echo "Deploying ${#ENVS[@]} credential entries to ${HOST}:${REMOTE_ENV_FILE}"
+
+# Copy Codex OAuth auth when present. This uses scp rather than embedding the
+# token JSON in a shell heredoc so the auth content does not appear in logs or
+# process arguments.
+if [ -f "$CODEX_AUTH" ]; then
+  tmp_remote="${REMOTE_CODEX_AUTH}.tmp"
+  scp -q "$CODEX_AUTH" "${HOST}:${tmp_remote}"
+  ssh "$HOST" "mv ${tmp_remote} ${REMOTE_CODEX_AUTH} && chmod 600 ${REMOTE_CODEX_AUTH}"
+fi
 
 # Write the env file on Node B and restart the gateway service.
 # Use a temp file and atomic move to avoid partial writes.

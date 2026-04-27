@@ -5,10 +5,10 @@
 // Mission 3.
 //
 // Supported models (matching Droid settings.json customModels):
-//   - GLM-5.1 (Z.AI, provider "zai") — default Z.AI model
+//   - GLM-5.1 (Z.AI, provider "zai") — Z.AI model
 //   - GLM-5-Turbo (Z.AI, provider "zai") — faster Z.AI variant, same provider
 //   - Kimi K2.5 Turbo (Fireworks AI, provider "fireworks") — Fireworks router model
-//   - Claude Sonnet 4.5 (Bedrock, provider "bedrock") — default Bedrock model
+//   - Claude Sonnet 4.5 (Bedrock, provider "bedrock") — Bedrock model
 //
 // Design decisions:
 //   - Provider credentials are read from environment variables only; they are
@@ -38,13 +38,22 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // LLMRequest is the unified request shape for all provider backends.
 type LLMRequest struct {
+	// Provider is the provider identifier (e.g. "chatgpt", "zai",
+	// "fireworks", "bedrock") for gateway-routed requests.
+	Provider string `json:"provider,omitempty"`
+
 	// Model is the model identifier (provider-specific).
 	Model string `json:"model"`
 
@@ -64,6 +73,10 @@ type LLMRequest struct {
 	// Stream controls whether to use streaming (SSE) or non-streaming.
 	// Bedrock forces this to false because it uses binary EventStream.
 	Stream bool `json:"stream,omitempty"`
+
+	// ReasoningEffort is an optional provider-specific reasoning control.
+	// For ChatGPT/OpenAI Responses this maps to reasoning.effort.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // Message is a single message in the conversation history.
@@ -223,21 +236,36 @@ type Provider interface {
 // by the FromEnv functions. This struct only governs model selection.
 type ProviderConfig struct {
 	// BedrockModels lists Bedrock model IDs (e.g.,
-	// "us.anthropic.claude-sonnet-4-5-20250514-v1:0"). The first entry is
-	// the default. If empty, Bedrock is not initialized even if credentials
-	// are available.
+	// "us.anthropic.claude-sonnet-4-5-20250514-v1:0"). The first entry seeds
+	// the provider instance; request.Model still controls per-call selection.
+	// If empty, Bedrock is not initialized even if credentials are available.
 	BedrockModels []string
 
 	// ZAIModels lists Z.AI model IDs (e.g., "glm-5.1", "glm-5-turbo").
-	// The first entry is the default. If empty, Z.AI is not initialized
-	// even if ZAI_API_KEY is set.
+	// The first entry seeds the provider instance; request.Model still
+	// controls per-call selection. If empty, Z.AI is not initialized even if
+	// ZAI_API_KEY is set.
 	ZAIModels []string
 
 	// FireworksModels lists Fireworks model IDs (e.g.,
-	// "accounts/fireworks/routers/kimi-k2p5-turbo"). The first entry is
-	// the default. If empty, Fireworks is not initialized even if
-	// FIREWORKS_API_KEY is set.
+	// "accounts/fireworks/routers/kimi-k2p5-turbo"). The first entry seeds
+	// the provider instance; request.Model still controls per-call selection.
+	// If empty, Fireworks is not initialized even if FIREWORKS_API_KEY is set.
 	FireworksModels []string
+
+	// ChatGPTModels lists ChatGPT/Codex Responses model IDs. The first entry
+	// seeds the provider instance; request.Model still controls per-call
+	// selection. If empty, ChatGPT is not initialized even if Codex OAuth auth
+	// is available.
+	ChatGPTModels []string
+
+	// ChatGPTReasoningEffort seeds the ChatGPT provider's reasoning effort for
+	// requests that do not carry a per-request value.
+	ChatGPTReasoningEffort string
+
+	// SelectedProvider is the explicitly selected provider for direct sandbox
+	// runtime calls. Empty means no direct provider is selected.
+	SelectedProvider string
 }
 
 // BedrockProvider implements the Provider interface for AWS Bedrock using
@@ -335,9 +363,10 @@ func (p *BedrockProvider) Stream(ctx context.Context, req LLMRequest, onChunk fu
 // Bedrock uses the model ID in the URL path and forces non-streaming
 // because streaming uses binary EventStream, not SSE.
 func (p *BedrockProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	modelID := effectiveModel(req.Model, p.modelID)
 	endpoint := fmt.Sprintf(
 		"https://bedrock-runtime.%s.amazonaws.com/model/%s/invoke",
-		p.region, pathEscape(p.modelID),
+		p.region, pathEscape(modelID),
 	)
 
 	// Build Anthropic Messages API request body.
@@ -352,7 +381,7 @@ func (p *BedrockProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespons
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("anthropic-version", p.anthropicV)
 
-	log.Printf("provider: bedrock call model=%s region=%s", redactModel(p.modelID), p.region)
+	log.Printf("provider: bedrock call model=%s region=%s", redactModel(modelID), p.region)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -360,7 +389,7 @@ func (p *BedrockProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespons
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return parseBedrockResponse(resp, p.modelID)
+	return parseBedrockResponse(resp, modelID)
 }
 
 func (p *BedrockProvider) buildRequestBody(req LLMRequest) anthropicRequest {
@@ -446,8 +475,9 @@ func (p *ZAIProvider) IsReal() bool { return true }
 // Call sends the request to Z.AI's Anthropic-compatible endpoint.
 func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
 	endpoint := p.baseURL + "/v1/messages"
+	modelID := effectiveModel(req.Model, p.modelID)
 
-	body := p.buildRequestBody(req)
+	body := p.buildRequestBody(req, modelID)
 
 	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
@@ -459,7 +489,7 @@ func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	log.Printf("provider: zai call model=%s", p.modelID)
+	log.Printf("provider: zai call model=%s", modelID)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -467,7 +497,7 @@ func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, e
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return parseAnthropicResponse(resp, p.modelID, "zai")
+	return parseAnthropicResponse(resp, modelID, "zai")
 }
 
 // Stream sends the request to Z.AI with stream=true and processes the
@@ -476,10 +506,11 @@ func (p *ZAIProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, e
 // LLMResponse on completion.
 func (p *ZAIProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
 	endpoint := p.baseURL + "/v1/messages"
+	modelID := effectiveModel(req.Model, p.modelID)
 
 	// Build streaming request.
 	req.Stream = true
-	body := p.buildRequestBody(req)
+	body := p.buildRequestBody(req, modelID)
 	body.Stream = true
 
 	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
@@ -492,7 +523,7 @@ func (p *ZAIProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(S
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	log.Printf("provider: zai stream model=%s", p.modelID)
+	log.Printf("provider: zai stream model=%s", modelID)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -505,12 +536,12 @@ func (p *ZAIProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(S
 		return nil, fmt.Errorf("zai: status %s (sanitized)", resp.Status)
 	}
 
-	return parseSSEStream(resp.Body, p.modelID, "zai", onChunk)
+	return parseSSEStream(resp.Body, modelID, "zai", onChunk)
 }
 
-func (p *ZAIProvider) buildRequestBody(req LLMRequest) anthropicRequest {
+func (p *ZAIProvider) buildRequestBody(req LLMRequest, modelID string) anthropicRequest {
 	ar := anthropicRequest{
-		Model:            p.modelID,
+		Model:            modelID,
 		MaxTokens:        defaultMaxTokens(req.MaxTokens),
 		AnthropicVersion: "2023-06-01",
 		Stream:           false,
@@ -591,8 +622,9 @@ func (p *FireworksProvider) IsReal() bool { return true }
 // Call sends the request to Fireworks AI's Anthropic-compatible endpoint.
 func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
 	endpoint := p.baseURL + "/v1/messages"
+	modelID := effectiveModel(req.Model, p.modelID)
 
-	body := p.buildRequestBody(req)
+	body := p.buildRequestBody(req, modelID)
 
 	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
@@ -603,7 +635,7 @@ func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespo
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	log.Printf("provider: fireworks call model=%s", p.modelID)
+	log.Printf("provider: fireworks call model=%s", modelID)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -611,16 +643,17 @@ func (p *FireworksProvider) Call(ctx context.Context, req LLMRequest) (*LLMRespo
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return parseAnthropicResponse(resp, p.modelID, "fireworks")
+	return parseAnthropicResponse(resp, modelID, "fireworks")
 }
 
 // Stream sends the request to Fireworks AI with stream=true and processes
 // the SSE response using the same Anthropic-compatible SSE format.
 func (p *FireworksProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
 	endpoint := p.baseURL + "/v1/messages"
+	modelID := effectiveModel(req.Model, p.modelID)
 
 	req.Stream = true
-	body := p.buildRequestBody(req)
+	body := p.buildRequestBody(req, modelID)
 	body.Stream = true
 
 	httpReq, err := newJSONRequest(ctx, http.MethodPost, endpoint, body)
@@ -632,7 +665,7 @@ func (p *FireworksProvider) Stream(ctx context.Context, req LLMRequest, onChunk 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	log.Printf("provider: fireworks stream model=%s", p.modelID)
+	log.Printf("provider: fireworks stream model=%s", modelID)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -645,12 +678,12 @@ func (p *FireworksProvider) Stream(ctx context.Context, req LLMRequest, onChunk 
 		return nil, fmt.Errorf("fireworks: status %s (sanitized)", resp.Status)
 	}
 
-	return parseSSEStream(resp.Body, p.modelID, "fireworks", onChunk)
+	return parseSSEStream(resp.Body, modelID, "fireworks", onChunk)
 }
 
-func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
+func (p *FireworksProvider) buildRequestBody(req LLMRequest, modelID string) anthropicRequest {
 	ar := anthropicRequest{
-		Model:     p.modelID,
+		Model:     modelID,
 		MaxTokens: defaultMaxTokens(req.MaxTokens),
 		Stream:    false,
 	}
@@ -665,6 +698,282 @@ func (p *FireworksProvider) buildRequestBody(req LLMRequest) anthropicRequest {
 	ar.Messages = convertMessages(req.Messages)
 	ar.Tools = convertToolDefs(req.Tools)
 	return ar
+}
+
+// ChatGPTProvider implements the Provider interface for ChatGPT subscription
+// billing through Codex OAuth, using the OpenAI Responses-compatible endpoint
+// exposed by ChatGPT.
+type ChatGPTProvider struct {
+	auth       *ChatGPTAuth
+	modelID    string
+	httpClient *http.Client
+	baseURL    string
+	reasoning  string
+}
+
+// ChatGPTConfig holds configuration for creating a ChatGPTProvider.
+type ChatGPTConfig struct {
+	ModelID         string
+	BaseURL         string
+	AuthPath        string
+	ReasoningEffort string
+}
+
+const defaultChatGPTResponsesURL = "https://chatgpt.com/backend-api/codex/responses"
+
+// NewChatGPTProvider creates a ChatGPT provider using Codex OAuth auth.
+func NewChatGPTProvider(cfg ChatGPTConfig) (*ChatGPTProvider, error) {
+	if cfg.ModelID == "" {
+		return nil, fmt.Errorf("chatgpt provider requires model_id")
+	}
+	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = defaultChatGPTResponsesURL
+	}
+	auth := NewChatGPTAuth(ChatGPTAuthOptions{Path: cfg.AuthPath})
+	if _, err := auth.Read(); err != nil {
+		return nil, fmt.Errorf("chatgpt provider requires codex auth: %w", err)
+	}
+	reasoning := strings.TrimSpace(cfg.ReasoningEffort)
+	if reasoning == "" {
+		reasoning = "low"
+	}
+	return &ChatGPTProvider{
+		auth:       auth,
+		modelID:    cfg.ModelID,
+		httpClient: &http.Client{Timeout: 120 * time.Second},
+		baseURL:    baseURL,
+		reasoning:  reasoning,
+	}, nil
+}
+
+// NewChatGPTProviderFromEnv creates a ChatGPT provider using Codex OAuth from
+// CHATGPT_AUTH_PATH or ~/.codex/auth.json. CHATGPT_BASE_URL can override the
+// Responses endpoint for tests or custom deployments.
+func NewChatGPTProviderFromEnv(modelID, reasoningEffort string) (*ChatGPTProvider, error) {
+	p, err := NewChatGPTProvider(ChatGPTConfig{
+		ModelID:         modelID,
+		BaseURL:         os.Getenv("CHATGPT_BASE_URL"),
+		AuthPath:        os.Getenv("CHATGPT_AUTH_PATH"),
+		ReasoningEffort: reasoningEffort,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt from env: %w", err)
+	}
+	return p, nil
+}
+
+func (p *ChatGPTProvider) Name() string { return "chatgpt" }
+func (p *ChatGPTProvider) IsReal() bool { return true }
+
+func (p *ChatGPTProvider) Call(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	req.Stream = true
+	modelID := effectiveModel(req.Model, p.modelID)
+	body := p.buildRequestBody(req, modelID)
+	httpReq, err := newJSONRequest(ctx, http.MethodPost, p.baseURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: build request: %w", err)
+	}
+	authHeader, err := p.auth.Header(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: auth: %w", err)
+	}
+	httpReq.Header.Set("Authorization", authHeader)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	log.Printf("provider: chatgpt call model=%s reasoning=%s", modelID, effectiveReasoning(req.ReasoningEffort, p.reasoning))
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: http call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chatgpt: status %s (sanitized)", resp.Status)
+	}
+	return parseOpenAIStream(resp.Body, modelID, "chatgpt", func(StreamChunk) {})
+}
+
+func (p *ChatGPTProvider) Stream(ctx context.Context, req LLMRequest, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	req.Stream = true
+	modelID := effectiveModel(req.Model, p.modelID)
+	body := p.buildRequestBody(req, modelID)
+	body.Stream = true
+
+	httpReq, err := newJSONRequest(ctx, http.MethodPost, p.baseURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: build stream request: %w", err)
+	}
+	authHeader, err := p.auth.Header(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: auth: %w", err)
+	}
+	httpReq.Header.Set("Authorization", authHeader)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	log.Printf("provider: chatgpt stream model=%s reasoning=%s", modelID, effectiveReasoning(req.ReasoningEffort, p.reasoning))
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt: stream http call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chatgpt: status %s (sanitized)", resp.Status)
+	}
+	return parseOpenAIStream(resp.Body, modelID, "chatgpt", onChunk)
+}
+
+func (p *ChatGPTProvider) buildRequestBody(req LLMRequest, modelID string) openAIRequest {
+	payload := openAIRequest{
+		Model:        modelID,
+		Instructions: req.System,
+		Input:        convertOpenAIInput(req.Messages),
+		Tools:        convertOpenAITools(req.Tools),
+		Store:        false,
+		Stream:       req.Stream,
+	}
+	if effort := effectiveReasoning(req.ReasoningEffort, p.reasoning); effort != "" && effort != "none" && effort != "off" {
+		payload.Reasoning = &openAIReasoning{Effort: effort}
+	}
+	return payload
+}
+
+func effectiveReasoning(requested, fallback string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func effectiveModel(requested, fallback string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	return fallback
+}
+
+type openAIRequest struct {
+	Model        string           `json:"model"`
+	Instructions string           `json:"instructions,omitempty"`
+	Input        []openAIItem     `json:"input,omitempty"`
+	Tools        []openAITool     `json:"tools,omitempty"`
+	Store        bool             `json:"store"`
+	Stream       bool             `json:"stream,omitempty"`
+	Reasoning    *openAIReasoning `json:"reasoning,omitempty"`
+}
+
+type openAIReasoning struct {
+	Effort string `json:"effort"`
+}
+
+type openAIItem struct {
+	Type      string `json:"type,omitempty"`
+	Role      string `json:"role,omitempty"`
+	Content   any    `json:"content,omitempty"`
+	Name      string `json:"name,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	Output    string `json:"output,omitempty"`
+}
+
+type openAITool struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+type openAIResponse struct {
+	ID     string               `json:"id"`
+	Model  string               `json:"model,omitempty"`
+	Output []openAIResponseItem `json:"output"`
+	Usage  openAIUsage          `json:"usage"`
+}
+
+type openAIUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+type openAIResponseItem struct {
+	Type      string                  `json:"type"`
+	ID        string                  `json:"id,omitempty"`
+	CallID    string                  `json:"call_id,omitempty"`
+	Name      string                  `json:"name,omitempty"`
+	Arguments json.RawMessage         `json:"arguments,omitempty"`
+	Content   []openAIResponseContent `json:"content,omitempty"`
+	Role      string                  `json:"role,omitempty"`
+	Status    string                  `json:"status,omitempty"`
+}
+
+type openAIResponseContent struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+func convertOpenAIInput(messages []Message) []openAIItem {
+	out := make([]openAIItem, 0, len(messages))
+	for _, msg := range messages {
+		var parts []map[string]string
+		flushText := func() {
+			if len(parts) == 0 {
+				return
+			}
+			out = append(out, openAIItem{Role: msg.Role, Content: parts})
+			parts = nil
+		}
+		contentType := "input_text"
+		if msg.Role == "assistant" {
+			contentType = "output_text"
+		}
+		for _, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					parts = append(parts, map[string]string{"type": contentType, "text": block.Text})
+				}
+			case "tool_use":
+				flushText()
+				out = append(out, openAIItem{
+					Type:      "function_call",
+					CallID:    block.ID,
+					Name:      block.Name,
+					Arguments: string(canonicalJSON(block.Input)),
+				})
+			case "tool_result":
+				flushText()
+				out = append(out, openAIItem{
+					Type:   "function_call_output",
+					CallID: block.ToolUseID,
+					Output: block.Text,
+				})
+			}
+		}
+		flushText()
+	}
+	return out
+}
+
+func convertOpenAITools(tools []ToolDef) []openAITool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openAITool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, openAITool{
+			Type:        "function",
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.InputSchema,
+		})
+	}
+	return out
 }
 
 // --- Shared types and helpers ---
@@ -899,6 +1208,52 @@ func parseAnthropicResponse(resp *http.Response, modelID string, providerName st
 				Name:      block.Name,
 				Arguments: canonicalJSON(block.Input),
 			})
+		}
+	}
+
+	log.Printf("provider: %s response model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d tool_calls=%d",
+		providerName, result.Model, result.StopReason,
+		result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text), len(result.ToolCalls))
+
+	return result, nil
+}
+
+func parseOpenAIResponse(resp *http.Response, modelID string, providerName string) (*LLMResponse, error) {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%s: status %s (sanitized)", providerName, resp.Status)
+	}
+
+	var payload openAIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("%s: decode response: %w", providerName, err)
+	}
+
+	result := &LLMResponse{
+		ID:           payload.ID,
+		Model:        coalesce(payload.Model, modelID),
+		Usage:        Usage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
+		ProviderName: providerName,
+	}
+
+	for _, item := range payload.Output {
+		switch item.Type {
+		case "message":
+			for _, part := range item.Content {
+				if part.Text != "" {
+					result.Text += part.Text
+				}
+			}
+			if result.StopReason == "" {
+				result.StopReason = "end_turn"
+			}
+		case "function_call":
+			result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+				ID:        item.CallID,
+				Name:      item.Name,
+				Arguments: canonicalJSON(item.Arguments),
+			})
+			result.StopReason = "tool_use"
 		}
 	}
 
@@ -1156,6 +1511,409 @@ func parseSSEStream(body io.Reader, modelID string, providerName string, onChunk
 	return result, nil
 }
 
+func parseOpenAIStream(body io.Reader, modelID string, providerName string, onChunk func(StreamChunk)) (*LLMResponse, error) {
+	result := &LLMResponse{
+		Model:        modelID,
+		ProviderName: providerName,
+	}
+	type toolBuffer struct {
+		callID string
+		name   string
+		args   string
+	}
+	tools := map[string]*toolBuffer{}
+
+	if err := readOpenAISSE(body, func(data []byte) error {
+		if len(data) == 0 || strings.TrimSpace(string(data)) == "[DONE]" {
+			return nil
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil
+		}
+		typ := stringValue(payload["type"])
+		switch typ {
+		case "response.created":
+			if response, ok := payload["response"].(map[string]any); ok {
+				result.ID = stringValue(response["id"])
+				if model := stringValue(response["model"]); model != "" {
+					result.Model = model
+				}
+				onChunk(StreamChunk{Type: "message_start", ID: result.ID, Model: result.Model})
+			}
+		case "response.output_text.delta":
+			text := stringValue(payload["delta"])
+			if text != "" {
+				result.Text += text
+				onChunk(StreamChunk{Type: "content_block_delta", Delta: text})
+			}
+		case "response.output_item.added":
+			item, _ := payload["item"].(map[string]any)
+			if stringValue(item["type"]) == "function_call" {
+				key := stringValue(item["id"])
+				tools[key] = &toolBuffer{
+					callID: stringValue(item["call_id"]),
+					name:   stringValue(item["name"]),
+					args:   stringValue(item["arguments"]),
+				}
+				onChunk(StreamChunk{Type: "content_block_start", ToolCallID: tools[key].callID, ToolCallName: tools[key].name})
+			}
+		case "response.function_call_arguments.delta":
+			key := stringValue(payload["item_id"])
+			if tools[key] == nil {
+				tools[key] = &toolBuffer{}
+			}
+			tools[key].args += stringValue(payload["delta"])
+			if tools[key].callID == "" {
+				tools[key].callID = stringValue(payload["call_id"])
+			}
+			if tools[key].name == "" {
+				tools[key].name = stringValue(payload["name"])
+			}
+			onChunk(StreamChunk{Type: "content_block_delta", ToolCallDelta: stringValue(payload["delta"]), ToolCallID: tools[key].callID, ToolCallName: tools[key].name})
+		case "response.function_call_arguments.done":
+			key := stringValue(payload["item_id"])
+			if tools[key] == nil {
+				tools[key] = &toolBuffer{}
+			}
+			if arguments := stringValue(payload["arguments"]); arguments != "" {
+				tools[key].args = arguments
+			}
+			if tools[key].callID == "" {
+				tools[key].callID = stringValue(payload["call_id"])
+			}
+			if tools[key].name == "" {
+				tools[key].name = stringValue(payload["name"])
+			}
+			result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+				ID:        tools[key].callID,
+				Name:      tools[key].name,
+				Arguments: canonicalJSON(json.RawMessage(tools[key].args)),
+			})
+			result.StopReason = "tool_use"
+			onChunk(StreamChunk{Type: "content_block_stop", ToolCallID: tools[key].callID, ToolCallName: tools[key].name})
+			delete(tools, key)
+		case "response.output_item.done":
+			item, _ := payload["item"].(map[string]any)
+			if stringValue(item["type"]) == "function_call" {
+				args := stringValue(item["arguments"])
+				result.ToolCalls = append(result.ToolCalls, ContentToolCall{
+					ID:        stringValue(item["call_id"]),
+					Name:      stringValue(item["name"]),
+					Arguments: canonicalJSON(json.RawMessage(args)),
+				})
+				result.StopReason = "tool_use"
+			}
+		case "response.completed":
+			response, _ := payload["response"].(map[string]any)
+			if response != nil {
+				result.ID = stringValue(response["id"])
+				if model := stringValue(response["model"]); model != "" {
+					result.Model = model
+				}
+				if usage, ok := response["usage"].(map[string]any); ok {
+					result.Usage.InputTokens = int(numberValue(usage["input_tokens"]))
+					result.Usage.OutputTokens = int(numberValue(usage["output_tokens"]))
+				}
+			}
+			if result.StopReason == "" {
+				result.StopReason = "end_turn"
+			}
+			onChunk(StreamChunk{
+				Type:       "message_delta",
+				StopReason: result.StopReason,
+				Usage:      &StreamUsage{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens},
+			})
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("%s: read stream: %w", providerName, err)
+	}
+
+	onChunk(StreamChunk{Type: "message_stop", StopReason: result.StopReason})
+	log.Printf("provider: %s stream complete model=%s stop=%s tokens_in=%d tokens_out=%d text_len=%d tool_calls=%d",
+		providerName, result.Model, result.StopReason, result.Usage.InputTokens, result.Usage.OutputTokens, len(result.Text), len(result.ToolCalls))
+	return result, nil
+}
+
+type ChatGPTAuthOptions struct {
+	Path          string
+	RefreshURL    string
+	RefreshBefore time.Duration
+	HTTPClient    *http.Client
+	Now           func() time.Time
+}
+
+type ChatGPTAuth struct {
+	path          string
+	refreshURL    string
+	refreshBefore time.Duration
+	httpClient    *http.Client
+	now           func() time.Time
+	mu            sync.Mutex
+}
+
+type codexAuthFile struct {
+	AuthMode     string          `json:"auth_mode"`
+	OpenAIAPIKey string          `json:"OPENAI_API_KEY"`
+	Tokens       codexAuthTokens `json:"tokens"`
+	LastRefresh  string          `json:"last_refresh"`
+}
+
+type codexAuthTokens struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	AccountID    string `json:"account_id"`
+}
+
+type oauthRefreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+}
+
+func NewChatGPTAuth(opts ChatGPTAuthOptions) *ChatGPTAuth {
+	auth := &ChatGPTAuth{
+		path:          opts.Path,
+		refreshURL:    opts.RefreshURL,
+		refreshBefore: opts.RefreshBefore,
+		httpClient:    opts.HTTPClient,
+		now:           opts.Now,
+	}
+	if auth.path == "" {
+		auth.path = filepath.Join(userHomeDir(), ".codex", "auth.json")
+	}
+	if auth.refreshURL == "" {
+		auth.refreshURL = "https://auth.openai.com/oauth/token"
+	}
+	if auth.refreshBefore == 0 {
+		auth.refreshBefore = 45 * time.Minute
+	}
+	if auth.httpClient == nil {
+		auth.httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	if auth.now == nil {
+		auth.now = time.Now
+	}
+	return auth
+}
+
+func (a *ChatGPTAuth) Header(ctx context.Context) (string, error) {
+	record, err := a.AccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(record.Tokens.AccessToken)
+	if token == "" {
+		return "", fmt.Errorf("chatgpt auth missing access token")
+	}
+	return "Bearer " + token, nil
+}
+
+func (a *ChatGPTAuth) AccessToken(ctx context.Context) (*codexAuthFile, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	record, err := a.Read()
+	if err != nil {
+		return nil, err
+	}
+	if !a.needsRefresh(record) {
+		return record, nil
+	}
+	refreshed, err := a.refresh(ctx, record)
+	if err == nil {
+		return refreshed, nil
+	}
+	if strings.TrimSpace(record.Tokens.AccessToken) != "" {
+		return record, nil
+	}
+	return nil, err
+}
+
+func (a *ChatGPTAuth) Read() (*codexAuthFile, error) {
+	data, err := os.ReadFile(a.path)
+	if err != nil {
+		return nil, fmt.Errorf("read chatgpt auth file: %w", err)
+	}
+	var record codexAuthFile
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, fmt.Errorf("decode chatgpt auth file: %w", err)
+	}
+	return &record, nil
+}
+
+func (a *ChatGPTAuth) needsRefresh(record *codexAuthFile) bool {
+	if record == nil || strings.TrimSpace(record.Tokens.AccessToken) == "" {
+		return true
+	}
+	if strings.TrimSpace(record.LastRefresh) == "" {
+		return false
+	}
+	lastRefresh, err := time.Parse(time.RFC3339, record.LastRefresh)
+	if err != nil {
+		return false
+	}
+	return a.now().UTC().After(lastRefresh.UTC().Add(a.refreshBefore))
+}
+
+func (a *ChatGPTAuth) refresh(ctx context.Context, record *codexAuthFile) (*codexAuthFile, error) {
+	if record == nil {
+		return nil, fmt.Errorf("refresh chatgpt auth: missing auth record")
+	}
+	if strings.TrimSpace(record.Tokens.RefreshToken) == "" {
+		return nil, fmt.Errorf("refresh chatgpt auth: missing refresh token")
+	}
+	refreshed, err := a.refreshViaHTTP(ctx, record)
+	if err == nil {
+		return refreshed, nil
+	}
+	if cliErr := a.refreshViaCodexCLI(ctx); cliErr == nil {
+		return a.Read()
+	}
+	return nil, err
+}
+
+func (a *ChatGPTAuth) refreshViaHTTP(ctx context.Context, record *codexAuthFile) (*codexAuthFile, error) {
+	values := url.Values{}
+	values.Set("grant_type", "refresh_token")
+	values.Set("refresh_token", record.Tokens.RefreshToken)
+	if record.Tokens.AccountID != "" {
+		values.Set("account_id", record.Tokens.AccountID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.refreshURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("refresh chatgpt auth via http: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+		return nil, fmt.Errorf("refresh chatgpt auth via http: status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var payload oauthRefreshResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode chatgpt refresh response: %w", err)
+	}
+	if strings.TrimSpace(payload.AccessToken) == "" {
+		return nil, fmt.Errorf("chatgpt refresh response missing access_token")
+	}
+
+	record.Tokens.AccessToken = payload.AccessToken
+	if payload.RefreshToken != "" {
+		record.Tokens.RefreshToken = payload.RefreshToken
+	}
+	if payload.IDToken != "" {
+		record.Tokens.IDToken = payload.IDToken
+	}
+	record.LastRefresh = a.now().UTC().Format(time.RFC3339)
+	if err := a.write(record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (a *ChatGPTAuth) refreshViaCodexCLI(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "codex", "login", "status")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("refresh chatgpt auth via codex cli: %w", err)
+	}
+	return nil
+}
+
+func (a *ChatGPTAuth) write(record *codexAuthFile) error {
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode refreshed chatgpt auth file: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(a.path), 0o700); err != nil {
+		return fmt.Errorf("create chatgpt auth dir: %w", err)
+	}
+	if err := os.WriteFile(a.path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write chatgpt auth file: %w", err)
+	}
+	return nil
+}
+
+func userHomeDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "."
+}
+
+func readOpenAISSE(body io.Reader, fn func([]byte) error) error {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var data []byte
+	dispatch := func() error {
+		if len(data) == 0 {
+			return nil
+		}
+		payload := bytes.TrimSpace(data)
+		data = nil
+		return fn(payload)
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := dispatch(); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			data = append(data, []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))...)
+			data = append(data, '\n')
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return dispatch()
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func numberValue(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(n, 64)
+		return f
+	default:
+		return 0
+	}
+}
+
 // ModelInfo describes a supported model and its associated provider.
 type ModelInfo struct {
 	// ID is the model identifier used in API requests (provider-specific).
@@ -1216,12 +1974,31 @@ func SupportedModels() []ModelInfo {
 			Provider:        "fireworks",
 			MaxOutputTokens: 131072,
 		},
+		// ChatGPT/Codex subscription models
+		{
+			ID:              "gpt-5.5",
+			DisplayName:     "GPT-5.5",
+			Provider:        "chatgpt",
+			MaxOutputTokens: 65536,
+		},
+		{
+			ID:              "gpt-5.4",
+			DisplayName:     "GPT-5.4",
+			Provider:        "chatgpt",
+			MaxOutputTokens: 65536,
+		},
+		{
+			ID:              "gpt-5.4-mini",
+			DisplayName:     "GPT-5.4 Mini",
+			Provider:        "chatgpt",
+			MaxOutputTokens: 65536,
+		},
 	}
 }
 
-// MultiProvider holds multiple provider backends keyed by name. It enables
-// the runtime to reference providers for different models simultaneously
-// without requiring model routing logic (which is its own scope).
+// MultiProvider holds provider backends keyed by provider name. Model
+// selection stays on LLMRequest.Model; provider names must not encode model
+// names.
 //
 // Usage: callers initialize specific providers and register them; the
 // MultiProvider simply stores them for later retrieval. Model routing is
@@ -1267,89 +2044,53 @@ func (mp *MultiProvider) Names() []string {
 func ResolveAll(cfg ProviderConfig) *MultiProvider {
 	mp := NewMultiProvider()
 
-	// Try Bedrock — one provider per model.
-	if os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
-		for i, modelID := range cfg.BedrockModels {
-			if p, err := NewBedrockProviderFromEnv(modelID); err == nil {
-				name := "bedrock"
-				if i > 0 {
-					name = "bedrock-" + modelID
-				}
-				mp.Register(name, p)
-				log.Printf("provider: resolved %s (region=%s model=%s)", name, p.region, redactModel(p.modelID))
-			}
+	// Try ChatGPT. Register one provider; req.Model selects the model.
+	if len(cfg.ChatGPTModels) > 0 {
+		if p, err := NewChatGPTProviderFromEnv(cfg.ChatGPTModels[0], cfg.ChatGPTReasoningEffort); err == nil {
+			mp.Register("chatgpt", p)
+			log.Printf("provider: resolved chatgpt (seed_model=%s reasoning=%s)", p.modelID, p.reasoning)
 		}
 	}
 
-	// Try Z.AI — one provider per model.
-	if os.Getenv("ZAI_API_KEY") != "" {
-		for i, modelID := range cfg.ZAIModels {
-			if p, err := NewZAIProviderFromEnv(modelID); err == nil {
-				name := "zai"
-				if i > 0 {
-					name = "zai-" + modelID
-				}
-				mp.Register(name, p)
-				log.Printf("provider: resolved %s (model=%s)", name, p.modelID)
-			}
+	// Try Bedrock. Register one provider; req.Model selects the model.
+	if os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" && len(cfg.BedrockModels) > 0 {
+		if p, err := NewBedrockProviderFromEnv(cfg.BedrockModels[0]); err == nil {
+			mp.Register("bedrock", p)
+			log.Printf("provider: resolved bedrock (region=%s seed_model=%s)", p.region, redactModel(p.modelID))
 		}
 	}
 
-	// Try Fireworks — one provider per model.
-	if os.Getenv("FIREWORKS_API_KEY") != "" {
-		for i, modelID := range cfg.FireworksModels {
-			if p, err := NewFireworksProviderFromEnv(modelID); err == nil {
-				name := "fireworks"
-				if i > 0 {
-					name = "fireworks-" + modelID
-				}
-				mp.Register(name, p)
-				log.Printf("provider: resolved %s (model=%s)", name, p.modelID)
-			}
+	// Try Z.AI. Register one provider; req.Model selects the model.
+	if os.Getenv("ZAI_API_KEY") != "" && len(cfg.ZAIModels) > 0 {
+		if p, err := NewZAIProviderFromEnv(cfg.ZAIModels[0]); err == nil {
+			mp.Register("zai", p)
+			log.Printf("provider: resolved zai (seed_model=%s)", p.modelID)
+		}
+	}
+
+	// Try Fireworks. Register one provider; req.Model selects the model.
+	if os.Getenv("FIREWORKS_API_KEY") != "" && len(cfg.FireworksModels) > 0 {
+		if p, err := NewFireworksProviderFromEnv(cfg.FireworksModels[0]); err == nil {
+			mp.Register("fireworks", p)
+			log.Printf("provider: resolved fireworks (seed_model=%s)", p.modelID)
 		}
 	}
 
 	return mp
 }
 
-// ResolveProvider creates the first available real provider from environment
-// credentials using the given ProviderConfig for model selection. It tries
-// Bedrock first, then Z.AI (first model), then Fireworks. If none is
-// configured, it returns nil, indicating that the stub provider should be
-// used instead.
-//
-// This preserves the gateway boundary: the runtime does not directly expose
-// provider credentials to the browser; it only uses them internally.
+// ResolveProvider resolves the explicitly selected provider for direct
+// sandbox mode. It does not guess or fall back; callers that want a provider
+// must set ProviderConfig.SelectedProvider.
 func ResolveProvider(cfg ProviderConfig) (Provider, error) {
-	// Try Bedrock first (first model).
-	if os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" && len(cfg.BedrockModels) > 0 {
-		p, err := NewBedrockProviderFromEnv(cfg.BedrockModels[0])
-		if err != nil {
-			return nil, fmt.Errorf("resolve provider: %w", err)
-		}
-		log.Printf("provider: resolved bedrock (region=%s model=%s)", p.region, redactModel(p.modelID))
-		return p, nil
+	selected := strings.TrimSpace(cfg.SelectedProvider)
+	if selected == "" {
+		return nil, nil
 	}
-
-	// Try Z.AI (first model).
-	if os.Getenv("ZAI_API_KEY") != "" && len(cfg.ZAIModels) > 0 {
-		p, err := NewZAIProviderFromEnv(cfg.ZAIModels[0])
-		if err != nil {
-			return nil, fmt.Errorf("resolve provider: %w", err)
-		}
-		log.Printf("provider: resolved zai (model=%s)", p.modelID)
-		return p, nil
+	mp := ResolveAll(cfg)
+	p := mp.Get(selected)
+	if p == nil {
+		return nil, fmt.Errorf("resolve provider: selected provider %q is not configured", selected)
 	}
-
-	// Try Fireworks (first model).
-	if os.Getenv("FIREWORKS_API_KEY") != "" && len(cfg.FireworksModels) > 0 {
-		p, err := NewFireworksProviderFromEnv(cfg.FireworksModels[0])
-		if err != nil {
-			return nil, fmt.Errorf("resolve provider: %w", err)
-		}
-		log.Printf("provider: resolved fireworks (model=%s)", p.modelID)
-		return p, nil
-	}
-
-	return nil, nil
+	return p, nil
 }
