@@ -1,6 +1,18 @@
 # go-choir
 
-Distributed multiagent operating system -- Go rewrite of ChoirOS, informed by Cogent runtime patterns. Five microservices, Caddy edge proxy, Svelte SPA, running on bare-metal NixOS.
+Distributed multiagent living-document desktop -- Go rewrite of ChoirOS, informed by Cogent runtime patterns. Five services, Caddy edge proxy, Svelte SPA, per-user appagent runtime, and `vmctl`-managed microVM capacity.
+
+Choir is not primarily a chat app or a generic coding-agent runner. It is a multitenant web desktop where appagents use a dark factory of researchers, supers, cosupers, and VMs to produce durable living documents, evidence, artifacts, and eventually publishable citation-network contributions.
+
+## North Star
+
+Read these before changing runtime, `vtext`, Trace, Dolt, `vmctl`, worker tools, or appagent behavior:
+
+- `docs/north-star.md` -- Automatic Computer context, publishing/citation/CHIPS phase boundaries, and why the architecture must not collapse to chat/tasks.
+- `docs/runtime-invariants.md` -- agent roles, VM classes, Dolt layers, hot-path message delivery plus durable handoff records, and the development-tooling boundary.
+- `docs/implementation-scope.md` -- current Layer 1 implementation target, current non-goals, and data that must be preserved for later publication/citation/compute economics.
+
+Current phase: ship Layer 1 end to end. Do not implement CHIPS, wallets, staking, public citation scoring, or token-denominated billing yet. Do preserve provenance, evidence, citations/citation candidates, artifacts, VM/model attribution, and compute usage where available.
 
 ## Architecture
 
@@ -61,10 +73,11 @@ Prior milestones still in place:
 - Go unit tests (all packages passing)
 
 Next:
-- make trace/debugging readable enough to inspect delegation
-- converge on singleton-per-user `super` runtime ownership
-- finish embedded Dolt stabilization
-- then return to `vmctl` and microVM deepening
+- make Trace readable enough to inspect full trajectories, not isolated loops
+- converge runtime coordination on hot-path actor delivery plus durable handoff/provenance records
+- stabilize per-user embedded Dolt for private desktop/appagent state
+- use platform Dolt for factory/publication/routing state when platform scope appears
+- treat `vmctl` as factory capacity management: active VMs, background VMs, and shared worker VMs
 
 ## Current Prompt Flow
 
@@ -177,6 +190,9 @@ nix/
   hardware.nix  Hardware configuration for Node B
   disks.nix     Disk layout for Node B
 docs/
+  north-star.md                      Product north star: living documents, publishing, citations, CHIPS phase boundaries
+  runtime-invariants.md              Agent, VM, Dolt, mailbox, and tooling invariants
+  implementation-scope.md            Current Layer 1 scope and non-goals
   architecture.md                    Full architecture spec
   mission-1-deploy-pipeline.md       Mission 1 brief (complete)
   mission-2-build-system.md          Mission 2 brief (Milestone 1 complete)

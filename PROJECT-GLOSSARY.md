@@ -7,6 +7,29 @@
 
 ## Canonical Terms
 
+### Automatic Computer
+
+**Definition:** The long-term economic frame for Choir: a living-document publishing network, global citation workspace, and compute economy.
+
+**Current implementation rule:** do not build CHIPS mechanics yet. Preserve the provenance, citation, artifact, trajectory, model, VM, and compute-usage data that the later economy needs.
+
+---
+
+### dark factory
+
+**Definition:** The mostly background agent and VM production system behind the web desktop.
+
+**What it contains:**
+- researchers
+- `super` and `cosuper`
+- active, background, and shared worker VMs
+- hot-path agent delivery plus durable handoff records
+- artifacts, findings, diffs, tests, publications, and Trace events
+
+**Important rule:** the user should experience apps and living documents first. The factory exists to advance work and produce artifacts, not to become the primary UI.
+
+---
+
 ### `conductor`
 
 **Definition:** The intake/router agent for top-level user or connector input.
@@ -39,6 +62,25 @@
 - versioned text editor
 
 **Canonical rule:** use `vtext`, not `etext` or writer, for the product concept.
+
+---
+
+### publication
+
+**Definition:** The boundary where private user work becomes platform-visible artifact state.
+
+**What it does:**
+- moves selected living-document/artifact state from per-user private Dolt into platform-visible publication records
+- creates citeable material for the future global memory layer
+- preserves provenance rather than flattening work into anonymous content
+
+---
+
+### citation graph
+
+**Definition:** The platform-level network of citations between published artifacts.
+
+**Why it matters:** It is the future global memory and value signal. Recursive citation value and CHIPS economics are later layers, but citation candidates and evidence provenance should be preserved now.
 
 ---
 
@@ -98,6 +140,8 @@
 - execution coordinator
 
 **Idiomatic:** use `super`, not supervisor, when referring to the intended agent role.
+
+**Current-phase note:** high reliance on `super`/`cosuper` is acceptable while the end-to-end factory is still being made real. Repeated privileged actions should later graduate into narrower tools, workers, or appagents.
 
 ---
 
@@ -418,6 +462,69 @@
 - platform/server Dolt = possible later shared/published storage
 
 **Important rule:** even when a `vtext` lives canonically in Dolt, it should also have a filesystem manifestation or shortcut so it appears naturally in the file browser and opens into a new `vtext` window.
+
+---
+
+### platform Dolt
+
+**Definition:** The multitenant platform-level Dolt database for factory and network state.
+
+**What it should own:**
+- VM pool/routing state
+- worker availability
+- publication records
+- shared artifacts
+- citation graph
+- compute accounting
+- later CHIPS/token economy state
+
+**Important distinction:** platform Dolt does not replace per-user embedded Dolt. The private desktop/appagent state remains user-local until explicitly published or packaged for worker execution.
+
+**Important rule:** platform Dolt is a ledger, not a global message bus. Cross-VM work should use direct transport or relays for live delivery and write compact durable facts for routing, recovery, provenance, publication, citation, and compute accounting.
+
+---
+
+### active VM
+
+**Definition:** The user-facing desktop VM available while a user is actively using Choir.
+
+**What it hosts:**
+- web desktop runtime
+- visible appagents
+- per-user embedded Dolt
+- private app and document state
+
+**Important rule:** free users still get an active VM while using the product. Risky system-changing work should move to a background VM when possible.
+
+---
+
+### background VM
+
+**Definition:** A user-owned VM for requested background or risky work.
+
+**What it does:**
+- runs development, testing, package installs, filesystem mutation, deploy preparation, and other work that could destabilize the active desktop
+- can run while the user is offline
+- may be 24/7 for higher paid tiers
+
+---
+
+### shared worker VM
+
+**Definition:** A platform-owned pooled VM used for cost-efficient background work.
+
+**What it does:**
+- supports lower-tier 24/7 work
+- runs packaged or typed-API-mediated jobs
+- should not receive open-ended private workspace access by default
+
+---
+
+### CHIPS
+
+**Definition:** The planned token for the later Automatic Computer economy.
+
+**Current implementation rule:** CHIPS, wallets, staking, token-denominated billing, and public citation scoring are non-goals for the current phase. Preserve the accounting and provenance inputs; do not implement the economy yet.
 
 ---
 

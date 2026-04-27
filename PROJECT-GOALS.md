@@ -1,13 +1,21 @@
 # Project Goals
 
 **Last Updated:** 2026-04-16  
-**Scope:** Canonical near-term implementation plan for local `vtext` + MAS completion, followed by embedded Dolt hardening and `vmctl` deepening.
+**Scope:** Canonical near-term implementation plan for local `vtext` + MAS completion, while preserving the publishing/citation/compute-economics facts that later layers require.
 
 ---
 
 ## Core Goal
 
-Make the local system coherent before doing more infrastructure work.
+Make the local system coherent before doing more infrastructure work, without losing the larger product shape.
+
+Choir is a living-document desktop backed by a dark factory of agents and microVMs. The long-term sequence is:
+
+1. **Publishing:** private and publishable living documents.
+2. **Global memory:** a citation graph connecting artifacts across users.
+3. **Compute economy:** compute accounting and CHIPS economics.
+
+Current implementation is Layer 1. Do not implement token mechanics yet. Do preserve the provenance, evidence, artifact, citation, trajectory, VM, model, and compute-usage facts needed by later layers.
 
 That means:
 - the prompt bar always goes through `conductor`
@@ -19,7 +27,13 @@ That means:
 - Trace becomes understandable enough to debug runs, then evolves into a real appagent
 - prompts become easy to inspect and edit inside Choir as per-user sandbox state
 - embedded Dolt becomes the real storage model
-- only then do we go deeper on `vmctl` and microVM lifecycle
+- `vmctl` is understood as factory capacity management, not just deployment plumbing
+
+Canonical context docs:
+
+- `docs/north-star.md`
+- `docs/runtime-invariants.md`
+- `docs/implementation-scope.md`
 
 ---
 
@@ -278,9 +292,10 @@ These are the real next runs, in order.
 - [ ] Make it easy to query, filter, and inspect runs agentically.
 - [ ] After we find the right visualization, Trace should become a real appagent rather than just a passive debug surface.
 
-#### Phase 8. Stabilize embedded Dolt as user-state truth
+#### Phase 8. Stabilize Dolt as user and factory truth
 
-- [ ] Embedded Dolt should be the real sandbox storage model.
+- [ ] Embedded per-user Dolt should be the real private desktop/appagent state model.
+- [ ] Platform Dolt should become the multitenant factory/publication/routing state model when platform scope appears.
 - [ ] `vtext` versions should feel native to that model.
 - [ ] Work/version state should be aligned with the document-centered product.
 - [ ] `vtext` should have a filesystem manifestation or shortcut model that makes sense in the file browser.
@@ -293,7 +308,7 @@ These are the real next runs, in order.
 - [ ] Review `go-choir` `vmctl` + `vmmanager` + `microvm.nix`.
 - [ ] Review `choiros-rs` user-VM / worker-VM lifecycle patterns.
 - [ ] Learn from the good parts while rejecting the “hibernate too aggressively” behavior.
-- [ ] Design the right user-VM / worker-VM lifecycle for fast login, bounded cost, and sensible hibernation.
+- [ ] Design the right active/background/shared-worker VM lifecycle for fast login, bounded cost, paid background work, lower-tier shared 24/7 work, and sensible hibernation.
 
 ---
 
@@ -344,6 +359,9 @@ Before the next big implementation + test + CI pass, we want these docs to be th
 1. This goals file
 2. The canonical glossary
 3. The `vtext` flow chart above
+4. `docs/north-star.md`
+5. `docs/runtime-invariants.md`
+6. `docs/implementation-scope.md`
 
 Once these are confirmed:
 - do codegen / implementation
