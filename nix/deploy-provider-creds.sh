@@ -83,6 +83,13 @@ else
   echo "warning: $CODEX_AUTH not found; ChatGPT provider auth will not be deployed" >&2
 fi
 
+for key in TAVILY_API_KEY BRAVE_API_KEY EXA_API_KEY SERPER_API_KEY; do
+  value="${!key:-}"
+  if [ -n "$value" ]; then
+    ENVS+=("${key}=${value}")
+  fi
+done
+
 if [ ${#ENVS[@]} -eq 0 ]; then
   echo "error: no provider credentials found" >&2
   exit 1
