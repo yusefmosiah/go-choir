@@ -708,6 +708,10 @@ in
       #   ZAI_API_KEY=...
       #   FIREWORKS_API_KEY=...
       #   CHATGPT_AUTH_PATH=/var/lib/go-choir/codex-auth.json
+      #   # ChatGPT search reuses the same auth file; optional tuning:
+      #   CHATGPT_SEARCH_MODEL=gpt-5.5
+      #   CHATGPT_SEARCH_REASONING_EFFORT=low
+      #   CHATGPT_SEARCH_CONTEXT_SIZE=low
       #   # Search Provider Keys
       #   # (SearXNG is free and self-hosted — no key needed, just SEARXNG_URL
       #   #  which is set in the Environment block below)

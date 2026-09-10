@@ -978,6 +978,7 @@ func TestNewSearchClient_FromEnv(t *testing.T) {
 	exaKey := os.Getenv("EXA_API_KEY")
 	serperKey := os.Getenv("SERPER_API_KEY")
 	serpapiKey := os.Getenv("SERPAPI_API_KEY")
+	chatGPTAuthPath := os.Getenv("CHATGPT_AUTH_PATH")
 
 	// Clean up after test
 	defer func() {
@@ -987,6 +988,7 @@ func TestNewSearchClient_FromEnv(t *testing.T) {
 		os.Setenv("EXA_API_KEY", exaKey)
 		os.Setenv("SERPER_API_KEY", serperKey)
 		os.Setenv("SERPAPI_API_KEY", serpapiKey)
+		os.Setenv("CHATGPT_AUTH_PATH", chatGPTAuthPath)
 	}()
 
 	// Test with no keys set
@@ -996,6 +998,7 @@ func TestNewSearchClient_FromEnv(t *testing.T) {
 	os.Unsetenv("EXA_API_KEY")
 	os.Unsetenv("SERPER_API_KEY")
 	os.Unsetenv("SERPAPI_API_KEY")
+	os.Unsetenv("CHATGPT_AUTH_PATH")
 
 	client := NewSearchClient()
 	providers := client.AvailableProviders()
@@ -1009,6 +1012,18 @@ func TestNewSearchClient_FromEnv(t *testing.T) {
 	providers = client.AvailableProviders()
 	if len(providers) != 1 || providers[0] != "tavily" {
 		t.Errorf("expected [tavily], got %v", providers)
+	}
+
+	os.Unsetenv("TAVILY_API_KEY")
+	authPath := t.TempDir() + "/auth.json"
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"test-token"}}`), 0o600); err != nil {
+		t.Fatalf("write auth fixture: %v", err)
+	}
+	os.Setenv("CHATGPT_AUTH_PATH", authPath)
+	client = NewSearchClient()
+	providers = client.AvailableProviders()
+	if len(providers) != 1 || providers[0] != "chatgpt" {
+		t.Errorf("expected [chatgpt], got %v", providers)
 	}
 }
 
